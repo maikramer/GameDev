@@ -1,0 +1,207 @@
+"""
+Text2D — Geração de imagens com FLUX.2 Klein 4B (SDNQ / Disty0).
+
+Requer `sdnq` instalado para registar quantização no diffusers/transformers.
+"""
+
+from __future__ import annotations
+
+import gc
+import os
+import sys
+from pathlib import Path
+from typing import Any, Callable, Optional
+
+import torch
+from PIL import Image
+
+_DEFAULT_MODEL = "Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic"
+
+
+def _model_id() -> str:
+    return os.environ.get("TEXT2D_MODEL_ID", _DEFAULT_MODEL)
+
+
+def default_model_id() -> str:
+    """Modelo HF por defeito (ou `TEXT2D_MODEL_ID`)."""
+    return _model_id()
+
+
+def _torch_dtype_for(device: str) -> torch.dtype:
+    if device == "cpu":
+        return torch.float32
+    if torch.cuda.is_available():
+        if getattr(torch.cuda, "is_bf16_supported", lambda: False)():
+            return torch.bfloat16
+        return torch.float16
+    return torch.float32
+
+
+def _register_sdnq() -> tuple[Any, Any]:
+    """Importa SDNQ e devolve (triton_is_available, apply_sdnq_options_to_model)."""
+    try:
+        import sdnq  # noqa: F401 — registo diffusers/transformers
+        from sdnq import SDNQConfig  # noqa: F401 — registo de config
+        from sdnq.common import use_torch_compile as triton_is_available
+        from sdnq.loader import apply_sdnq_options_to_model
+    except ImportError as e:
+        raise ImportError(
+            "O pacote 'sdnq' é necessário para o modelo SDNQ. "
+            "Instale com: pip install sdnq"
+        ) from e
+    return triton_is_available, apply_sdnq_options_to_model
+
+
+def _maybe_apply_quantized_matmul(pipe: Any, triton_is_available: Any, apply_fn: Any) -> None:
+    if not triton_is_available:
+        return
+    cuda_ok = torch.cuda.is_available()
+    xpu_ok = bool(getattr(torch, "xpu", None)) and torch.xpu.is_available()
+    if not (cuda_ok or xpu_ok):
+        return
+    for name in ("transformer", "text_encoder", "text_encoder_2"):
+        mod = getattr(pipe, name, None)
+        if mod is not None:
+            setattr(pipe, name, apply_fn(mod, use_quantized_matmul=True))
+
+
+class KleinFluxGenerator:
+    """Carrega Flux2KleinPipeline com pesos SDNQ (Disty0)."""
+
+    def __init__(
+        self,
+        device: Optional[str] = None,
+        low_vram: bool = False,
+        verbose: bool = False,
+        model_id: Optional[str] = None,
+        cache_dir: Optional[str] = None,
+    ):
+        self.verbose = verbose
+        self.low_vram = low_vram
+        self.model_id = model_id or _model_id()
+        self.cache_dir = cache_dir
+
+        if device is None:
+            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        else:
+            self.device = device
+
+        self.torch_dtype = _torch_dtype_for(self.device)
+        self._pipe: Any = None
+        self._on_status: Optional[Callable[[str], None]] = None
+
+        if self.verbose:
+            print(f"[Text2D] device={self.device} dtype={self.torch_dtype} model={self.model_id}")
+
+    def set_status_callback(self, fn: Optional[Callable[[str], None]]) -> None:
+        """Callback opcional (ex. Rich) para mensagens de fase durante o load."""
+        self._on_status = fn
+
+    def _log(self, msg: str) -> None:
+        if self.verbose:
+            print(f"[Text2D] {msg}")
+
+    def _clear_cache(self) -> None:
+        if self.device == "cuda" and torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        gc.collect()
+
+    def _status(self, msg: str) -> None:
+        if self._on_status:
+            self._on_status(msg)
+        else:
+            print(f"[Text2D] {msg}", file=sys.stderr, flush=True)
+
+    def warmup(self) -> None:
+        """Carrega o pipeline (download HF + pesos). Idempotente."""
+        self._load_pipeline()
+
+    def _load_pipeline(self) -> Any:
+        if self._pipe is not None:
+            return self._pipe
+
+        # Barra de progresso do Hub (tqdm) visível no terminal
+        os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "0")
+
+        triton_is_available, apply_sdnq_options_to_model = _register_sdnq()
+
+        from diffusers import Flux2KleinPipeline
+
+        kwargs: dict[str, Any] = {
+            "torch_dtype": self.torch_dtype,
+        }
+        if self.cache_dir:
+            kwargs["cache_dir"] = self.cache_dir
+
+        self._status(
+            "Passo 1/3 — from_pretrained (rede/disco na 1ª vez: vários GB; GPU pode ficar em ~0% — normal)"
+        )
+        self._log(f"Carregando {self.model_id}...")
+        pipe = Flux2KleinPipeline.from_pretrained(self.model_id, **kwargs)
+
+        self._status("Passo 2/3 — SDNQ (matmul quantizado opcional via Triton)")
+        _maybe_apply_quantized_matmul(pipe, triton_is_available, apply_sdnq_options_to_model)
+
+        self._status(
+            "Passo 3/3 — a mover o pipeline para "
+            + (f"{self.device} (offload)" if self.low_vram else self.device)
+        )
+        if torch.cuda.is_available() and self.device == "cuda":
+            torch.cuda.reset_peak_memory_stats(0)
+
+        if self.device == "cpu":
+            pipe.to("cpu")
+        elif self.low_vram:
+            pipe.enable_model_cpu_offload()
+        else:
+            pipe.to(self.device)
+
+        if torch.cuda.is_available() and self.device == "cuda":
+            torch.cuda.synchronize()
+            alloc = torch.cuda.memory_allocated(0) / (1024**3)
+            peak = torch.cuda.max_memory_allocated(0) / (1024**3)
+            self._status(f"Modelo carregado — VRAM ~{alloc:.2f} GB (pico após load ~{peak:.2f} GB)")
+
+        self._pipe = pipe
+        return pipe
+
+    def unload(self) -> None:
+        if self._pipe is None:
+            return
+        del self._pipe
+        self._pipe = None
+        self._clear_cache()
+
+    def generate(
+        self,
+        prompt: str,
+        height: int = 1024,
+        width: int = 1024,
+        guidance_scale: float = 1.0,
+        num_inference_steps: int = 4,
+        seed: Optional[int] = None,
+    ) -> Image.Image:
+        pipe = self._load_pipeline()
+
+        gen_device = self.device if self.device != "cpu" else "cpu"
+        generator = torch.Generator(device=gen_device)
+        if seed is not None:
+            generator.manual_seed(seed)
+
+        self._log("Inferência...")
+        out = pipe(
+            prompt=prompt,
+            height=height,
+            width=width,
+            guidance_scale=guidance_scale,
+            num_inference_steps=num_inference_steps,
+            generator=generator,
+        )
+        return out.images[0]
+
+    @staticmethod
+    def save_image(image: Image.Image, path: Path, image_format: Optional[str] = None) -> Path:
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        image.save(path, format=image_format)
+        return path

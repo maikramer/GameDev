@@ -1,0 +1,48 @@
+# Resolução de problemas — Text2D
+
+## nvtop mostra GPU a 0% e pouca VRAM enquanto “carrega”
+
+Comportamento esperado **durante a maior parte do primeiro arranque**:
+
+1. **`from_pretrained`** — rede + disco + desserialização em CPU; a GPU pode ficar quase idle.
+2. Só **depois** os tensores passam para CUDA (`pipe.to("cuda")`) ou offload.
+3. Com **`--low-vram`**, o modelo **não** fica todo na VRAM; o uso pode parecer baixo.
+
+O CLI mostra **1/2 — download + carregamento** e **2/2 — inferência**, e no stderr **Passo 1/3 … Passo 3/3**.
+
+## Primeira execução muito lenta; a segunda mais rápida
+
+- **1.ª vez:** descarga de vários GB → **vários minutos** são normais.
+- **Com cache HF** (mesma máquina): o custo de rede desaparece; resta ler do disco + inferência (**segundos a ~1 min** típico, conforme GPU).
+
+Cada comando `text2d` é um **processo novo** — o pipeline volta a carregar-se do disco (não fica residente entre comandos).
+
+## Python 3.13 + PyTorch CUDA
+
+O índice `cu121` do PyTorch pode não oferecer **torchvision** compatível com Python 3.13. `setup.sh` e `installer.py` usam **`pip install torch torchvision`** (PyPI) quando detectam **Python ≥ 3.13** e GPU NVIDIA.
+
+## `ImportError: sdnq`
+
+```bash
+pip install sdnq
+```
+
+## `Flux2KleinPipeline` não encontrado
+
+```bash
+pip install -U diffusers
+```
+
+## VRAM insuficiente (ex.: 6 GB)
+
+- `--low-vram`
+- Reduzir `--width` e `--height` (ex. 512)
+- Outro modelo via `TEXT2D_MODEL_ID` (se compatível)
+
+## `text2d generate -v`
+
+O subcomando aceita `-v` / `--verbose`. Também: `text2d -v generate "..."`.
+
+## O modelo Disty0 não carrega ou licença
+
+Consulte o [model card](https://huggingface.co/Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic) para termos e requisitos de aceitação no Hub.

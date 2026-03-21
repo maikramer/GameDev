@@ -1,0 +1,1 @@
+"""Utilitários Text2D."""

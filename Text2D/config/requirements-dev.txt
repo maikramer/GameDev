@@ -1,0 +1,4 @@
+# Desenvolvimento e testes
+-r requirements.txt
+
+pytest>=7.4.0
