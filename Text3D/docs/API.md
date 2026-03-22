@@ -75,6 +75,31 @@ Atalho ficheiro: `text3d.painter.paint_file_to_file(mesh_path, image_path, outpu
 
 **Pré-requisito:** extensão CUDA `custom_rasterizer` — ver [`PAINT_SETUP.md`](PAINT_SETUP.md).
 
+### Materialize PBR (`apply_materialize_pbr`)
+
+Depois do Paint, podes gerar **normal**, **oclusão** e **metallic-roughness** (glTF 2.0) a partir do albedo embutido na mesh, usando o **Materialize CLI** (binário `materialize` no `PATH`, ou variável de ambiente `MATERIALIZE_BIN`). O CLI vive no monorepo em `GameDev/Materialize` (compilar e instalar; ver README desse projeto).
+
+**Guia completo (fluxo, flags, achados em hardware modesto):** [`PBR_MATERIALIZE.md`](PBR_MATERIALIZE.md).
+
+```python
+from text3d import apply_hunyuan_paint, apply_materialize_pbr, defaults
+from text3d.utils import save_mesh, repair_mesh
+
+mesh = repair_mesh(gen.generate_from_image("ref.png"))
+gen.unload_hunyuan()
+mesh_tex = apply_hunyuan_paint(mesh, "ref.png", paint_cpu_offload=defaults.DEFAULT_PAINT_CPU_OFFLOAD)
+mesh_pbr = apply_materialize_pbr(
+    mesh_tex,
+    save_sidecar_maps_dir="./maps_out",  # opcional: PNGs no disco
+    roughness_from_one_minus_smoothness=True,  # roughness = 1 − smoothness (Unity-like)
+)
+save_mesh(mesh_pbr, "out_pbr.glb", format="glb")
+```
+
+**CLI:** `text3d generate ... --texture --materialize` ou `text3d texture mesh.glb -i ref.png -o out.glb --materialize`. Flags: `--materialize-output-dir`, `--materialize-bin`, `--materialize-no-invert`.
+
+**Nota:** height/edge gerados pelo Materialize não têm slots padrão no material glTF base; só os mapas acima são embutidos no GLB. Os PNGs completos do Materialize podem ser guardados com `--materialize-output-dir`.
+
 ### Pós-processo de malha (`repair_mesh`)
 
 Em código Python, após `generate` / `generate_from_image`, podes alinhar ao CLI:

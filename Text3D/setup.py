@@ -3,17 +3,29 @@ Text3D - Setup Script
 Text-to-3D com Text2D + Hunyuan3D-2mini (hy3dgen)
 """
 
-from setuptools import setup, find_packages
-import os
+from pathlib import Path
+
+from setuptools import find_packages, setup
 
 # Read files from project root
-here = os.path.abspath(os.path.dirname(__file__))
+here = Path(__file__).resolve().parent
 
-with open(os.path.join(here, "README.md"), "r", encoding="utf-8") as fh:
+with open(here / "README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
-with open(os.path.join(here, "config", "requirements.txt"), "r", encoding="utf-8") as fh:
-    requirements = [line.strip() for line in fh if line.strip() and not line.startswith("#")]
+# Monorepo: Text2D ao lado de Text3D (GameDev/Text2D). Caminho absoluto evita
+# falha quando `pip install -e` corre com cwd fora de Text3D (../Text2D virava GitClones/Text2D).
+text2d_local = (here.parent / "Text2D").resolve()
+requirements = []
+with open(here / "config" / "requirements.txt", "r", encoding="utf-8") as fh:
+    for line in fh:
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("text2d @ file:"):
+            requirements.append(f"text2d @ {text2d_local.as_uri()}")
+        else:
+            requirements.append(line)
 
 setup(
     name="text3d",
@@ -25,6 +37,7 @@ setup(
     url="https://github.com/seu-usuario/text3d",
     package_dir={"": "src"},
     packages=find_packages(where="src"),
+    package_data={"text3d": ["cursor_skill/*.md"]},
     classifiers=[
         "Development Status :: 3 - Alpha",
         "Intended Audience :: Developers",
@@ -38,6 +51,9 @@ setup(
     ],
     python_requires=">=3.8",
     install_requires=requirements,
+    extras_require={
+        "dev": ["pytest>=7.4.0"],
+    },
     entry_points={
         "console_scripts": [
             "text3d=text3d.cli:main",

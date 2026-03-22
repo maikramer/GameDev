@@ -63,6 +63,24 @@ O shape (**Hunyuan3D-2mini**) não inclui material; o **Paint** gera UV + textur
 
 **Um comando (mesh + pintura):** `text3d generate "teu prompt" --final -o modelo.glb` (equivalente a `--texture`).
 
+### PBR completo no GLB (Materialize)
+
+Depois do Paint, o **Materialize CLI** (projeto [`Materialize`](../Materialize) no monorepo) gera **normal**, **oclusão** e **metallic-roughness** a partir do albedo embutido; o Text3D empacota tudo num **glTF 2.0** e grava o GLB.
+
+**Um comando (texto → mesh → textura → PBR):**
+
+```bash
+text3d generate "a wooden crate" --texture --materialize --preset fast -o caixa_pbr.glb
+```
+
+**Guardar mapas PNG para inspeção:**
+
+```bash
+text3d generate "..." --texture --materialize -o out.glb --materialize-output-dir ./maps
+```
+
+**Requisito extra:** binário `materialize` no `PATH` (ou `MATERIALIZE_BIN`). Guia completo, achados em hardware modesto (~6 GB), tabelas de flags e referências: **[docs/PBR_MATERIALIZE.md](docs/PBR_MATERIALIZE.md)**.
+
 ### Parâmetros principais (defeitos = perfil ~6 GB, validado)
 
 Ver [`defaults.py`](src/text3d/defaults.py). Resumo:
@@ -99,12 +117,15 @@ with HunyuanTextTo3DGenerator(verbose=True) as gen:
 ```
 Text3D/
 ├── src/text3d/
-│   ├── defaults.py     # Padrões ~6GB vs constantes HQ + Paint HF
-│   ├── generator.py    # HunyuanTextTo3DGenerator
-│   ├── painter.py      # Hunyuan3D-Paint (hy3dgen.texgen)
+│   ├── defaults.py        # Padrões ~6GB vs constantes HQ + Paint HF
+│   ├── generator.py       # HunyuanTextTo3DGenerator
+│   ├── painter.py         # Hunyuan3D-Paint (hy3dgen.texgen)
+│   ├── materialize_pbr.py # Paint → Materialize CLI → GLB PBR (glTF)
 │   ├── cli.py
 │   └── utils/
-│       └── env.py      # PYTORCH_CUDA_ALLOC_CONF ao iniciar o CLI
+│       └── env.py         # PYTORCH_CUDA_ALLOC_CONF ao iniciar o CLI
+├── docs/
+│   └── PBR_MATERIALIZE.md # Fluxo PBR, requisitos, flags, achados
 ├── config/requirements.txt
 ```
 

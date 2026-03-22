@@ -9,21 +9,55 @@ import os
 import sys
 import time
 from pathlib import Path
-import click
-from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn
-from rich.table import Table
-from rich.panel import Panel
+
+from . import cli_rich  # noqa: F401 — configura rich-click antes dos comandos
+
+if cli_rich.RICH_CLICK:
+    import rich_click as click
+else:
+    import click
 from rich import box
+from rich.console import Console
+from rich.panel import Panel
+from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.rule import Rule
+from rich.table import Table
 
 from . import defaults as _defaults
 from .generator import HunyuanTextTo3DGenerator
 from .utils.env import ensure_pytorch_cuda_alloc_conf
-from .utils.memory import format_bytes
+from .utils.memory import (
+    clear_cuda_memory,
+    enforce_exclusive_gpu,
+    format_bytes,
+    kill_gpu_compute_processes_aggressive,
+)
+from .cursor_skill_install import install_agent_skill
 
 console = Console()
 
 DEFAULT_OUTPUT_DIR = Path("outputs")
+
+
+def _env_allow_shared_gpu() -> bool:
+    return os.environ.get("TEXT3D_ALLOW_SHARED_GPU", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def _gpu_kill_others_effective(cli_wants: bool) -> bool:
+    """TEXT3D_GPU_KILL_OTHERS=0 desliga; =1 força; vazio segue o CLI."""
+    v = os.environ.get("TEXT3D_GPU_KILL_OTHERS", "").strip().lower()
+    if v in ("0", "false", "no", "off"):
+        return False
+    if v in ("1", "true", "yes", "on"):
+        return True
+    return cli_wants
+
+
 DEFAULT_MESH_DIR = DEFAULT_OUTPUT_DIR / "meshes"
 
 
@@ -43,6 +77,7 @@ def cli(ctx, verbose):
         text3d generate "um robô futurista" --output robo.glb
         text3d generate "carro" --preset hq --final -o carro.glb
         text3d texture mesh.glb -i ref.png -o mesh_tex.glb
+        text3d texture mesh.glb -i ref.png -o mesh_pbr.glb --materialize
         text3d doctor
         text3d generate -v "prompt" --low-vram
         text3d -v generate "prompt"
@@ -54,7 +89,38 @@ def cli(ctx, verbose):
     ensure_pytorch_cuda_alloc_conf()
     ctx.ensure_object(dict)
     ctx.obj["VERBOSE"] = verbose
-    ensure_dirs()
+    # Não criar outputs/meshes aqui: só quando --output omite caminho (usa pasta por defeito).
+
+
+@cli.group("skill")
+def skill_group() -> None:
+    """Agent Skills Cursor (instalação no projeto do jogo)."""
+
+
+@skill_group.command("install")
+@click.option(
+    "--target",
+    "-t",
+    type=click.Path(file_okay=False, writable=True, path_type=Path),
+    default=".",
+    help="Raiz do projeto do jogo (cria .cursor/skills/text3d/)",
+)
+@click.option("--force", is_flag=True, help="Sobrescrever SKILL.md existente")
+def skill_install_cmd(target: Path, force: bool) -> None:
+    """Copia SKILL.md para .cursor/skills/text3d/."""
+    try:
+        dest = install_agent_skill(target, force=force)
+    except FileNotFoundError as e:
+        raise click.ClickException(str(e)) from e
+    except FileExistsError as e:
+        raise click.ClickException(f"{e} — usa --force para substituir.") from e
+    console.print(
+        Panel(
+            f"Skill copiada para [bold cyan]{dest}[/bold cyan]",
+            title="[bold green]OK[/bold green]",
+            border_style="green",
+        )
+    )
 
 
 @cli.command()
@@ -202,6 +268,12 @@ def cli(ctx, verbose):
     "Alias: --final, --with-texture.",
 )
 @click.option(
+    "--model-subfolder",
+    default=_defaults.DEFAULT_SUBFOLDER,
+    show_default=True,
+    help="Subpasta do modelo Hunyuan3D shape (ex.: hunyuan3d-dit-v2-mini-turbo).",
+)
+@click.option(
     "--paint-repo",
     default=_defaults.DEFAULT_PAINT_HF_REPO,
     show_default=True,
@@ -219,11 +291,45 @@ def cli(ctx, verbose):
     help="Mantém modelos Paint na GPU (VRAM alta). O defeito usa CPU offload.",
 )
 @click.option(
+    "--materialize",
+    is_flag=True,
+    help="Após Paint, gera mapas PBR (Materialize CLI) e embute no GLB (normal, AO, metallic-roughness).",
+)
+@click.option(
+    "--materialize-output-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Guarda PNGs (mapas Materialize + baseColor/metallicRoughness/occlusion) nesta pasta.",
+)
+@click.option(
+    "--materialize-bin",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="Binário materialize (defeito: PATH ou MATERIALIZE_BIN).",
+)
+@click.option(
+    "--materialize-no-invert",
+    is_flag=True,
+    help="Roughness = smoothness (sem 1−smoothness).",
+)
+@click.option(
     "-v",
     "--verbose",
     "generate_verbose",
     is_flag=True,
     help="Logs detalhados (equivale a: text3d -v generate ...)",
+)
+@click.option(
+    "--allow-shared-gpu",
+    "allow_shared_gpu",
+    is_flag=True,
+    help="Permite GPU com outros processos (desliga verificação: ~300 MiB máx. já ocupados).",
+)
+@click.option(
+    "--gpu-kill-others/--no-gpu-kill-others",
+    "gpu_kill_others",
+    default=True,
+    help="Termina outros processos GPU (nvidia-smi) antes de inferir; defeito: ligado.",
 )
 @click.pass_context
 def generate(
@@ -253,10 +359,20 @@ def generate(
     paint_repo,
     paint_subfolder,
     paint_full_gpu,
+    materialize,
+    materialize_output_dir,
+    materialize_bin,
+    materialize_no_invert,
     generate_verbose,
+    allow_shared_gpu,
+    gpu_kill_others,
+    model_subfolder,
 ):
     """Gera 3D: PROMPT (Text2D → Hunyuan) ou --from-image (só Hunyuan)."""
     verbose = bool(ctx.obj.get("VERBOSE")) or generate_verbose
+
+    if materialize and not texture:
+        raise click.UsageError("--materialize requer --texture (Hunyuan3D-Paint primeiro).")
 
     if preset is not None:
         pv = _defaults.PRESET_HUNYUAN[preset]
@@ -269,6 +385,27 @@ def generate(
 
     if not from_image and not (prompt and str(prompt).strip()):
         raise click.UsageError("Indica um PROMPT em texto ou --from-image /path/to.png")
+
+    allow_shared = bool(allow_shared_gpu) or _env_allow_shared_gpu()
+    gpu_kill = _gpu_kill_others_effective(bool(gpu_kill_others))
+    if not cpu and gpu_kill:
+        console.print(
+            Panel(
+                "[bold]Terminar processos GPU alvo[/bold] (SIGTERM → espera → SIGKILL se vivo)\n"
+                "[dim]Mantém o PID atual e Xorg / gnome-shell / Wayland. "
+                "Desliga com [bold]--no-gpu-kill-others[/bold] ou TEXT3D_GPU_KILL_OTHERS=0[/dim]",
+                border_style="yellow",
+            )
+        )
+        for line in kill_gpu_compute_processes_aggressive(exclude_pid=os.getpid()):
+            console.print(f"[dim]{line}[/dim]")
+        clear_cuda_memory()
+        time.sleep(0.5)
+    if not cpu:
+        try:
+            enforce_exclusive_gpu(allow_shared=allow_shared)
+        except RuntimeError as e:
+            raise click.ClickException(str(e)) from e
 
     info_table = Table(show_header=False, box=box.SIMPLE)
     if from_image:
@@ -300,6 +437,12 @@ def generate(
             f"Hunyuan3D-Paint ({paint_subfolder}) "
             f"{'GPU' if paint_full_gpu else 'CPU offload'}",
         )
+        if materialize:
+            info_table.add_row(
+                "[bold]Materialize PBR[/bold]",
+                "sim"
+                + (f" → [cyan]{materialize_output_dir}[/cyan]" if materialize_output_dir else ""),
+            )
 
     console.print(Panel(info_table, title="[bold green]Configuração", border_style="green"))
 
@@ -309,9 +452,11 @@ def generate(
                 device="cpu" if cpu else None,
                 low_vram_mode=low_vram,
                 verbose=verbose,
+                hunyuan_subfolder=model_subfolder,
             )
 
         if output is None:
+            ensure_dirs()
             timestamp = int(time.time())
             if from_image:
                 stem = Path(from_image).stem[:30]
@@ -401,6 +546,7 @@ def generate(
             from .painter import apply_hunyuan_paint
 
             generator.unload_hunyuan()
+            clear_cuda_memory()
             with console.status("[bold yellow]Hunyuan3D-Paint (textura)...", spinner="dots"):
                 result = apply_hunyuan_paint(
                     result,
@@ -410,15 +556,34 @@ def generate(
                     paint_cpu_offload=not paint_full_gpu,
                     verbose=verbose,
                 )
+            if materialize:
+                from .materialize_pbr import apply_materialize_pbr
+
+                with console.status("[bold yellow]Materialize (mapas PBR)...", spinner="dots"):
+                    result = apply_materialize_pbr(
+                        result,
+                        materialize_bin=materialize_bin,
+                        save_sidecar_maps_dir=materialize_output_dir,
+                        roughness_from_one_minus_smoothness=not materialize_no_invert,
+                        verbose=verbose,
+                    )
 
         from .utils.export import save_mesh
 
         mesh_path = save_mesh(result, output, format=output_format)
-        console.print(f"[bold green]✓[/bold green] Mesh: [cyan]{mesh_path.resolve()}[/cyan]")
+        mp = Path(mesh_path).resolve()
+        try:
+            sz = format_bytes(mp.stat().st_size)
+        except OSError:
+            sz = "?"
+        console.print(Rule("[bold green]Resultado", style="green"))
+        console.print(
+            f"[bold green]✓[/bold green] Mesh: [cyan]{mp}[/cyan] [dim]({sz})[/dim]"
+        )
 
         elapsed = time.time() - start_time
-        console.print(f"\n[dim]Tempo: {elapsed:.1f}s[/dim]")
-        console.print(f"\n[bold green]Sucesso.[/bold green]")
+        console.print(f"\n[dim]Tempo total: {elapsed:.1f}s[/dim]")
+        console.print(f"[bold green]Sucesso.[/bold green]")
 
     except Exception as e:
         console.print(f"\n[bold red]✗ Erro:[/bold red] {str(e)}")
@@ -431,8 +596,18 @@ def generate(
 def doctor():
     """Verifica ambiente: PyTorch, CUDA, VRAM e extensão Hunyuan3D-Paint (custom_rasterizer)."""
     from .painter import check_paint_rasterizer_available
-    from .utils.memory import get_system_info
+    from .utils.memory import (
+        DEFAULT_EXCLUSIVE_GPU_MAX_USED_MIB,
+        get_system_info,
+        gpu_bytes_in_use,
+    )
 
+    console.print(
+        Panel.fit(
+            "[bold]text3d doctor[/bold] — PyTorch, CUDA, Paint (custom_rasterizer)",
+            border_style="blue",
+        )
+    )
     info_data = get_system_info()
     table = Table(title="[bold blue]Diagnóstico", box=box.ROUNDED)
     table.add_column("Item", style="cyan", no_wrap=True)
@@ -452,6 +627,14 @@ def doctor():
                 f"GPU {i}",
                 f"{gpu['name']} — {format_bytes(gpu['total_memory'])} total, "
                 f"{format_bytes(gpu['free_memory'])} livre",
+            )
+        used = gpu_bytes_in_use(0)
+        if used is not None:
+            table.add_row(
+                "Política GPU exclusiva",
+                f"~{used / (1024**2):.0f} MiB em uso agora — "
+                f"generate/texture recusam se > {DEFAULT_EXCLUSIVE_GPU_MAX_USED_MIB} MiB "
+                f"(ou TEXT3D_ALLOW_SHARED_GPU=1 / --allow-shared-gpu)",
             )
 
     try:
@@ -477,6 +660,12 @@ def info():
     """Informações do sistema e GPU."""
     from .utils.memory import get_system_info
 
+    console.print(
+        Panel.fit(
+            "[bold]text3d info[/bold] — GPU, cache e pastas de saída",
+            border_style="blue",
+        )
+    )
     info_data = get_system_info()
 
     table = Table(title="[bold blue]Sistema", box=box.ROUNDED)
@@ -495,6 +684,8 @@ def info():
             table.add_row(f"  └ VRAM livre", format_bytes(gpu["free_memory"]))
 
     table.add_row("Saída padrão", str(DEFAULT_OUTPUT_DIR.absolute()))
+    hf = os.environ.get("HF_HOME")
+    table.add_row("HF_HOME (cache Hub)", hf or "[dim]~/.cache/huggingface (defeito)[/dim]")
     console.print(table)
 
     if info_data.get("cuda_available"):
@@ -543,14 +734,63 @@ def info():
     help="Mantém modelos Paint na GPU (VRAM alta).",
 )
 @click.option(
+    "--materialize",
+    is_flag=True,
+    help="Após Paint, gera mapas PBR (Materialize CLI) e embute no GLB.",
+)
+@click.option(
+    "--materialize-output-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Guarda PNGs dos mapas nesta pasta.",
+)
+@click.option(
+    "--materialize-bin",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="Binário materialize (defeito: PATH ou MATERIALIZE_BIN).",
+)
+@click.option(
+    "--materialize-no-invert",
+    is_flag=True,
+    help="Roughness = smoothness (sem 1−smoothness).",
+)
+@click.option(
     "-v",
     "--verbose",
     "texture_verbose",
     is_flag=True,
     help="Logs detalhados.",
 )
+@click.option(
+    "--allow-shared-gpu",
+    "allow_shared_gpu",
+    is_flag=True,
+    help="Permite GPU com outros processos (desliga verificação: ~300 MiB máx. já ocupados).",
+)
+@click.option(
+    "--gpu-kill-others/--no-gpu-kill-others",
+    "gpu_kill_others",
+    default=True,
+    help="Termina outros processos GPU (nvidia-smi) antes de inferir; defeito: ligado.",
+)
 @click.pass_context
-def texture(ctx, mesh_file, image_file, output, paint_repo, paint_subfolder, paint_full_gpu, texture_verbose):
+def texture(
+    ctx,
+    mesh_file,
+    image_file,
+    output,
+    paint_repo,
+    paint_subfolder,
+    paint_full_gpu,
+    materialize,
+    materialize_output_dir,
+    materialize_bin,
+    materialize_no_invert,
+    texture_verbose,
+    allow_shared_gpu,
+    gpu_kill_others,
+):
     """Aplica Hunyuan3D-Paint a uma mesh GLB/OBJ + imagem de referência → GLB texturizado."""
     from .painter import paint_file_to_file
 
@@ -568,6 +808,25 @@ def texture(ctx, mesh_file, image_file, output, paint_repo, paint_subfolder, pai
             border_style="green",
         )
     )
+    allow_shared = bool(allow_shared_gpu) or _env_allow_shared_gpu()
+    gpu_kill = _gpu_kill_others_effective(bool(gpu_kill_others))
+    if gpu_kill:
+        console.print(
+            Panel(
+                "[bold]Terminar processos GPU alvo[/bold] antes do Paint\n"
+                "[dim]Desliga com [bold]--no-gpu-kill-others[/bold] ou TEXT3D_GPU_KILL_OTHERS=0[/dim]",
+                border_style="yellow",
+            )
+        )
+        for line in kill_gpu_compute_processes_aggressive(exclude_pid=os.getpid()):
+            console.print(f"[dim]{line}[/dim]")
+        clear_cuda_memory()
+        time.sleep(0.5)
+    try:
+        enforce_exclusive_gpu(allow_shared=allow_shared)
+    except RuntimeError as e:
+        raise click.ClickException(str(e)) from e
+
     try:
         start = time.time()
         with console.status("[bold yellow]A carregar modelos Paint (1ª vez: download HF)...", spinner="dots"):
@@ -579,8 +838,143 @@ def texture(ctx, mesh_file, image_file, output, paint_repo, paint_subfolder, pai
                 subfolder=paint_subfolder,
                 paint_cpu_offload=not paint_full_gpu,
                 verbose=verbose,
+                materialize=materialize,
+                materialize_output_dir=materialize_output_dir,
+                materialize_bin=materialize_bin,
+                materialize_no_invert=materialize_no_invert,
             )
-        console.print(f"[bold green]✓[/bold green] GLB texturizado: [cyan]{out.resolve()}[/cyan]")
+        out_p = Path(out).resolve()
+        try:
+            sz = format_bytes(out_p.stat().st_size)
+        except OSError:
+            sz = "?"
+        console.print(Rule("[bold green]Resultado", style="green"))
+        console.print(
+            f"[bold green]✓[/bold green] GLB texturizado: [cyan]{out_p}[/cyan] [dim]({sz})[/dim]"
+        )
+        console.print(f"\n[dim]Tempo: {time.time() - start:.1f}s[/dim]")
+    except Exception as e:
+        console.print(f"\n[bold red]✗ Erro:[/bold red] {str(e)}")
+        if verbose:
+            console.print_exception()
+        sys.exit(1)
+
+
+@cli.command("materialize-pbr")
+@click.argument(
+    "mesh_file",
+    type=click.Path(exists=True, dir_okay=False),
+)
+@click.option(
+    "--output",
+    "-o",
+    type=click.Path(),
+    required=True,
+    help="GLB de saída (PBR embutido).",
+)
+@click.option(
+    "--materialize-output-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Guarda PNGs dos mapas nesta pasta.",
+)
+@click.option(
+    "--materialize-bin",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+)
+@click.option(
+    "--materialize-no-invert",
+    is_flag=True,
+    help="Roughness = smoothness (sem 1−smoothness).",
+)
+@click.option(
+    "-v",
+    "--verbose",
+    "mat_verbose",
+    is_flag=True,
+)
+@click.option(
+    "--allow-shared-gpu",
+    "allow_shared_gpu",
+    is_flag=True,
+)
+@click.option(
+    "--gpu-kill-others/--no-gpu-kill-others",
+    "gpu_kill_others",
+    default=True,
+)
+@click.pass_context
+def materialize_pbr_cmd(
+    ctx,
+    mesh_file,
+    output,
+    materialize_output_dir,
+    materialize_bin,
+    materialize_no_invert,
+    mat_verbose,
+    allow_shared_gpu,
+    gpu_kill_others,
+):
+    """Só Materialize PBR: GLB já texturizado (Paint) → mapas + GLB PBR (sem re-correr Paint)."""
+    from .materialize_pbr import apply_materialize_pbr
+    from .painter import load_mesh_trimesh
+    from .utils.export import save_mesh
+
+    verbose = bool(ctx.obj.get("VERBOSE")) or mat_verbose
+    mesh_path = Path(mesh_file)
+    out_path = Path(output)
+    if out_path.suffix.lower() not in (".glb",):
+        raise click.UsageError("Saída deve ser .glb")
+
+    console.print(
+        Panel(
+            f"Entrada: [cyan]{mesh_path}[/cyan]\n"
+            f"Saída: [cyan]{out_path}[/cyan]",
+            title="[bold green]Materialize PBR",
+            border_style="green",
+        )
+    )
+    allow_shared = bool(allow_shared_gpu) or _env_allow_shared_gpu()
+    gpu_kill = _gpu_kill_others_effective(bool(gpu_kill_others))
+    if gpu_kill:
+        console.print(
+            Panel(
+                "[bold]Terminar processos GPU alvo[/bold] antes do Materialize\n"
+                "[dim]Desliga com [bold]--no-gpu-kill-others[/bold] ou TEXT3D_GPU_KILL_OTHERS=0[/dim]",
+                border_style="yellow",
+            )
+        )
+        for line in kill_gpu_compute_processes_aggressive(exclude_pid=os.getpid()):
+            console.print(f"[dim]{line}[/dim]")
+        clear_cuda_memory()
+        time.sleep(0.5)
+    try:
+        enforce_exclusive_gpu(allow_shared=allow_shared)
+    except RuntimeError as e:
+        raise click.ClickException(str(e)) from e
+
+    try:
+        start = time.time()
+        with console.status("[bold yellow]Materialize (mapas PBR)...", spinner="dots"):
+            mesh = load_mesh_trimesh(mesh_path)
+            result = apply_materialize_pbr(
+                mesh,
+                materialize_bin=materialize_bin,
+                save_sidecar_maps_dir=materialize_output_dir,
+                roughness_from_one_minus_smoothness=not materialize_no_invert,
+                verbose=verbose,
+            )
+            mp = save_mesh(result, out_path, format="glb")
+        out_p = Path(mp).resolve()
+        try:
+            sz = format_bytes(out_p.stat().st_size)
+        except OSError:
+            sz = "?"
+        console.print(Rule("[bold green]Resultado", style="green"))
+        console.print(
+            f"[bold green]✓[/bold green] GLB PBR: [cyan]{out_p}[/cyan] [dim]({sz})[/dim]"
+        )
         console.print(f"\n[dim]Tempo: {time.time() - start:.1f}s[/dim]")
     except Exception as e:
         console.print(f"\n[bold red]✗ Erro:[/bold red] {str(e)}")
@@ -604,10 +998,72 @@ def convert(input_file, output, rotate):
     try:
         with console.status(f"[yellow]A converter {input_path.suffix} → {Path(output).suffix}..."):
             convert_mesh(input_path, output, rotate=rotate)
-        console.print(f"[bold green]✓[/bold green] [cyan]{output}[/cyan]")
+        outp = Path(output).resolve()
+        try:
+            sz = format_bytes(outp.stat().st_size)
+        except OSError:
+            sz = "?"
+        console.print(Rule("[bold green]Concluído", style="green"))
+        console.print(f"[bold green]✓[/bold green] [cyan]{outp}[/cyan] [dim]({sz})[/dim]")
     except Exception as e:
         console.print(f"[bold red]✗[/bold red] {e}")
         sys.exit(1)
+
+
+@cli.command("gpu-processes")
+def gpu_processes_cmd() -> None:
+    """Lista processos na GPU (via nvidia-smi) — útil quando a verificação de VRAM exclusiva falha."""
+    import shutil
+    import subprocess
+
+    if not shutil.which("nvidia-smi"):
+        console.print(
+            "[yellow]Comando [bold]nvidia-smi[/bold] não encontrado no PATH. "
+            "Com driver NVIDIA instalado, costuma estar em /usr/bin.[/yellow]"
+        )
+        sys.exit(1)
+    try:
+        r = subprocess.run(
+            ["nvidia-smi"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except OSError as e:
+        raise click.ClickException(f"Falha ao executar nvidia-smi: {e}") from e
+    except subprocess.TimeoutExpired:
+        raise click.ClickException("nvidia-smi excedeu o tempo limite.") from None
+
+    console.print(
+        Panel.fit(
+            "[bold]Uso da GPU[/bold] — procura a secção [bold]Processes[/bold] (PID, nome, memória)",
+            border_style="cyan",
+        )
+    )
+    console.print(r.stdout, end="")
+    if r.stderr:
+        console.print(f"[dim]{r.stderr}[/dim]")
+    if r.returncode != 0:
+        console.print(f"[yellow]nvidia-smi saiu com código {r.returncode}[/yellow]")
+
+    console.print()
+    console.print(
+        Panel(
+            "[bold]Parar um processo[/bold]\n"
+            "• Na tabela [bold]Processes[/bold], anota o [bold]PID[/bold] da linha que consome VRAM.\n"
+            "• [bold]kill PID[/bold] — pedido amigável; [bold]kill -9 PID[/bold] — forçar se não sair.\n"
+            "• Sessões antigas de Python/Text2D/Text3D: [bold]pgrep -af 'text2d|text3d'[/bold] "
+            "e [bold]pgrep -af python[/bold] (cuidado a não matar o que precisas).\n"
+            "• Godot, browsers (WebGPU), outros modelos IA: fecha a app em vez de kill se possível.\n"
+            "[dim]Em [bold]text3d generate/texture[/bold], por defeito [bold]--gpu-kill-others[/bold] "
+            "termina processos listados aqui (exceto display). Desliga com [bold]--no-gpu-kill-others[/bold].\n"
+            "Se a VRAM continua alta sem processos na lista, reiniciar o PC limpa o driver; "
+            "ou [bold]TEXT3D_ALLOW_SHARED_GPU=1[/bold] só se aceitares OOM.[/dim]",
+            border_style="dim",
+            title="Dica",
+        )
+    )
 
 
 @cli.command()

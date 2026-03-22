@@ -12,33 +12,49 @@ import shutil
 from pathlib import Path
 from typing import Optional, List, Tuple
 
+try:
+    from rich import box
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.table import Table
 
-class Colors:
-    """Cores para terminal"""
-    GREEN = '\033[0;32m'
-    YELLOW = '\033[1;33m'
-    RED = '\033[0;31m'
-    BLUE = '\033[0;34m'
-    NC = '\033[0m'
+    _RICH = True
+except ImportError:
+    _RICH = False
+
+_console = Console() if _RICH else None
 
 
 class Logger:
-    """Logger com cores"""
+    """Saída com Rich quando disponível; fallback ANSI."""
+
     @staticmethod
-    def info(msg: str):
-        print(f"{Colors.GREEN}[INFO]{Colors.NC} {msg}")
-    
+    def info(msg: str) -> None:
+        if _RICH and _console:
+            _console.print(f"[bold green]INFO[/bold green] {msg}")
+        else:
+            print(f"\033[0;32m[INFO]\033[0m {msg}")
+
     @staticmethod
-    def warn(msg: str):
-        print(f"{Colors.YELLOW}[WARN]{Colors.NC} {msg}")
-    
+    def warn(msg: str) -> None:
+        if _RICH and _console:
+            _console.print(f"[bold yellow]WARN[/bold yellow] {msg}")
+        else:
+            print(f"\033[1;33m[WARN]\033[0m {msg}")
+
     @staticmethod
-    def error(msg: str):
-        print(f"{Colors.RED}[ERROR]{Colors.NC} {msg}")
-    
+    def error(msg: str) -> None:
+        if _RICH and _console:
+            _console.print(f"[bold red]ERROR[/bold red] {msg}")
+        else:
+            print(f"\033[0;31m[ERROR]\033[0m {msg}")
+
     @staticmethod
-    def step(msg: str):
-        print(f"{Colors.BLUE}[STEP]{Colors.NC} {msg}")
+    def step(msg: str) -> None:
+        if _RICH and _console:
+            _console.print(f"[bold blue]STEP[/bold blue] {msg}")
+        else:
+            print(f"\033[0;34m[STEP]\033[0m {msg}")
 
 
 class Text3DInstaller:
@@ -70,8 +86,15 @@ class Text3DInstaller:
     
     def run(self) -> bool:
         """Executa a instalação completa"""
-        self.logger.info(f"Prefixo de instalação: {self.install_prefix}")
-        self.logger.info(f"Python: {self.python_cmd}")
+        if _RICH and _console:
+            t = Table(show_header=False, box=box.SIMPLE, title="[bold cyan]Text3D — instalador")
+            t.add_row("Prefixo", str(self.install_prefix))
+            t.add_row("Python", self.python_cmd)
+            t.add_row("Projeto", str(self.script_dir))
+            _console.print(Panel(t, border_style="cyan"))
+        else:
+            self.logger.info(f"Prefixo de instalação: {self.install_prefix}")
+            self.logger.info(f"Python: {self.python_cmd}")
         
         # Verificações
         if not self.check_python():
@@ -169,7 +192,7 @@ class Text3DInstaller:
                 "Monorepo: espera-se Text2D ao lado de Text3D (ex.: GameDev/Text2D + GameDev/Text3D)."
             )
             self.logger.warn(
-                f"Não encontrado: {text2d} — `pip install .` pode falhar em text2d."
+                f"Não encontrado: {text2d} — `pip install -e ../Text2D` pode falhar em text2d."
             )
     
     def install_in_venv(self):
@@ -201,7 +224,7 @@ class Text3DInstaller:
             f"Instalando a partir de {self.script_dir} (deps: {self.requirements_path.name})..."
         )
         subprocess.run(
-            pip_cmd + extra + ["."],
+            pip_cmd + extra + ["-e", "."],
             cwd=str(self.script_dir),
             check=True,
         )
@@ -231,9 +254,9 @@ class Text3DInstaller:
                 f"Ficheiro em falta: {self.requirements_path} — a instalar só o pacote."
             )
         
-        self.logger.info("Instalando pacote text3d e dependências...")
+        self.logger.info("Instalando pacote text3d e dependências (modo editável → código no repositório)...")
         subprocess.run(
-            pip_cmd + ["."],
+            pip_cmd + ["-e", "."],
             cwd=str(self.script_dir),
             check=True,
         )
@@ -356,7 +379,7 @@ export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:T
             f.write(f'  # shellcheck source=/dev/null\n')
             f.write(f'  . "{env_sh}"\n')
             f.write("fi\n")
-            f.write(f'exec {python_path} -m text3d.cli "$@"\n')
+            f.write(f'exec "{python_path}" -m text3d "$@"\n')
         
         wrapper.chmod(0o755)
         self.logger.info(f"✓ Wrapper criado: {wrapper}")
@@ -392,22 +415,81 @@ export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:T
     
     def show_summary(self):
         """Mostra resumo da instalação"""
+        env_sh = Path.home() / ".config" / "text3d" / "env.sh"
+        paint_doc = self.script_dir / "docs" / "PAINT_SETUP.md"
+        raster_sh = self.script_dir / "scripts" / "install_custom_rasterizer.sh"
+
+        if _RICH and _console:
+            lines = []
+            if self.venv_exists and self.use_venv:
+                lines.append(f"venv: [green]{self.venv_dir}[/green]")
+                lines.append("")
+            if not self.skip_env_config and env_sh.exists():
+                lines.append("[bold]CUDA (opcional)[/bold]")
+                lines.append(f"  [cyan]source {env_sh}[/cyan]")
+                lines.append("")
+            lines.extend(
+                [
+                    "[bold]Comandos[/bold]",
+                    "  [cyan]text3d doctor[/cyan]  [dim]# GPU, torch, Paint[/dim]",
+                    "  [cyan]text3d --help[/cyan]",
+                    "  [cyan]text3d generate 'um robô' -o robô.glb --preset balanced[/cyan]",
+                    "  [cyan]text3d generate 'prompt' --final -o modelo.glb[/cyan]  [dim]# + Paint[/dim]",
+                    "  [cyan]text3d texture mesh.glb -i ref.png -o pintado.glb[/cyan]",
+                    "",
+                    "[dim]Modelos: cache ~/.cache/huggingface[/dim]",
+                    "",
+                    "[bold]Hunyuan3D-Paint[/bold] (custom_rasterizer CUDA)",
+                    f"  Docs: [cyan]{paint_doc}[/cyan]",
+                ]
+            )
+            if raster_sh.exists():
+                lines.append(f"  Build: [cyan]bash {raster_sh}[/cyan]")
+            lines.extend(
+                [
+                    "",
+                    f"Saída: [green]{Path.home() / '.text3d/outputs'}[/green]",
+                    f"Binários: [green]{self.install_prefix / 'bin'}[/green]",
+                    "",
+                ]
+            )
+            text3d_path = shutil.which("text3d")
+            if text3d_path:
+                lines.append(f"text3d no PATH: [bold green]{text3d_path}[/bold green]")
+            else:
+                lines.append(
+                    f'[yellow]PATH:[/yellow] export PATH="{self.install_prefix}/bin:$PATH"'
+                )
+            lines.extend(
+                [
+                    "",
+                    "[dim]Exemplo:[/dim] text3d doctor && text3d generate 'um carro' --preset fast -o carro.glb",
+                ]
+            )
+            _console.print(
+                Panel(
+                    "\n".join(lines),
+                    title="[bold green]Text3D — instalação concluída",
+                    border_style="green",
+                )
+            )
+            return
+
         print("\n" + "=" * 42)
-        print(f"{Colors.GREEN}  Instalação Concluída!{Colors.NC}")
+        print("  Instalação Concluída!")
         print("=" * 42)
         print()
-        
+
         if self.venv_exists and self.use_venv:
             print(f"✓ Usando venv existente: {self.venv_dir}")
             print()
-        
-        env_sh = Path.home() / ".config" / "text3d" / "env.sh"
+
         if not self.skip_env_config and env_sh.exists():
             print("Ambiente CUDA (opcional no teu shell):")
             print(f"  source {env_sh}")
             print("  (o wrapper em ~/.local/bin/text3d já tenta carregar este ficheiro)")
             print()
-        
+
         print("Comandos úteis:")
         print("  text3d doctor              # GPU, torch, hy3dgen, custom_rasterizer")
         print("  text3d --help")
@@ -415,28 +497,26 @@ export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:T
         print("  text3d generate 'prompt' --final -o modelo.glb   # + textura (Paint)")
         print("  text3d texture mesh.glb -i ref.png -o pintado.glb")
         print()
-        
+
         print("Modelos: cache Hugging Face (~/.cache/huggingface); primeira execução descarrega.")
         print()
-        
-        paint_doc = self.script_dir / "docs" / "PAINT_SETUP.md"
-        raster_sh = self.script_dir / "scripts" / "install_custom_rasterizer.sh"
+
         print("Hunyuan3D-Paint (text3d texture / --final) precisa de custom_rasterizer (CUDA):")
         print(f"  Ver: {paint_doc}")
         if raster_sh.exists():
             print(f"  Build: bash {raster_sh}")
         print()
-        
+
         print(f"  Saída: {Path.home() / '.text3d/outputs'}")
         print(f"  Binários: {self.install_prefix}/bin/")
         print()
-        
+
         text3d_path = shutil.which("text3d")
         if text3d_path:
             print(f"✓ text3d no PATH: {text3d_path}")
         else:
             print(f'⚠ Adiciona ao PATH: export PATH="{self.install_prefix}/bin:$PATH"')
-        
+
         print()
         print("Exemplo rápido:")
         print("  text3d doctor && text3d generate 'um carro' --preset fast -o carro.glb")
@@ -515,9 +595,11 @@ Pós-instalação:
     # Raiz do projeto Text3D = scripts/..
     venv_dir = Path(__file__).resolve().parent.parent / ".venv"
     if venv_dir.exists() and not args.use_venv:
-        print(f"{Colors.YELLOW}[INFO]{Colors.NC} Venv detectado em: {venv_dir}")
-        print(f"{Colors.YELLOW}[INFO]{Colors.NC} Use --use-venv para instalação mais rápida")
-        print()
+        msg = f"Venv em {venv_dir} — use --use-venv para instalação mais rápida"
+        if _RICH and _console:
+            _console.print(f"[yellow]{msg}[/yellow]\n")
+        else:
+            print(f"[INFO] {msg}\n")
     
     # Executar instalação
     installer = Text3DInstaller(args)

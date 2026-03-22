@@ -22,6 +22,8 @@ DEFAULT_T2D_GUIDANCE = 1.0
 DEFAULT_T2D_CPU_OFFLOAD = True
 
 # --- Hunyuan3D-2mini (shape) — mesmo perfil que o CLI usa por defeito ---
+DEFAULT_SUBFOLDER = "hunyuan3d-dit-v2-mini"
+
 DEFAULT_HY_STEPS = 24
 DEFAULT_HY_GUIDANCE = 5.0
 DEFAULT_OCTREE_RESOLUTION = 128

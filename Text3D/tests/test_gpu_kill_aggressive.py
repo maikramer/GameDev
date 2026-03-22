@@ -1,0 +1,39 @@
+"""kill_gpu_compute_processes_aggressive (mocks)."""
+
+from __future__ import annotations
+
+import signal
+from unittest.mock import patch
+
+from text3d.utils.memory import kill_gpu_compute_processes_aggressive, list_nvidia_compute_apps
+
+
+def test_list_nvidia_empty_when_no_binary(monkeypatch) -> None:
+    monkeypatch.setattr("text3d.utils.memory.shutil.which", lambda _: None)
+    assert list_nvidia_compute_apps() == []
+
+
+def test_kill_skips_protected_and_self() -> None:
+    apps = [
+        (100, "Xorg", 50),
+        (200, "/usr/bin/python3", 4000),
+        (300, "gnome-shell", 80),
+    ]
+    with patch("text3d.utils.memory.list_nvidia_compute_apps", return_value=apps):
+        with patch("text3d.utils.memory.os.kill") as mock_kill:
+            logs = kill_gpu_compute_processes_aggressive(exclude_pid=200, term_wait_seconds=0.01)
+    # exclude_pid 200: skip killing self
+    # 100 Xorg protected, 300 gnome-shell protected
+    mock_kill.assert_not_called()
+    assert any("ignorado" in x for x in logs)
+
+
+def test_kill_targets_unprotected() -> None:
+    apps = [(999, "python3", 1000)]
+    with patch("text3d.utils.memory.list_nvidia_compute_apps", return_value=apps):
+        with patch("text3d.utils.memory.os.kill") as mock_kill:
+            with patch("text3d.utils.memory.time.sleep", lambda _: None):
+                kill_gpu_compute_processes_aggressive(exclude_pid=1, term_wait_seconds=0.0)
+    assert any(
+        c[0][0] == 999 and c[0][1] == signal.SIGTERM for c in mock_kill.call_args_list
+    )

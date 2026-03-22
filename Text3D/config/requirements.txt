@@ -18,11 +18,13 @@ imageio-ffmpeg>=0.4.9
 
 click>=8.1.0
 rich>=13.0.0
+rich-click>=1.8.0
 tqdm>=4.66.0
 pydantic>=2.0.0
 
-# Monorepo: Text2D (FLUX.2 Klein / SDNQ)
-text2d @ file:../Text2D
+# Monorepo: Text2D (FLUX.2 Klein / SDNQ). Em `setup.py` vira file:// absoluto.
+# Instalação manual a partir deste ficheiro: usar `../../Text2D` (relativo a config/).
+text2d @ file:../../Text2D
 
 # Hunyuan3D (hy3dgen) — licença Tencent Hunyuan Community
 hy3dgen @ git+https://github.com/Tencent-Hunyuan/Hunyuan3D-2.git

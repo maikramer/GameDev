@@ -6,7 +6,6 @@ Fluxo: KleinFluxGenerator → unload explícito → Hunyuan3DDiTFlowMatchingPipe
 
 from __future__ import annotations
 
-import gc
 from pathlib import Path
 from typing import Any, Optional, Tuple, Union
 
@@ -17,12 +16,7 @@ from PIL import Image
 from text2d.generator import KleinFluxGenerator
 
 from . import defaults as _defaults
-
-
-def _clear_cuda_cache() -> None:
-    gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+from .utils.memory import clear_cuda_memory as _clear_cuda_cache
 
 
 def _as_trimesh(mesh_or_nested: Any) -> trimesh.Trimesh:
@@ -97,12 +91,13 @@ class HunyuanTextTo3DGenerator:
 
         from hy3dgen.shapegen import Hunyuan3DDiTFlowMatchingPipeline
 
-        # low_vram + CUDA: o offload estilo diffusers (enable_model_cpu_offload) mistura CPU/GPU
-        # neste pipeline e falha; usar Hunyuan em CPU é lento mas estável em GPUs ~6GB.
         hunyuan_device = self.device
         if self.low_vram_mode and self.device == "cuda":
             hunyuan_device = "cpu"
-            self._log("low_vram: Hunyuan3D em CPU (evita OOM; mais lento).")
+            self._log(
+                "low_vram: Hunyuan3D em CPU (evita OOM; muito mais lento). "
+                "Preferir low_vram=false com turbo em GPU (~6GB) ou fechar outras apps."
+            )
 
         dtype = torch.float16 if hunyuan_device == "cuda" else torch.float32
         kwargs: dict = {
@@ -115,10 +110,15 @@ class HunyuanTextTo3DGenerator:
             kwargs["cache_dir"] = self.cache_dir
 
         self._log(f"A carregar Hunyuan3DDiTFlowMatchingPipeline ({self.hunyuan_model_id})...")
+        _clear_cuda_cache()
         pipe = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(self.hunyuan_model_id, **kwargs)
 
         if hunyuan_device == "cuda":
+            _clear_cuda_cache()
             pipe.to(hunyuan_device)
+            if torch.cuda.is_available():
+                alloc = torch.cuda.memory_allocated() / (1024**3)
+                self._log(f"Shape na VRAM: {alloc:.2f} GB")
 
         self._hunyuan_pipeline = pipe
         return pipe
@@ -219,6 +219,11 @@ class HunyuanTextTo3DGenerator:
         if hy_seed is not None:
             generator.manual_seed(hy_seed)
 
+        _clear_cuda_cache()
+        self._log(
+            f"Inferência: steps={num_inference_steps} octree={octree_resolution} "
+            f"chunks={num_chunks} guidance={guidance_scale}"
+        )
         with torch.inference_mode():
             raw = pipe(
                 image=image,
@@ -233,8 +238,9 @@ class HunyuanTextTo3DGenerator:
 
         mesh = _as_trimesh(raw)
 
-        if self.low_vram_mode:
-            self._unload_hunyuan()
+        # Libertar sempre o pipeline de shape antes de repair/Paint: em GPUs ~6 GB
+        # manter o Hunyuan residente até ao unload do CLI causava picos de VRAM no Paint.
+        self._unload_hunyuan()
 
         return mesh
 

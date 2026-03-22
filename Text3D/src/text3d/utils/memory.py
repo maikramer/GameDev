@@ -2,10 +2,225 @@
 Utilitários para gerenciamento de memória e GPU.
 """
 
+import gc
+import os
+import signal
+import shutil
+import subprocess
 import sys
-from typing import Dict, List, Any, Optional
+import time
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 import torch
+
+
+def clear_cuda_memory() -> None:
+    """
+    Força recolha de lixo e esvazia o cache CUDA.
+
+    Usado entre fases pesadas (Hunyuan shape → Paint → Materialize) em GPUs ~6 GB
+    para reduzir OOM por fragmentação ou picos residuais.
+    """
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
+# VRAM já ocupada por *qualquer* processo acima disto → recusar inferência (GPU partilhada).
+DEFAULT_EXCLUSIVE_GPU_MAX_USED_MIB = 300
+
+
+def gpu_bytes_in_use(device: int = 0) -> int | None:
+    """
+    Bytes de VRAM em uso na GPU (total − livre), incluindo todos os processos.
+
+    Devolve ``None`` se ``mem_get_info`` não existir (PyTorch antigo) — o chamador
+    pode ignorar a verificação de exclusividade.
+    """
+    if not torch.cuda.is_available():
+        return 0
+    if not hasattr(torch.cuda, "mem_get_info"):
+        return None
+    free, total = torch.cuda.mem_get_info(device)
+    return int(total - free)
+
+
+def enforce_exclusive_gpu(
+    *,
+    device: int = 0,
+    max_used_mib: int = DEFAULT_EXCLUSIVE_GPU_MAX_USED_MIB,
+    allow_shared: bool = False,
+) -> None:
+    """
+    Garante que a GPU está quase livre antes de carregar modelos grandes.
+
+    Se ``allow_shared`` for falso e a VRAM já ocupada exceder ``max_used_mib``,
+    levanta ``RuntimeError`` (o CLI converte em mensagem ao utilizador).
+    """
+    if allow_shared:
+        return
+    used = gpu_bytes_in_use(device)
+    if used is None:
+        return
+    max_bytes = max_used_mib * 1024 * 1024
+    if used > max_bytes:
+        mib = used / (1024 * 1024)
+        raise RuntimeError(
+            f"GPU com ~{mib:.0f} MiB já em uso (limite para arrancar: {max_used_mib} MiB). "
+            "Fecha outras aplicações que usem a GPU ou usa --gpu-kill-others (defeito) / "
+            "TEXT3D_GPU_KILL_OTHERS=1 para terminar processos listados pelo nvidia-smi; "
+            "ou --allow-shared-gpu / TEXT3D_ALLOW_SHARED_GPU=1 para ignorar esta verificação."
+        )
+
+
+# Processos que não devem ser mortos (risco de derrubar sessão gráfica).
+_GPU_KILL_PROTECTED_NAMES = frozenset(
+    {
+        "xorg",
+        "x",
+        "gnome-shell",
+        "plasmashell",
+        "kwin",
+        "kwin_x11",
+        "kwin_wayland",
+        "sddm",
+        "gdm",
+        "gdm-wayland",
+        "dbus-daemon",
+        "pipewire",
+        "wireplumber",
+        "nvidia-egl",
+        "nvidia-persistenced",
+        "nvidia-gridd",
+        "nvidia-modeset",
+        "gsd-xsettings",
+        "mutter",
+        "cinnamon",
+        "xfwm4",
+        "budgie-wm",
+        "muffin",
+    }
+)
+
+
+def _gpu_kill_basename(proc_name: str) -> str:
+    s = proc_name.strip()
+    if not s:
+        return ""
+    return Path(s.split()[0]).name.lower()
+
+
+def _is_protected_gpu_process(proc_name: str) -> bool:
+    b = _gpu_kill_basename(proc_name)
+    if b in _GPU_KILL_PROTECTED_NAMES:
+        return True
+    low = proc_name.lower()
+    if "xwayland" in low:
+        return True
+    return False
+
+
+def list_nvidia_compute_apps() -> list[tuple[int, str, Optional[int]]]:
+    """
+    Lista processos reportados como compute apps (nvidia-smi).
+
+    Cada entrada: ``(pid, process_name, used_mib_ou_None)``.
+    """
+    if not shutil.which("nvidia-smi"):
+        return []
+    r = subprocess.run(
+        [
+            "nvidia-smi",
+            "--query-compute-apps=pid,process_name,used_gpu_memory",
+            "--format=csv,noheader,nounits",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    if r.returncode != 0 or not (r.stdout or "").strip():
+        return []
+    out: list[tuple[int, str, Optional[int]]] = []
+    for line in r.stdout.strip().splitlines():
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) < 2:
+            continue
+        try:
+            pid = int(parts[0])
+        except ValueError:
+            continue
+        name = parts[1]
+        mib: Optional[int] = None
+        if len(parts) >= 3 and parts[2] and parts[2].upper() not in ("N/A", "[N/A]"):
+            try:
+                mib = int(float(parts[2].replace(" MiB", "").strip()))
+            except ValueError:
+                pass
+        out.append((pid, name, mib))
+    return out
+
+
+def kill_gpu_compute_processes_aggressive(
+    *,
+    exclude_pid: int,
+    term_wait_seconds: float = 2.0,
+) -> list[str]:
+    """
+    Envia SIGTERM a processos GPU listados pelo driver; depois SIGKILL se ainda vivos.
+
+    Exclui ``exclude_pid`` (o processo atual) e nomes protegidos (display / sessão).
+    Devolve linhas de log legíveis.
+    """
+    logs: list[str] = []
+    apps = list_nvidia_compute_apps()
+    targets: list[tuple[int, str]] = []
+    for pid, name, mib in apps:
+        if pid == exclude_pid:
+            continue
+        if _is_protected_gpu_process(name):
+            logs.append(f"[ignorado] PID {pid} ({name}) — protegido (display/sessão)")
+            continue
+        extra = f" ~{mib} MiB" if mib is not None else ""
+        targets.append((pid, name))
+        logs.append(f"[alvo] PID {pid} ({name}){extra}")
+
+    if not targets:
+        if not apps:
+            logs.append("nvidia-smi não listou compute apps (driver ou GPU idle).")
+        else:
+            logs.append("Sem alvos para terminar (só processo atual ou entradas protegidas).")
+        return logs
+
+    for pid, name in targets:
+        try:
+            os.kill(pid, signal.SIGTERM)
+            logs.append(f"SIGTERM → PID {pid} ({name})")
+        except ProcessLookupError:
+            logs.append(f"PID {pid} já terminou")
+        except PermissionError:
+            logs.append(f"PID {pid} ({name}): sem permissão (SIGTERM)")
+        except OSError as e:
+            logs.append(f"PID {pid}: {e}")
+
+    time.sleep(term_wait_seconds)
+
+    for pid, name in targets:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            continue
+        except OSError:
+            continue
+        try:
+            os.kill(pid, signal.SIGKILL)
+            logs.append(f"SIGKILL → PID {pid} ({name})")
+        except ProcessLookupError:
+            pass
+        except PermissionError:
+            logs.append(f"PID {pid} ({name}): sem permissão (SIGKILL)")
+
+    return logs
 
 
 def get_gpu_info() -> List[Dict[str, Any]]:
