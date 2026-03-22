@@ -15,31 +15,49 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+try:
+    from rich import box
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.table import Table
 
-class Colors:
-    GREEN = "\033[0;32m"
-    YELLOW = "\033[1;33m"
-    RED = "\033[0;31m"
-    BLUE = "\033[0;34m"
-    NC = "\033[0m"
+    _RICH = True
+except ImportError:
+    _RICH = False
+
+_console = Console() if _RICH else None
 
 
 class Logger:
+    """Saída com Rich quando disponível; fallback ANSI simples."""
+
     @staticmethod
     def info(msg: str) -> None:
-        print(f"{Colors.GREEN}[INFO]{Colors.NC} {msg}")
+        if _RICH and _console:
+            _console.print(f"[bold green]INFO[/bold green] {msg}")
+        else:
+            print(f"\033[0;32m[INFO]\033[0m {msg}")
 
     @staticmethod
     def warn(msg: str) -> None:
-        print(f"{Colors.YELLOW}[WARN]{Colors.NC} {msg}")
+        if _RICH and _console:
+            _console.print(f"[bold yellow]WARN[/bold yellow] {msg}")
+        else:
+            print(f"\033[1;33m[WARN]\033[0m {msg}")
 
     @staticmethod
     def error(msg: str) -> None:
-        print(f"{Colors.RED}[ERROR]{Colors.NC} {msg}")
+        if _RICH and _console:
+            _console.print(f"[bold red]ERROR[/bold red] {msg}")
+        else:
+            print(f"\033[0;31m[ERROR]\033[0m {msg}")
 
     @staticmethod
     def step(msg: str) -> None:
-        print(f"{Colors.BLUE}[STEP]{Colors.NC} {msg}")
+        if _RICH and _console:
+            _console.print(f"[bold blue]STEP[/bold blue] {msg}")
+        else:
+            print(f"\033[0;34m[STEP]\033[0m {msg}")
 
 
 def _project_root() -> Path:
@@ -69,9 +87,16 @@ class Text2DInstaller:
         self.requirements_file = self.script_dir / "config" / "requirements.txt"
 
     def run(self) -> bool:
-        self.logger.info(f"Prefixo de instalação: {self.install_prefix}")
-        self.logger.info(f"Python: {self.python_cmd}")
-        self.logger.info(f"Raiz do projeto: {self.script_dir}")
+        if _RICH and _console:
+            t = Table(show_header=False, box=box.SIMPLE, title="[bold cyan]Text2D — instalador")
+            t.add_row("Prefixo", str(self.install_prefix))
+            t.add_row("Python", self.python_cmd)
+            t.add_row("Projeto", str(self.script_dir))
+            _console.print(Panel(t, border_style="cyan"))
+        else:
+            self.logger.info(f"Prefixo de instalação: {self.install_prefix}")
+            self.logger.info(f"Python: {self.python_cmd}")
+            self.logger.info(f"Raiz do projeto: {self.script_dir}")
 
         if not self.check_python():
             return False
@@ -160,8 +185,8 @@ class Text2DInstaller:
                 pass
 
         pip_cmd = [python, "-m", "pip", "install"]
-        self.logger.info("Instalando pacote (editable implícito via setuptools)...")
-        subprocess.run(pip_cmd + [str(self.script_dir)], check=True)
+        self.logger.info("Instalando pacote em modo editável (código lido a partir do repositório)...")
+        subprocess.run(pip_cmd + ["-e", str(self.script_dir)], check=True)
         self.logger.info("✓ Instalado no venv")
 
     def install_system_wide(self) -> None:
@@ -181,8 +206,8 @@ class Text2DInstaller:
         else:
             self.logger.warn(f"Ficheiro em falta: {self.requirements_file}")
 
-        self.logger.info("Instalando pacote text2d...")
-        subprocess.run(pip_cmd + [str(self.script_dir)], check=True)
+        self.logger.info("Instalando pacote text2d em modo editável (código no repositório)...")
+        subprocess.run(pip_cmd + ["-e", str(self.script_dir)], check=True)
         self.logger.info("✓ Instalação concluída")
 
     def _python_minor(self) -> int:
@@ -316,8 +341,39 @@ class Text2DInstaller:
         self.logger.info(f"Diretórios de saída: {out}")
 
     def show_summary(self) -> None:
+        if _RICH and _console:
+            lines = [
+                "[bold]Comandos[/bold]",
+                "  [cyan]text2d --help[/cyan]",
+                '  [cyan]text2d generate "uma paisagem ao pôr do sol" -o out.png[/cyan]',
+                "  [cyan]text2d info[/cyan]",
+                "",
+                "[dim]Dev:[/dim] pip install -e \".[dev]\" && pytest tests/ -v",
+                "",
+                f"Saída: [green]~/.text2d/outputs/[/green]",
+                f"Binários: [green]{self.install_prefix / 'bin'}[/green]",
+            ]
+            if self.venv_exists and self.use_venv:
+                lines.append(f"venv: [green]{self.venv_dir}[/green]")
+            w = shutil.which("text2d")
+            lines.append("")
+            if w:
+                lines.append(f"text2d no PATH: [bold green]{w}[/bold green]")
+            else:
+                lines.append(
+                    f'[yellow]Adiciona ao PATH:[/yellow] export PATH="{self.install_prefix}/bin:$PATH"'
+                )
+            _console.print(
+                Panel(
+                    "\n".join(lines),
+                    title="[bold green]Text2D — instalação concluída",
+                    border_style="green",
+                )
+            )
+            return
+
         print("\n" + "=" * 42)
-        print(f"{Colors.GREEN}  Text2D — instalação concluída{Colors.NC}")
+        print("  Text2D — instalação concluída")
         print("=" * 42 + "\n")
 
         if self.venv_exists and self.use_venv:
@@ -380,7 +436,11 @@ Python 3.10–3.12 com GPU: índice cu121 ou cu118.
 
     venv_dir = _project_root() / ".venv"
     if venv_dir.is_dir() and not args.use_venv:
-        print(f"{Colors.YELLOW}[INFO]{Colors.NC} Venv em {venv_dir} — use --use-venv para instalação rápida\n")
+        msg = f"Venv em {venv_dir} — use --use-venv para instalação rápida"
+        if _RICH and _console:
+            _console.print(f"[yellow]{msg}[/yellow]\n")
+        else:
+            print(f"[INFO] {msg}\n")
 
     installer = Text2DInstaller(args)
     sys.exit(0 if installer.run() else 1)

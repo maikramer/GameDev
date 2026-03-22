@@ -26,6 +26,7 @@ setup(
     url="https://github.com/seu-usuario/text2d",
     package_dir={"": "src"},
     packages=find_packages(where="src"),
+    package_data={"text2d": ["cursor_skill/*.md"]},
     classifiers=[
         "Development Status :: 3 - Alpha",
         "Intended Audience :: Developers",

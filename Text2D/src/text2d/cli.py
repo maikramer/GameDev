@@ -9,15 +9,22 @@ import time
 from pathlib import Path
 from typing import Optional
 
-import click
+from . import cli_rich  # noqa: F401 — configura rich-click antes dos comandos
+
+if cli_rich.RICH_CLICK:
+    import rich_click as click
+else:
+    import click
 from rich import box
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.rule import Rule
 from rich.table import Table
 
 from .generator import KleinFluxGenerator, default_model_id
 from .utils.memory import format_bytes, get_system_info
+from .cursor_skill_install import install_agent_skill
 
 console = Console()
 
@@ -37,7 +44,38 @@ def cli(ctx: click.Context, verbose: bool) -> None:
     """Text2D — imagens a partir de texto (FLUX.2 Klein 4B SDNQ)."""
     ctx.ensure_object(dict)
     ctx.obj["VERBOSE"] = verbose
-    ensure_dirs()
+    # Não criar outputs/ aqui: só quando a saída for a pasta por defeito (generate sem -o).
+
+
+@cli.group("skill")
+def skill_group() -> None:
+    """Agent Skills Cursor (instalação no projeto do jogo)."""
+
+
+@skill_group.command("install")
+@click.option(
+    "--target",
+    "-t",
+    type=click.Path(file_okay=False, writable=True, path_type=Path),
+    default=".",
+    help="Raiz do projeto do jogo (cria .cursor/skills/text2d/)",
+)
+@click.option("--force", is_flag=True, help="Sobrescrever SKILL.md existente")
+def skill_install_cmd(target: Path, force: bool) -> None:
+    """Copia SKILL.md para .cursor/skills/text2d/."""
+    try:
+        dest = install_agent_skill(target, force=force)
+    except FileNotFoundError as e:
+        raise click.ClickException(str(e)) from e
+    except FileExistsError as e:
+        raise click.ClickException(f"{e} — usa --force para substituir.") from e
+    console.print(
+        Panel(
+            f"Skill copiada para [bold cyan]{dest}[/bold cyan]",
+            title="[bold green]OK[/bold green]",
+            border_style="green",
+        )
+    )
 
 
 @cli.command("generate")
@@ -119,6 +157,7 @@ def generate_cmd(
             gen.warmup()
 
         if output is None:
+            ensure_dirs()
             ts = int(time.time())
             safe = "".join(c if c.isalnum() else "_" for c in prompt[:40])
             output = str(DEFAULT_IMAGE_DIR / f"{safe}_{ts}.png")
@@ -150,8 +189,16 @@ def generate_cmd(
         )
 
         elapsed = time.time() - start
-        console.print(f"\n[bold green]✓[/bold green] Imagem: [cyan]{out_path.resolve()}[/cyan]")
-        console.print(f"[dim]Tempo: {elapsed:.1f}s[/dim]")
+        try:
+            sz = format_bytes(out_path.stat().st_size)
+        except OSError:
+            sz = "?"
+        console.print(Rule("[bold green]Resultado", style="green"))
+        console.print(
+            f"[bold green]✓[/bold green] Imagem: [cyan]{out_path.resolve()}[/cyan] "
+            f"[dim]({sz})[/dim]"
+        )
+        console.print(f"[dim]Tempo de inferência + gravação: {elapsed:.1f}s[/dim]")
     except ImportError as e:
         console.print(f"\n[bold red]✗[/bold red] {e}")
         sys.exit(1)
@@ -165,6 +212,12 @@ def generate_cmd(
 @cli.command("info")
 def info_cmd() -> None:
     """Informações do sistema e GPU."""
+    console.print(
+        Panel.fit(
+            "[bold]text2d info[/bold] — ambiente de execução e cache Hugging Face",
+            border_style="blue",
+        )
+    )
     data = get_system_info()
     t = Table(title="[bold blue]Sistema", box=box.ROUNDED)
     t.add_column("Componente", style="cyan", no_wrap=True)
@@ -178,7 +231,9 @@ def info_cmd() -> None:
             t.add_row(f"GPU {i}", str(gpu.get("name", "")))
             t.add_row("  └ VRAM total", format_bytes(gpu.get("total_memory", 0)))
             t.add_row("  └ VRAM livre", format_bytes(gpu.get("free_memory", 0)))
-    t.add_row("HF cache", os.environ.get("HF_HOME", "~/.cache/huggingface"))
+    hf = os.environ.get("HF_HOME")
+    t.add_row("HF_HOME (cache Hub)", hf or "[dim]~/.cache/huggingface (defeito)[/dim]")
+    t.add_row("Saída padrão (pasta)", str(DEFAULT_IMAGE_DIR.resolve()))
     t.add_row("Modelo (default)", default_model_id())
     console.print(t)
 

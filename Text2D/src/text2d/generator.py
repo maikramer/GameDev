@@ -28,9 +28,10 @@ def default_model_id() -> str:
 
 
 def _torch_dtype_for(device: str) -> torch.dtype:
-    if device == "cpu":
+    d = device.lower()
+    if d.startswith("cpu"):
         return torch.float32
-    if torch.cuda.is_available():
+    if d.startswith("cuda") and torch.cuda.is_available():
         if getattr(torch.cuda, "is_bf16_supported", lambda: False)():
             return torch.bfloat16
         return torch.float16
@@ -102,9 +103,9 @@ class KleinFluxGenerator:
             print(f"[Text2D] {msg}")
 
     def _clear_cache(self) -> None:
-        if self.device == "cuda" and torch.cuda.is_available():
-            torch.cuda.empty_cache()
         gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     def _status(self, msg: str) -> None:
         if self._on_status:
@@ -120,7 +121,6 @@ class KleinFluxGenerator:
         if self._pipe is not None:
             return self._pipe
 
-        # Barra de progresso do Hub (tqdm) visível no terminal
         os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "0")
 
         triton_is_available, apply_sdnq_options_to_model = _register_sdnq()
@@ -142,10 +142,16 @@ class KleinFluxGenerator:
         self._status("Passo 2/3 — SDNQ (matmul quantizado opcional via Triton)")
         _maybe_apply_quantized_matmul(pipe, triton_is_available, apply_sdnq_options_to_model)
 
-        self._status(
-            "Passo 3/3 — a mover o pipeline para "
-            + (f"{self.device} (offload)" if self.low_vram else self.device)
-        )
+        if self.device == "cpu":
+            mode_label = "cpu"
+        elif self.low_vram:
+            mode_label = f"{self.device} (cpu_offload — módulos migram 1 a 1)"
+        else:
+            mode_label = self.device
+        self._status(f"Passo 3/3 — a mover o pipeline para {mode_label}")
+
+        self._clear_cache()
+
         if torch.cuda.is_available() and self.device == "cuda":
             torch.cuda.reset_peak_memory_stats(0)
 
@@ -156,7 +162,7 @@ class KleinFluxGenerator:
         else:
             pipe.to(self.device)
 
-        if torch.cuda.is_available() and self.device == "cuda":
+        if torch.cuda.is_available() and self.device == "cuda" and not self.low_vram:
             torch.cuda.synchronize()
             alloc = torch.cuda.memory_allocated(0) / (1024**3)
             peak = torch.cuda.max_memory_allocated(0) / (1024**3)
@@ -187,6 +193,8 @@ class KleinFluxGenerator:
         generator = torch.Generator(device=gen_device)
         if seed is not None:
             generator.manual_seed(seed)
+
+        self._clear_cache()
 
         self._log("Inferência...")
         out = pipe(
