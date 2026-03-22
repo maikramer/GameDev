@@ -8,6 +8,7 @@ Monorepo com ferramentas de **texto para imagem** e **texto para 3D**, partilhan
 |-------|-----------|
 | [**Text2D**](Text2D/) | CLI **text-to-image** com FLUX (quantização SDNQ), orientada a GPU modesta. |
 | [**Text3D**](Text3D/) | Pipeline **text-to-3D**: imagem 2D (via Text2D) → mesh GLB com Hunyuan3D; pintura opcional. |
+| [**GameAssets**](GameAssets/) | **Batch de prompts/assets**: perfil de jogo + estilo + CSV → `text2d` / `text3d` por subprocess. |
 
 Cada projeto tem o seu próprio `README`, `setup`, requisitos e licença.
 
@@ -28,9 +29,12 @@ cd ../Text3D
 python -m venv .venv && source .venv/bin/activate
 pip install -r config/requirements.txt && pip install -e .
 text3d --help
+
+# GameAssets (batch alinhado ao jogo; para GPU instala Text2D/Text3D e PATH ou TEXT2D_BIN/TEXT3D_BIN)
+cd ../GameAssets && chmod +x scripts/setup.sh && ./scripts/setup.sh && source .venv/bin/activate && gameassets --help
 ```
 
-Instruções completas: [Text2D/README.md](Text2D/README.md) e [Text3D/README.md](Text3D/README.md).
+Instruções completas: [Text2D/README.md](Text2D/README.md), [Text3D/README.md](Text3D/README.md) e [GameAssets/README.md](GameAssets/README.md).
 
 ## Licenças
 
