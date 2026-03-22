@@ -1,0 +1,84 @@
+---
+name: materialize-cli
+description: Gera mapas PBR (height, normal, metallic, smoothness, edge, AO) a partir de texturas difusas via compute shaders wgpu. Use com Materialize CLI, baking PBR, pipeline diffuse→material, WGSL, ou quando o utilizador mencionar materialize-cli, mapas PBR, Text3D --materialize.
+---
+
+# Materialize CLI
+
+## Quando usar
+
+- Explicar o **CLI** (argumentos, ficheiros de saída, formatos).
+- Alterar ou adicionar um **mapa PBR** (shader WGSL + pipeline Rust + I/O).
+- Depurar ou estender o pipeline **GPU** (wgpu, bind groups, formatos).
+- Escrever ou atualizar documentação (`README`, `docs/`).
+
+## Visão geral para utilizadores
+
+**Comando:** `materialize <entrada> [opções]`
+
+**Saídas (6 mapas):** `{stem}_height.*`, `_normal.*`, `_metallic.*`, `_smoothness.*`, `_edge.*`, `_ao.*`
+
+**Opções:** `-o` / `--output` (pasta), `-f` / `--format` (png \| jpg \| tga \| exr), `-q` / `--quality` (0–100, JPEG), `-v` / `--verbose`, `--quiet` (sem listar ficheiros em sucesso).
+
+```bash
+materialize textura.png -o ./out/ -v
+materialize diffuse.png --format png --quiet
+materialize skill install   # instala esta skill em .cursor/skills/ do projeto atual
+```
+
+## Integração com Text3D / GameAssets
+
+- O **Text3D** pode chamar o binário `materialize` após o **Hunyuan3D-Paint** quando usas `text3d generate … --texture --materialize` (ou equivalente no `game.yaml` do GameAssets: `text3d.materialize: true`).
+- Variável de ambiente: **`MATERIALIZE_BIN`** se o executável não estiver no `PATH`.
+
+## Layout do código (referência para contribuidores)
+
+| Área | Caminho | Papel |
+|------|---------|--------|
+| Shaders | `src/shaders/*.wgsl` | Um compute shader por mapa; workgroup 8×8 |
+| Pipeline | `src/pipeline.rs` | Ordem: height → normal → metallic → smoothness → edge → AO |
+| GPU | `src/gpu.rs` | Pipelines 1 ou 2 inputs, bind groups |
+| I/O | `src/io.rs` | `get_output_paths`, conversões, `save_image` |
+| CLI | `src/cli.rs` | Args clap; enum `OutputFormat` |
+| Main | `src/main.rs` | Imagem → `pipeline.process()` → gravar os 6 mapas |
+
+## Dependências entre mapas
+
+- **Height:** a partir do diffuse.
+- **Normal:** a partir do height.
+- **Metallic:** a partir do diffuse.
+- **Smoothness:** a partir do diffuse + metallic (pipeline a 2 entradas).
+- **Edge:** a partir do normal.
+- **AO:** a partir do height.
+
+## Adicionar ou alterar um mapa
+
+1. **Shader:** `src/shaders/<nome>.wgsl` com `@group(0) @binding(0)` entrada e `@binding(1)` storage output (ou 0,1,2 para 2 entradas). Workgroup 8×8. Guardar com `coords >= dims` → return.
+2. **Pipeline:** em `pipeline.rs`, `include_str!`, criar pipeline, textura de saída, bind group, dispatch após dependências, readback para `PbrMaps`.
+3. **I/O:** em `io.rs`, estender `OutputPaths`, `get_output_paths`, `*_to_image`, gravar em `main.rs`.
+4. **Formatos:** height em R32Float onde aplicável; restantes conforme comentários em `io.rs` / `main.rs`.
+
+## Testes
+
+```bash
+cargo build
+cargo test
+materialize /caminho/diffuse.png -o ./out/ -v
+```
+
+Testes de integração: `tests/integration_test.rs`. Unitários em `io::tests`.
+
+## Documentação
+
+- **Utilizador:** `README.md`, `docs/README.md`, `docs/features.md`, `docs/cli-api.md`
+- **Técnico:** `docs/architecture.md`, `docs/algorithms.md`, `docs/shaders.md`
+- **Planeamento:** `docs/roadmap.md`, `docs/plans/*.md`
+
+Manter docs alinhados ao adicionar mapas ou opções CLI.
+
+## Ferramentas relacionadas
+
+| Ferramenta | Ligação |
+|------------|---------|
+| **Text3D** | Encadeamento Paint → Materialize no GLB; ver `Text3D/docs/PBR_MATERIALIZE.md` no monorepo GameDev. |
+| **GameAssets** | `text3d.materialize` no perfil delega no Text3D (e portanto no Materialize CLI). |

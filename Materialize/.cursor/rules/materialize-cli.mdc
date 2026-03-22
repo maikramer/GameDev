@@ -1,0 +1,25 @@
+---
+description: Usar o CLI materialize para gerar mapas PBR a partir de texturas
+alwaysApply: true
+---
+
+# Materialize CLI
+
+Quando a tarefa envolver **gerar mapas PBR** (height, normal, metallic) a partir de uma **imagem de textura difusa**, use o CLI deste projeto.
+
+## Invocação
+
+- Verifique se o arquivo de entrada existe antes de chamar.
+- Comando: `materialize <caminho_entrada> [-o diretório_saída] [-f png|jpg|tga|exr] [-q 0-100] [-v]`
+- Exemplo: `materialize texture.png -o ./out/ -v`
+
+## Após executar
+
+- **Exit code 0:** sucesso; os três arquivos foram gerados (nomes em stdout).
+- **Exit code não-zero:** erro; ler stderr para a mensagem (ex.: arquivo não encontrado, GPU indisponível).
+
+## O que não fazer
+
+- Não use `materialize` para redimensionar imagem, converter formato sem PBR ou edição genérica; use outras ferramentas.
+
+Referência completa: raiz do repositório em **AGENTS.md** e **docs/cli-api.md**.
