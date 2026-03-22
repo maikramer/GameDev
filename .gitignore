@@ -47,3 +47,6 @@ Thumbs.db
 
 # Rascunhos na raiz dos subprojetos
 **/Untitled
+
+# Processos batch locais
+**/batch.pid
