@@ -1,0 +1,30 @@
+# Presets de estilo visual. Escolhe um em game.yaml (style_preset).
+# label: texto para o utilizador; prompt_prefix / negative_suffix: injetados no prompt.
+
+lowpoly:
+  label: "Low poly estilizado (props de jogo)"
+  prompt_prefix: "low poly 3D game asset, clean topology, flat shading, subtle ambient occlusion, single object centered, neutral background"
+  negative_suffix: "blurry, noisy, photorealistic skin, text, watermark, duplicate objects"
+  hint_2d: "orthographic-friendly, clear silhouette, game-ready concept"
+  hint_3d: "watertight mesh, suitable for real-time rendering"
+
+pixel_art:
+  label: "Pixel art / retro 16-bit"
+  prompt_prefix: "pixel art game sprite style, limited palette, crisp pixels, 16-bit era, no anti-aliasing on edges"
+  negative_suffix: "3D render, photorealistic, smooth gradients, blurry, text, watermark"
+  hint_2d: "readable at small size, strong outline"
+  hint_3d: ""
+
+painterly:
+  label: "Pintura digital / hand-painted"
+  prompt_prefix: "hand-painted game art, visible brush strokes, stylized lighting, cohesive color grading, fantasy game aesthetic"
+  negative_suffix: "photo, noisy, text, watermark, UI elements"
+  hint_2d: "illustration focus, mood and color harmony"
+  hint_3d: "stylized materials, art-directed shading"
+
+realistic_stylized:
+  label: "Realista estilizado (PBR leve)"
+  prompt_prefix: "stylized realistic game asset, PBR-friendly materials, clean detail, studio lighting, game engine ready"
+  negative_suffix: "blurry, duplicate, text, watermark, horror gore unless requested"
+  hint_2d: "material read, consistent scale cues"
+  hint_3d: "clean mesh, good silhouette from multiple angles"

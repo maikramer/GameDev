@@ -1,0 +1,242 @@
+"""Testes unitários das funções auxiliares do CLI (seeds, paths, argv text3d)."""
+
+from __future__ import annotations
+
+import zlib
+from pathlib import Path
+
+from gameassets.cli import _paths_for_row, _seed_for_row, _text3d_argv
+from gameassets.manifest import ManifestRow
+from gameassets.profile import GameProfile, Text3DProfile
+
+
+def test_seed_for_row_none_when_no_base() -> None:
+    p = GameProfile(
+        title="T",
+        genre="G",
+        tone="t",
+        style_preset="lowpoly",
+        seed_base=None,
+    )
+    assert _seed_for_row(p, "abc") is None
+
+
+def test_seed_for_row_deterministic() -> None:
+    p = GameProfile(
+        title="T",
+        genre="G",
+        tone="t",
+        style_preset="lowpoly",
+        seed_base=1000,
+    )
+    h = zlib.adler32(b"row1") & 0x7FFFFFFF
+    assert _seed_for_row(p, "row1") == 1000 + h
+    assert _seed_for_row(p, "row2") != _seed_for_row(p, "row1")
+
+
+def test_paths_for_row() -> None:
+    p = GameProfile(
+        title="T",
+        genre="G",
+        tone="t",
+        style_preset="lowpoly",
+        output_dir="out",
+        images_subdir="img",
+        meshes_subdir="mesh",
+        image_ext="png",
+    )
+    row = ManifestRow(id="x1", idea="i", kind=None, generate_3d=False)
+    img, mesh = _paths_for_row(p, row)
+    assert img == Path("out") / "img" / "x1.png"
+    assert mesh == Path("out") / "mesh" / "x1.glb"
+
+
+def test_paths_for_row_flat() -> None:
+    p = GameProfile(
+        title="T",
+        genre="G",
+        tone="t",
+        style_preset="lowpoly",
+        output_dir="out",
+        path_layout="flat",
+        images_subdir="ignored",
+        meshes_subdir="ignored",
+        image_ext="png",
+    )
+    row = ManifestRow(
+        id="Collectibles/core_01", idea="i", kind=None, generate_3d=True
+    )
+    img, mesh = _paths_for_row(p, row)
+    assert img == Path("out") / "Collectibles" / "core_01.png"
+    assert mesh == Path("out") / "Collectibles" / "core_01.glb"
+
+
+def test_paths_for_row_flat_no_subdir() -> None:
+    p = GameProfile(
+        title="T",
+        genre="G",
+        tone="t",
+        style_preset="lowpoly",
+        output_dir="out",
+        path_layout="flat",
+        image_ext="png",
+    )
+    row = ManifestRow(id="solo", idea="i", kind=None, generate_3d=False)
+    img, mesh = _paths_for_row(p, row)
+    assert img == Path("out") / "solo.png"
+    assert mesh == Path("out") / "solo.glb"
+
+
+def test_text3d_argv_minimal() -> None:
+    p = GameProfile(
+        title="T",
+        genre="G",
+        tone="t",
+        style_preset="lowpoly",
+        text3d=None,
+    )
+    argv = _text3d_argv("/bin/text3d", p, Path("/a.png"), Path("/m.glb"))
+    assert argv[:6] == [
+        "/bin/text3d",
+        "generate",
+        "--from-image",
+        "/a.png",
+        "-o",
+        "/m.glb",
+    ]
+
+
+def test_text3d_argv_with_profile_options() -> None:
+    p = GameProfile(
+        title="T",
+        genre="G",
+        tone="t",
+        style_preset="lowpoly",
+        text3d=Text3DProfile(preset="hq", low_vram=True, texture=True),
+    )
+    argv = _text3d_argv("text3d", p, Path("i.png"), Path("o.glb"))
+    assert "--preset" in argv and "hq" in argv
+    assert "--low-vram" in argv
+    assert "--texture" in argv
+
+
+def test_text3d_argv_shape_only_skips_texture() -> None:
+    p = GameProfile(
+        title="T",
+        genre="G",
+        tone="t",
+        style_preset="lowpoly",
+        text3d=Text3DProfile(preset="fast", texture=True, materialize=True),
+    )
+    argv = _text3d_argv(
+        "text3d", p, Path("i.png"), Path("o.glb"), shape_only=True
+    )
+    assert "--texture" not in argv
+    assert "--materialize" not in argv
+
+
+def test_text3d_argv_explicit_hunyuan_skips_preset() -> None:
+    p = GameProfile(
+        title="T",
+        genre="G",
+        tone="t",
+        style_preset="lowpoly",
+        text3d=Text3DProfile(
+            preset="fast",
+            steps=28,
+            texture=False,
+        ),
+    )
+    argv = _text3d_argv("text3d", p, Path("i.png"), Path("o.glb"))
+    assert "--preset" not in argv
+    assert "--steps" in argv and "28" in argv
+
+
+def test_text3d_argv_allow_shared_and_no_gpu_kill() -> None:
+    p = GameProfile(
+        title="T",
+        genre="G",
+        tone="t",
+        style_preset="lowpoly",
+        text3d=Text3DProfile(
+            preset="fast",
+            texture=True,
+            allow_shared_gpu=True,
+            gpu_kill_others=False,
+        ),
+    )
+    argv = _text3d_argv("text3d", p, Path("i.png"), Path("o.glb"))
+    assert "--allow-shared-gpu" in argv
+    assert "--no-gpu-kill-others" in argv
+
+
+def test_text3d_argv_mesh_flags() -> None:
+    p = GameProfile(
+        title="T",
+        genre="G",
+        tone="t",
+        style_preset="lowpoly",
+        text3d=Text3DProfile(
+            preset="balanced",
+            texture=True,
+            no_mesh_repair=True,
+            mesh_smooth=1,
+            mc_level=0.0,
+        ),
+    )
+    argv = _text3d_argv("text3d", p, Path("i.png"), Path("o.glb"))
+    assert "--no-mesh-repair" in argv
+    assert "--mesh-smooth" in argv and "1" in argv
+
+
+def test_text3d_argv_materialize_with_maps_dir() -> None:
+    row = ManifestRow(id="Props/crate_01", idea="x", kind=None, generate_3d=True)
+    p = GameProfile(
+        title="T",
+        genre="G",
+        tone="t",
+        style_preset="lowpoly",
+        output_dir="out",
+        text3d=Text3DProfile(
+            preset="fast",
+            texture=True,
+            materialize=True,
+            materialize_save_maps=True,
+            materialize_maps_subdir="pbr_maps",
+        ),
+    )
+    argv = _text3d_argv("text3d", p, Path("i.png"), Path("o.glb"), row=row)
+    assert "--texture" in argv
+    assert "--materialize" in argv
+    assert "--materialize-output-dir" in argv
+    idx = argv.index("--materialize-output-dir") + 1
+    assert "Props__crate_01" in argv[idx]
+    assert "pbr_maps" in argv[idx]
+
+
+def test_text3d_argv_materialize_maps_dir_override() -> None:
+    row = ManifestRow(id="x", idea="x", kind=None, generate_3d=True)
+    p = GameProfile(
+        title="T",
+        genre="G",
+        tone="t",
+        style_preset="lowpoly",
+        output_dir="out",
+        text3d=Text3DProfile(
+            preset="fast",
+            texture=True,
+            materialize=True,
+            materialize_save_maps=True,
+        ),
+    )
+    override = Path("/tmp/gameassets_maps_staging")
+    argv = _text3d_argv(
+        "text3d",
+        p,
+        Path("i.png"),
+        Path("o.glb"),
+        row=row,
+        materialize_maps_dir=override,
+    )
+    idx = argv.index("--materialize-output-dir") + 1
+    assert argv[idx] == str(override)
