@@ -18,6 +18,7 @@ class TestToolSpec:
         assert "text2d" in TOOLS
         assert "text3d" in TOOLS
         assert "gameassets" in TOOLS
+        assert "texture2d" in TOOLS
         assert "materialize" in TOOLS
 
     def test_materialize_is_rust(self):
@@ -35,6 +36,13 @@ class TestToolSpec:
     def test_gameassets_no_pytorch(self):
         spec = TOOLS["gameassets"]
         assert spec.needs_pytorch is False
+
+    def test_texture2d_no_pytorch(self):
+        spec = TOOLS["texture2d"]
+        assert spec.kind == ToolKind.PYTHON
+        assert spec.python_module == "texture2d"
+        assert spec.needs_pytorch is False
+        assert "texture2d-generate" in spec.extra_aliases
 
     def test_project_root(self, tmp_path: Path):
         spec = ToolSpec(

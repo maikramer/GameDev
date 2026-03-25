@@ -30,6 +30,7 @@ class PythonProjectInstaller(BaseInstaller):
         skip_deps: bool = False,
         skip_models: bool = False,
         force: bool = False,
+        skip_pytorch: bool = False,
     ) -> None:
         super().__init__(
             project_name=project_name,
@@ -42,6 +43,7 @@ class PythonProjectInstaller(BaseInstaller):
         self.skip_deps = skip_deps
         self.skip_models = skip_models
         self.force = force
+        self.skip_pytorch = skip_pytorch
 
         self.venv_dir = self.project_root / ".venv"
         self.venv_python = self.venv_dir / "bin" / "python"
@@ -121,7 +123,8 @@ class PythonProjectInstaller(BaseInstaller):
             check=True,
         )
 
-        self.install_pytorch(pip_cmd)
+        if not self.skip_pytorch:
+            self.install_pytorch(pip_cmd)
 
         if self.requirements_file.is_file():
             self.logger.info(f"Instalando dependências: {self.requirements_file}")

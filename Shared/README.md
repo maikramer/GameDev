@@ -1,6 +1,6 @@
 # gamedev-shared
 
-Biblioteca partilhada do monorepo **GameDev** — código comum entre Text2D, Text3D, GameAssets e Materialize.
+Biblioteca partilhada do monorepo **GameDev** — código comum entre Text2D, Text3D, GameAssets, Texture2D e Materialize.
 
 ## Módulos
 

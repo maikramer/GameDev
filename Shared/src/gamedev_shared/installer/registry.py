@@ -82,6 +82,17 @@ TOOLS: dict[str, ToolSpec] = {
         min_python=(3, 10),
         needs_pytorch=False,
     ),
+    "texture2d": ToolSpec(
+        name="Texture2D",
+        kind=ToolKind.PYTHON,
+        folder="Texture2D",
+        cli_name="texture2d",
+        python_module="texture2d",
+        description="Texturas 2D seamless via HF Inference API (sem GPU local)",
+        min_python=(3, 10),
+        extra_aliases=("texture2d-generate",),
+        needs_pytorch=False,
+    ),
     "materialize": ToolSpec(
         name="Materialize CLI",
         kind=ToolKind.RUST,

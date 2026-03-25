@@ -43,6 +43,7 @@ class _ToolPythonInstaller(PythonProjectInstaller):
             skip_deps=skip_deps,
             skip_models=skip_models,
             force=force,
+            skip_pytorch=not spec.needs_pytorch,
         )
         self.spec = spec
 
