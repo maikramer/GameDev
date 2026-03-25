@@ -1,19 +1,10 @@
-"""Configuração partilhada Rich + rich-click para o CLI Texture2D."""
+"""Configuração Rich + rich-click para o CLI Texture2D (delegate para gamedev_shared)."""
 
 from __future__ import annotations
 
-try:
-    import rich_click.rich_click as _rc
+from gamedev_shared.cli_rich import setup_rich_click
 
-    _rc.USE_RICH_MARKUP = True
-    _rc.GROUP_ARGUMENTS_OPTIONS = True
-    _rc.SHOW_METAVARS_COLUMN = True
-    _rc.HEADER_TEXT = (
-        "[bold cyan]Texture2D[/bold cyan] — texturas 2D seamless · HF Inference API"
-    )
-    _rc.FOOTER_TEXT = (
-        "[dim]Documentação: README · Token: HF_TOKEN ou HUGGINGFACEHUB_API_TOKEN[/dim]"
-    )
-    RICH_CLICK = True
-except ImportError:
-    RICH_CLICK = False
+RICH_CLICK = setup_rich_click(
+    header="[bold cyan]Texture2D[/bold cyan] — texturas 2D seamless · HF Inference API",
+    footer="[dim]Documentação: README · Token: HF_TOKEN ou HUGGINGFACEHUB_API_TOKEN[/dim]",
+)

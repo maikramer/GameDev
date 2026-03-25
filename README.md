@@ -10,6 +10,7 @@ Monorepo com ferramentas de **texto para imagem** e **texto para 3D**, partilhan
 | [**Text2D**](Text2D/) | CLI **text-to-image** com FLUX (quantização SDNQ), orientada a GPU modesta. |
 | [**Text3D**](Text3D/) | Pipeline **text-to-3D**: imagem 2D (via Text2D) → mesh GLB com Hunyuan3D; pintura opcional. |
 | [**GameAssets**](GameAssets/) | **Batch de prompts/assets**: perfil de jogo + estilo + CSV → `text2d` / `text3d` por subprocess. |
+| [**Texture2D**](Texture2D/) | **Texturas 2D seamless** (tileable) via HF Inference API — sem GPU local. |
 | [**Materialize**](Materialize/) | CLI **PBR maps** (Rust/wgpu): gera normal, AO, metallic, smoothness a partir de textura difusa. |
 
 Cada projeto tem o seu próprio `README`, `setup`, requisitos e licença.
@@ -22,6 +23,7 @@ GameDev/
   Text2D/           ← text2d (pip) — depende de Shared
   Text3D/           ← text3d (pip) — depende de Shared + Text2D
   GameAssets/        ← gameassets (pip) — depende de Shared; chama text2d/text3d via subprocess
+  Texture2D/         ← texture2d (pip) — depende de Shared; inferência HF na cloud
   Materialize/       ← materialize-cli (cargo) — instalador Python usa Shared
 ```
 
@@ -42,11 +44,13 @@ O monorepo inclui um instalador unificado que instala qualquer ferramenta automa
 ./install.sh --list                     # Listar ferramentas disponíveis
 ./install.sh materialize                # Instalar Materialize (Rust)
 ./install.sh text2d --use-venv          # Instalar Text2D no venv
+./install.sh texture2d --use-venv       # Instalar Texture2D no venv
 ./install.sh all                        # Instalar tudo
 
 # Windows PowerShell
 .\install.ps1 materialize
 .\install.ps1 text2d --use-venv
+.\install.ps1 texture2d --use-venv
 .\install.ps1 all
 
 # Windows CMD
@@ -84,15 +88,18 @@ text3d --help
 # 4. GameAssets (batch; para GPU instala Text2D/Text3D e PATH ou TEXT2D_BIN/TEXT3D_BIN)
 cd ../GameAssets && chmod +x scripts/setup.sh && ./scripts/setup.sh && source .venv/bin/activate && gameassets --help
 
-# 5. Materialize (Rust — requer cargo)
+# 5. Texture2D (texturas seamless via HF API; sem PyTorch local)
+cd ../Texture2D && chmod +x scripts/setup.sh && ./scripts/setup.sh && source .venv/bin/activate && texture2d --help
+
+# 6. Materialize (Rust — requer cargo)
 cd ../Materialize && ./install.sh
 ```
 
-Instruções completas: [Shared/README.md](Shared/README.md), [Text2D/README.md](Text2D/README.md), [Text3D/README.md](Text3D/README.md) e [GameAssets/README.md](GameAssets/README.md).
+Instruções completas: [Shared/README.md](Shared/README.md), [Text2D/README.md](Text2D/README.md), [Text3D/README.md](Text3D/README.md), [GameAssets/README.md](GameAssets/README.md) e [Texture2D/README.md](Texture2D/README.md).
 
 ## Licenças
 
-- Código deste repositório: ver [Text2D/LICENSE](Text2D/LICENSE) e [Text3D/LICENSE](Text3D/LICENSE) (ambos MIT nos respetivos pacotes).
+- Código deste repositório: ver [Text2D/LICENSE](Text2D/LICENSE), [Text3D/LICENSE](Text3D/LICENSE) e [Texture2D/LICENSE](Texture2D/LICENSE) (MIT nos respetivos pacotes).
 - **Modelos pré-treinados** não são necessariamente MIT; obrigação de cumprimento das licenças dos autores (BFL, Disty0, Tencent Hunyuan, etc.).
 
 ## Contribuir

@@ -15,12 +15,12 @@ Texture2D/
 │       ├── __init__.py           # Versão do pacote
 │       ├── __main__.py           # python -m texture2d
 │       ├── cli.py                # CLI principal (Click + Rich)
-│       ├── cli_rich.py           # Configuração rich-click
+│       ├── cli_rich.py           # rich-click via gamedev_shared
 │       ├── generator.py          # TextureGenerator (core HF Inference)
 │       ├── presets.py            # Presets de materiais
 │       ├── utils.py              # Validação, seeds, helpers
 │       ├── image_processor.py    # save_image, ZIP, metadata JSON
-│       ├── cursor_skill_install.py
+│       ├── cursor_skill_install.py  # gamedev_shared.skill_install
 │       └── cursor_skill/
 │           └── SKILL.md          # Agent Skill Cursor
 ├── tests/

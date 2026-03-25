@@ -52,6 +52,7 @@ log_info "Instalação editable..."
 pip install -e "$PROJECT_ROOT"
 
 log_info "Verificação..."
+python -c "import gamedev_shared; print('gamedev-shared OK')"
 python -c "from huggingface_hub import InferenceClient; print('huggingface_hub:', InferenceClient.__module__)"
 python -c "from PIL import Image; print('Pillow OK')"
 

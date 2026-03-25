@@ -4,6 +4,8 @@ CLI para geração de texturas 2D seamless (tileable) via HF Inference API.
 
 Usa o modelo [Flux-Seamless-Texture-LoRA](https://huggingface.co/gokaygokay/Flux-Seamless-Texture-LoRA) para gerar texturas que repetem sem costuras visíveis — ideal para chão, rochas, paredes, e materiais de game dev.
 
+No monorepo [GameDev](../README.md), o pacote depende de [**gamedev-shared**](../Shared/) (`gamedev_shared`): CLI Rich, instalação de skills Cursor e utilitários alinhados com Text2D/Text3D/GameAssets.
+
 ## Características
 
 - **Sem GPU local** — geração 100% cloud via HF Inference API
@@ -37,13 +39,28 @@ texture2d generate "weathered surface" --preset Stone -o wall.png
 source .venv/bin/activate
 ```
 
-### System-wide
+O `setup.sh` instala `gamedev-shared` a partir de `../Shared` (caminho do monorepo) e o pacote `texture2d` em modo editável.
+
+### Instalador unificado (raiz do monorepo GameDev)
+
+A partir da raiz do repositório:
+
+```bash
+./install.sh texture2d --use-venv
+# Windows: .\install.ps1 texture2d --use-venv
+```
+
+Lista ferramentas: `./install.sh --list`.
+
+### System-wide (script do projeto)
 
 ```bash
 python3 scripts/installer.py --prefix ~/.local
 # ou com venv:
 python3 scripts/installer.py --use-venv
 ```
+
+O instalador não usa PyTorch local — apenas dependências em `config/requirements.txt` e `gamedev-shared`.
 
 ## Comandos
 
