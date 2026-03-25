@@ -9,6 +9,38 @@ Para hardware mais capaz, usa as constantes *HQ* ou flags CLI maiores
 (--octree-resolution, --num-chunks, --steps).
 """
 
+from __future__ import annotations
+
+import math
+import os
+
+# --- Orientação ao gravar mesh (Hunyuan3D → motor Y-up) ---
+# Rotação em torno do eixo X (radianos). O pipeline hy3dgen devolve malha numa convenção
+# onde −90° em X fazia o modelo sair de cabeça para baixo no Godot; +90° alinha com Y+.
+# Sobrescrever: TEXT3D_EXPORT_ROTATION_X_RAD ou TEXT3D_EXPORT_ROTATION_X_DEG, ou
+# ``text3d generate --export-rotation-x-deg``.
+_rotation_x_rad_override: float | None = None
+
+
+def set_export_rotation_x_rad_override(value: float | None) -> None:
+    """Usado pelo CLI ``generate``; None = voltar a env/defeito."""
+    global _rotation_x_rad_override
+    _rotation_x_rad_override = value
+
+
+def get_export_rotation_x_rad() -> float:
+    """Rotação X Hunyuan → espaço de export (Y-up)."""
+    if _rotation_x_rad_override is not None:
+        return float(_rotation_x_rad_override)
+    env = os.environ.get("TEXT3D_EXPORT_ROTATION_X_RAD")
+    if env is not None and str(env).strip() != "":
+        return float(env)
+    env_deg = os.environ.get("TEXT3D_EXPORT_ROTATION_X_DEG")
+    if env_deg is not None and str(env_deg).strip() != "":
+        return float(env_deg) * math.pi / 180.0
+    return math.pi / 2
+
+
 # --- Text2D (imagem intermédia) ---
 # 1024² puxa muita VRAM no FLUX; 768 é um compromisso estável em ~6GB.
 DEFAULT_T2D_WIDTH = 768

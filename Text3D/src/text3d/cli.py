@@ -5,10 +5,12 @@ Text3D - CLI Principal
 Text-to-3D: Text2D (texto → imagem) + Hunyuan3D-2mini (imagem → mesh).
 """
 
+import math
 import os
 import sys
 import time
 from pathlib import Path
+from typing import Literal
 
 from . import cli_rich  # noqa: F401 — configura rich-click antes dos comandos
 
@@ -79,6 +81,7 @@ def cli(ctx, verbose):
         text3d texture mesh.glb -i ref.png -o mesh_tex.glb
         text3d texture mesh.glb -i ref.png -o mesh_pbr.glb --materialize
         text3d doctor
+        text3d repair-ground modelo.glb --y-up-flip-x-180 --no-keep-largest
         text3d generate -v "prompt" --low-vram
         text3d -v generate "prompt"
         text3d info
@@ -252,6 +255,20 @@ def skill_install_cmd(target: Path, force: bool) -> None:
     help="Desliga pós-processo: maior componente conexa + merge de vértices (ilhas/pés soltos).",
 )
 @click.option(
+    "--no-ground-shadow-removal",
+    "no_ground_shadow_removal",
+    is_flag=True,
+    default=False,
+    help="Não remove disco/placa de sombra na base (heurística geométrica; defeito: ligado).",
+)
+@click.option(
+    "--ground-shadow-aggressive",
+    "ground_shadow_aggressive",
+    is_flag=True,
+    default=False,
+    help="Anti-sombra forte (cilindro na base + peel; só para cascas enormes).",
+)
+@click.option(
     "--mesh-smooth",
     default=_defaults.DEFAULT_MESH_SMOOTH,
     show_default=True,
@@ -331,6 +348,13 @@ def skill_install_cmd(target: Path, force: bool) -> None:
     default=True,
     help="Termina outros processos GPU (nvidia-smi) antes de inferir; defeito: ligado.",
 )
+@click.option(
+    "--export-rotation-x-deg",
+    "export_rotation_x_deg",
+    type=float,
+    default=None,
+    help="Rotação X ao gravar mesh (graus). Defeito interno: +90 (Hunyuan→Y-up). Sobrescreve TEXT3D_EXPORT_ROTATION_X_*.",
+)
 @click.pass_context
 def generate(
     ctx,
@@ -354,6 +378,8 @@ def generate(
     preset,
     mc_level,
     no_mesh_repair,
+    no_ground_shadow_removal,
+    ground_shadow_aggressive,
     mesh_smooth,
     texture,
     paint_repo,
@@ -367,6 +393,7 @@ def generate(
     allow_shared_gpu,
     gpu_kill_others,
     model_subfolder,
+    export_rotation_x_deg,
 ):
     """Gera 3D: PROMPT (Text2D → Hunyuan) ou --from-image (só Hunyuan)."""
     verbose = bool(ctx.obj.get("VERBOSE")) or generate_verbose
@@ -426,6 +453,10 @@ def generate(
     if mc_level != 0.0:
         info_table.add_row("[bold]mc_level[/bold]", str(mc_level))
     rep = "desligado" if no_mesh_repair else f"maior componente + merge"
+    if not no_mesh_repair and not no_ground_shadow_removal:
+        rep += ", anti-sombra base"
+        if ground_shadow_aggressive:
+            rep += " (agressivo)"
     if mesh_smooth > 0 and not no_mesh_repair:
         rep += f", smooth={mesh_smooth}"
     info_table.add_row("[bold]Pós-mesh[/bold]", rep)
@@ -447,144 +478,154 @@ def generate(
     console.print(Panel(info_table, title="[bold green]Configuração", border_style="green"))
 
     try:
-        with console.status("[bold yellow]A preparar gerador...", spinner="dots"):
-            generator = HunyuanTextTo3DGenerator(
-                device="cpu" if cpu else None,
-                low_vram_mode=low_vram,
-                verbose=verbose,
-                hunyuan_subfolder=model_subfolder,
+        if export_rotation_x_deg is not None:
+            _defaults.set_export_rotation_x_rad_override(
+                math.radians(float(export_rotation_x_deg))
             )
-
-        if output is None:
-            ensure_dirs()
-            timestamp = int(time.time())
-            if from_image:
-                stem = Path(from_image).stem[:30]
-                safe = "".join(c if c.isalnum() else "_" for c in stem)
-            else:
-                safe = "".join(c if c.isalnum() else "_" for c in prompt[:30])
-            output = DEFAULT_MESH_DIR / f"{safe}_{timestamp}.{output_format}"
-        else:
-            output = Path(output)
-            if texture and output.suffix.lower() in (".ply", ".obj"):
-                output = output.with_suffix(".glb")
-
-        ref_for_paint = None
-        start_time = time.time()
-
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=console,
-        ) as progress:
-            if from_image:
-                task = progress.add_task("[cyan]Hunyuan3D (imagem → mesh)...", total=None)
-                result = generator.generate_from_image(
-                    from_image,
-                    num_inference_steps=steps,
-                    guidance_scale=guidance,
-                    octree_resolution=octree_resolution,
-                    num_chunks=num_chunks,
-                    hy_seed=seed,
-                    mc_level=mc_level,
-                )
-                if texture:
-                    ref_for_paint = Path(from_image)
-            else:
-                task = progress.add_task("[cyan]Text2D → Hunyuan3D...", total=None)
-                if texture:
-                    result, ref_img = generator.generate(
-                        prompt=prompt,
-                        t2d_width=image_width,
-                        t2d_height=image_height,
-                        t2d_steps=t2d_steps,
-                        t2d_guidance=t2d_guidance,
-                        text2d_model_id=text2d_model_id,
-                        t2d_seed=seed,
-                        num_inference_steps=steps,
-                        guidance_scale=guidance,
-                        octree_resolution=octree_resolution,
-                        num_chunks=num_chunks,
-                        hy_seed=seed,
-                        mc_level=mc_level,
-                        t2d_full_gpu=t2d_full_gpu,
-                        return_reference_image=True,
-                    )
-                    ref_for_paint = ref_img
-                else:
-                    result = generator.generate(
-                        prompt=prompt,
-                        t2d_width=image_width,
-                        t2d_height=image_height,
-                        t2d_steps=t2d_steps,
-                        t2d_guidance=t2d_guidance,
-                        text2d_model_id=text2d_model_id,
-                        t2d_seed=seed,
-                        num_inference_steps=steps,
-                        guidance_scale=guidance,
-                        octree_resolution=octree_resolution,
-                        num_chunks=num_chunks,
-                        hy_seed=seed,
-                        mc_level=mc_level,
-                        t2d_full_gpu=t2d_full_gpu,
-                    )
-            progress.update(task, description="[green]Concluído")
-
-        if not no_mesh_repair:
-            from .utils.mesh_repair import repair_mesh
-
-            result = repair_mesh(
-                result,
-                keep_largest=True,
-                merge_vertices=True,
-                smooth_iterations=max(0, mesh_smooth),
-            )
-
-        if texture:
-            if ref_for_paint is None:
-                raise click.UsageError("Estado interno: referência para Paint em falta.")
-            from .painter import apply_hunyuan_paint
-
-            generator.unload_hunyuan()
-            clear_cuda_memory()
-            with console.status("[bold yellow]Hunyuan3D-Paint (textura)...", spinner="dots"):
-                result = apply_hunyuan_paint(
-                    result,
-                    ref_for_paint,
-                    model_repo=paint_repo,
-                    subfolder=paint_subfolder,
-                    paint_cpu_offload=not paint_full_gpu,
+        try:
+            with console.status("[bold yellow]A preparar gerador...", spinner="dots"):
+                generator = HunyuanTextTo3DGenerator(
+                    device="cpu" if cpu else None,
+                    low_vram_mode=low_vram,
                     verbose=verbose,
+                    hunyuan_subfolder=model_subfolder,
                 )
-            if materialize:
-                from .materialize_pbr import apply_materialize_pbr
 
-                with console.status("[bold yellow]Materialize (mapas PBR)...", spinner="dots"):
-                    result = apply_materialize_pbr(
+            if output is None:
+                ensure_dirs()
+                timestamp = int(time.time())
+                if from_image:
+                    stem = Path(from_image).stem[:30]
+                    safe = "".join(c if c.isalnum() else "_" for c in stem)
+                else:
+                    safe = "".join(c if c.isalnum() else "_" for c in prompt[:30])
+                output = DEFAULT_MESH_DIR / f"{safe}_{timestamp}.{output_format}"
+            else:
+                output = Path(output)
+                if texture and output.suffix.lower() in (".ply", ".obj"):
+                    output = output.with_suffix(".glb")
+
+            ref_for_paint = None
+            start_time = time.time()
+
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                console=console,
+            ) as progress:
+                if from_image:
+                    task = progress.add_task("[cyan]Hunyuan3D (imagem → mesh)...", total=None)
+                    result = generator.generate_from_image(
+                        from_image,
+                        num_inference_steps=steps,
+                        guidance_scale=guidance,
+                        octree_resolution=octree_resolution,
+                        num_chunks=num_chunks,
+                        hy_seed=seed,
+                        mc_level=mc_level,
+                    )
+                    if texture:
+                        ref_for_paint = Path(from_image)
+                else:
+                    task = progress.add_task("[cyan]Text2D → Hunyuan3D...", total=None)
+                    if texture:
+                        result, ref_img = generator.generate(
+                            prompt=prompt,
+                            t2d_width=image_width,
+                            t2d_height=image_height,
+                            t2d_steps=t2d_steps,
+                            t2d_guidance=t2d_guidance,
+                            text2d_model_id=text2d_model_id,
+                            t2d_seed=seed,
+                            num_inference_steps=steps,
+                            guidance_scale=guidance,
+                            octree_resolution=octree_resolution,
+                            num_chunks=num_chunks,
+                            hy_seed=seed,
+                            mc_level=mc_level,
+                            t2d_full_gpu=t2d_full_gpu,
+                            return_reference_image=True,
+                        )
+                        ref_for_paint = ref_img
+                    else:
+                        result = generator.generate(
+                            prompt=prompt,
+                            t2d_width=image_width,
+                            t2d_height=image_height,
+                            t2d_steps=t2d_steps,
+                            t2d_guidance=t2d_guidance,
+                            text2d_model_id=text2d_model_id,
+                            t2d_seed=seed,
+                            num_inference_steps=steps,
+                            guidance_scale=guidance,
+                            octree_resolution=octree_resolution,
+                            num_chunks=num_chunks,
+                            hy_seed=seed,
+                            mc_level=mc_level,
+                            t2d_full_gpu=t2d_full_gpu,
+                        )
+                progress.update(task, description="[green]Concluído")
+
+            if not no_mesh_repair:
+                from .utils.mesh_repair import repair_mesh
+
+                result = repair_mesh(
+                    result,
+                    keep_largest=True,
+                    merge_vertices=True,
+                    remove_ground_shadow=not no_ground_shadow_removal,
+                    ground_artifact_mesh_space="hunyuan",
+                    ground_shadow_aggressive=ground_shadow_aggressive,
+                    smooth_iterations=max(0, mesh_smooth),
+                )
+
+            if texture:
+                if ref_for_paint is None:
+                    raise click.UsageError("Estado interno: referência para Paint em falta.")
+                from .painter import apply_hunyuan_paint
+
+                generator.unload_hunyuan()
+                clear_cuda_memory()
+                with console.status("[bold yellow]Hunyuan3D-Paint (textura)...", spinner="dots"):
+                    result = apply_hunyuan_paint(
                         result,
-                        materialize_bin=materialize_bin,
-                        save_sidecar_maps_dir=materialize_output_dir,
-                        roughness_from_one_minus_smoothness=not materialize_no_invert,
+                        ref_for_paint,
+                        model_repo=paint_repo,
+                        subfolder=paint_subfolder,
+                        paint_cpu_offload=not paint_full_gpu,
                         verbose=verbose,
                     )
+                if materialize:
+                    from .materialize_pbr import apply_materialize_pbr
 
-        from .utils.export import save_mesh
+                    with console.status("[bold yellow]Materialize (mapas PBR)...", spinner="dots"):
+                        result = apply_materialize_pbr(
+                            result,
+                            materialize_bin=materialize_bin,
+                            save_sidecar_maps_dir=materialize_output_dir,
+                            roughness_from_one_minus_smoothness=not materialize_no_invert,
+                            verbose=verbose,
+                        )
 
-        mesh_path = save_mesh(result, output, format=output_format)
-        mp = Path(mesh_path).resolve()
-        try:
-            sz = format_bytes(mp.stat().st_size)
-        except OSError:
-            sz = "?"
-        console.print(Rule("[bold green]Resultado", style="green"))
-        console.print(
-            f"[bold green]✓[/bold green] Mesh: [cyan]{mp}[/cyan] [dim]({sz})[/dim]"
-        )
+            from .utils.export import save_mesh
 
-        elapsed = time.time() - start_time
-        console.print(f"\n[dim]Tempo total: {elapsed:.1f}s[/dim]")
-        console.print(f"[bold green]Sucesso.[/bold green]")
+            mesh_path = save_mesh(result, output, format=output_format)
+            mp = Path(mesh_path).resolve()
+            try:
+                sz = format_bytes(mp.stat().st_size)
+            except OSError:
+                sz = "?"
+            console.print(Rule("[bold green]Resultado", style="green"))
+            console.print(
+                f"[bold green]✓[/bold green] Mesh: [cyan]{mp}[/cyan] [dim]({sz})[/dim]"
+            )
 
+            elapsed = time.time() - start_time
+            console.print(f"\n[dim]Tempo total: {elapsed:.1f}s[/dim]")
+            console.print(f"[bold green]Sucesso.[/bold green]")
+
+        finally:
+            _defaults.set_export_rotation_x_rad_override(None)
     except Exception as e:
         console.print(f"\n[bold red]✗ Erro:[/bold red] {str(e)}")
         if verbose:
@@ -980,6 +1021,106 @@ def materialize_pbr_cmd(
         console.print(f"\n[bold red]✗ Erro:[/bold red] {str(e)}")
         if verbose:
             console.print_exception()
+        sys.exit(1)
+
+
+@cli.command("repair-ground")
+@click.argument("input_glb", type=click.Path(exists=True, path_type=Path))
+@click.option(
+    "--output",
+    "-o",
+    type=click.Path(),
+    default=None,
+    help="Ficheiro GLB de saída (defeito: sobrescreve o de entrada).",
+)
+@click.option(
+    "--mesh-space",
+    type=click.Choice(["hunyuan", "y_up"]),
+    default="y_up",
+    show_default=True,
+    help="hunyuan: malha no espaço Hunyuan3D; y_up: já orientada como no Godot.",
+)
+@click.option(
+    "--y-up-flip-x-180",
+    "y_up_flip_x_180",
+    is_flag=True,
+    help="Rota 180° em X antes do peel (modelo gravado de cabeça para baixo).",
+)
+@click.option(
+    "--no-keep-largest",
+    is_flag=True,
+    help="Não descartar ilhas (malhas com muitas componentes, ex.: Paint).",
+)
+@click.option(
+    "--no-small-islands",
+    "no_small_islands",
+    is_flag=True,
+    help="Não remover fragmentos flutuantes (ilhas minúsculas).",
+)
+@click.option(
+    "--fill-holes-max-edges",
+    "fill_holes_max_edges",
+    default=16,
+    show_default=True,
+    type=int,
+    help="Fechar buracos com contorno até N arestas (0 = desligar).",
+)
+@click.option(
+    "--ground-shadow-aggressive",
+    "ground_shadow_aggressive",
+    is_flag=True,
+    default=False,
+    help="Anti-sombra forte (cilindro + peel; cascas grandes na base).",
+)
+def repair_ground_cmd(
+    input_glb: Path,
+    output,
+    mesh_space: Literal["hunyuan", "y_up"],
+    y_up_flip_x_180: bool,
+    no_keep_largest: bool,
+    no_small_islands: bool,
+    fill_holes_max_edges: int,
+    ground_shadow_aggressive: bool,
+):
+    """Pós-processa um GLB: anti-sombra na base (e opcionalmente corrige orientação)."""
+    import trimesh as tm
+
+    from .utils.mesh_repair import repair_mesh
+
+    flip = math.pi if y_up_flip_x_180 else 0.0
+    try:
+        loaded = tm.load(str(input_glb))
+        if isinstance(loaded, tm.Scene):
+            mesh = loaded.to_geometry()
+        elif isinstance(loaded, tm.Trimesh):
+            mesh = loaded
+        else:
+            raise click.ClickException(f"Tipo de mesh não suportado: {type(loaded)}")
+
+        out = repair_mesh(
+            mesh,
+            keep_largest=not no_keep_largest,
+            merge_vertices=True,
+            remove_ground_shadow=True,
+            ground_artifact_mesh_space=mesh_space,
+            ground_artifact_y_up_flip_x_rad=flip,
+            ground_shadow_aggressive=ground_shadow_aggressive,
+            remove_small_island_fragments=not no_small_islands,
+            fill_small_holes_max_edges=max(0, int(fill_holes_max_edges)),
+            smooth_iterations=0,
+        )
+
+        out_path = Path(output) if output else input_glb
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out.export(str(out_path), file_type="glb")
+        try:
+            sz = format_bytes(out_path.stat().st_size)
+        except OSError:
+            sz = "?"
+        console.print(Rule("[bold green]repair-ground", style="green"))
+        console.print(f"[bold green]✓[/bold green] [cyan]{out_path.resolve()}[/cyan] [dim]({sz})[/dim]")
+    except Exception as e:
+        console.print(f"[bold red]✗[/bold red] {e}")
         sys.exit(1)
 
 

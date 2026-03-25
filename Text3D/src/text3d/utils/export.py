@@ -11,6 +11,8 @@ import trimesh
 from PIL import Image
 from diffusers.utils import export_to_ply, export_to_obj, export_to_gif
 
+from ..defaults import get_export_rotation_x_rad
+
 
 def save_mesh(
     mesh_input: Union[np.ndarray, trimesh.Trimesh],
@@ -164,23 +166,12 @@ def _apply_rotation(ply_path: Path):
 
 def _apply_rotation_trimesh(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
     """
-    Aplica rotação de -90 graus no eixo X para orientar corretamente.
-    
-    Args:
-        mesh: Mesh trimesh
-        
-    Returns:
-        Mesh rotacionada
+    Rotação X Hunyuan3D → Y-up (Godot/Blender). Ângulo: ``get_export_rotation_x_rad()`` (+90° por defeito).
     """
-    import numpy as np
-    
-    # Rotação de -90 graus no eixo X
-    angle = -np.pi / 2
+    angle = float(get_export_rotation_x_rad())
     axis = [1, 0, 0]
-    
     rotation_matrix = trimesh.transformations.rotation_matrix(angle, axis)
     mesh.apply_transform(rotation_matrix)
-    
     return mesh
 
 
