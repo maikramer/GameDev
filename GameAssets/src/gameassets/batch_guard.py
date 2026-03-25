@@ -11,16 +11,14 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import click
-
-# Fragmentação CUDA: reduz falhas “Tried to allocate X MiB” quando a VRAM está quase cheia.
-_DEFAULT_PYTORCH_CUDA_ALLOC = "expandable_segments:True"
+from gamedev_shared.env import PYTORCH_CUDA_ALLOC_CONF
 
 
 def subprocess_gpu_env() -> dict[str, str]:
     """Variáveis extra para subprocessos text2d/text3d (não sobrescreve o ambiente do utilizador)."""
     extra: dict[str, str] = {}
-    if not os.environ.get("PYTORCH_CUDA_ALLOC_CONF", "").strip():
-        extra["PYTORCH_CUDA_ALLOC_CONF"] = _DEFAULT_PYTORCH_CUDA_ALLOC
+    if not os.environ.get(PYTORCH_CUDA_ALLOC_CONF, "").strip():
+        extra[PYTORCH_CUDA_ALLOC_CONF] = "expandable_segments:True"
     return extra
 
 

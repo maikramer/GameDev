@@ -13,9 +13,10 @@ here = Path(__file__).resolve().parent
 with open(here / "README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
-# Monorepo: Text2D ao lado de Text3D (GameDev/Text2D). Caminho absoluto evita
-# falha quando `pip install -e` corre com cwd fora de Text3D (../Text2D virava GitClones/Text2D).
+# Monorepo: Text2D e Shared ao lado de Text3D (GameDev/Text2D, GameDev/Shared).
+# Caminho absoluto evita falha quando `pip install -e` corre com cwd fora de Text3D.
 text2d_local = (here.parent / "Text2D").resolve()
+shared_local = (here.parent / "Shared").resolve()
 requirements = []
 with open(here / "config" / "requirements.txt", "r", encoding="utf-8") as fh:
     for line in fh:
@@ -24,6 +25,8 @@ with open(here / "config" / "requirements.txt", "r", encoding="utf-8") as fh:
             continue
         if line.startswith("text2d @ file:"):
             requirements.append(f"text2d @ {text2d_local.as_uri()}")
+        elif line.startswith("gamedev-shared @ file:"):
+            requirements.append(f"gamedev-shared @ {shared_local.as_uri()}")
         else:
             requirements.append(line)
 

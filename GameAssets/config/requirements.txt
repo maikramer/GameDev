@@ -2,3 +2,6 @@ click>=8.0
 pyyaml>=6.0
 rich>=13.0
 rich-click>=1.8.0
+
+# Monorepo: biblioteca partilhada. Em setup.py vira file:// absoluto.
+gamedev-shared @ file:../../Shared

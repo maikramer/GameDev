@@ -1,20 +1,26 @@
 """Text2D - Setup Script — Text-to-2D com FLUX.2 Klein (SDNQ)."""
 
 import os
+from pathlib import Path
 
 from setuptools import find_packages, setup
 
-here = os.path.abspath(os.path.dirname(__file__))
+here = Path(__file__).resolve().parent
 
-with open(os.path.join(here, "README.md"), "r", encoding="utf-8") as fh:
+with open(here / "README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
-with open(os.path.join(here, "config", "requirements.txt"), "r", encoding="utf-8") as fh:
-    requirements = [
-        line.strip()
-        for line in fh
-        if line.strip() and not line.startswith("#")
-    ]
+shared_local = (here.parent / "Shared").resolve()
+requirements = []
+with open(here / "config" / "requirements.txt", "r", encoding="utf-8") as fh:
+    for line in fh:
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("gamedev-shared @ file:"):
+            requirements.append(f"gamedev-shared @ {shared_local.as_uri()}")
+        else:
+            requirements.append(line)
 
 setup(
     name="text2d",

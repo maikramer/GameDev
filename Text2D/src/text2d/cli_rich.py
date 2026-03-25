@@ -1,18 +1,10 @@
-"""Configuração partilhada Rich + rich-click para o CLI Text2D."""
+"""Configuração Rich + rich-click para o CLI Text2D (delegate para gamedev_shared)."""
 
 from __future__ import annotations
 
-try:
-    # rich_click ≥2: config vive no módulo (não há símbolo `rich_click` exportado).
-    import rich_click.rich_click as _rc
+from gamedev_shared.cli_rich import setup_rich_click
 
-    _rc.USE_RICH_MARKUP = True
-    _rc.GROUP_ARGUMENTS_OPTIONS = True
-    _rc.SHOW_METAVARS_COLUMN = True
-    _rc.HEADER_TEXT = "[bold cyan]Text2D[/bold cyan] — FLUX.2 Klein · texto → imagem"
-    _rc.FOOTER_TEXT = (
-        "[dim]Documentação: README / docs · Cache HF: ~/.cache/huggingface[/dim]"
-    )
-    RICH_CLICK = True
-except ImportError:
-    RICH_CLICK = False
+RICH_CLICK = setup_rich_click(
+    header="[bold cyan]Text2D[/bold cyan] — FLUX.2 Klein · texto → imagem",
+    footer="[dim]Documentação: README / docs · Cache HF: ~/.cache/huggingface[/dim]",
+)

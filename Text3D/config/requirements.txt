@@ -32,5 +32,8 @@ hy3dgen @ git+https://github.com/Tencent-Hunyuan/Hunyuan3D-2.git
 # diffusers export_to_gif ainda usado em save_gif
 # (Hunyuan devolve trimesh; GIF permanece utilitário opcional)
 
+# Monorepo: biblioteca partilhada. Em setup.py vira file:// absoluto.
+gamedev-shared @ file:../../Shared
+
 pytest>=7.4.0
 black>=23.0.0
