@@ -90,7 +90,11 @@ Nota: Texture2D não usa PyTorch local — geração via HF Inference API (cloud
         default=os.environ.get("INSTALL_PREFIX", str(Path.home() / ".local")),
         help="Prefixo de instalação (default: ~/.local)",
     )
-    parser.add_argument("--use-venv", action="store_true", help="Usar .venv na raiz do projeto")
+    parser.add_argument(
+        "--use-venv",
+        action="store_true",
+        help="Legado (no-op). O instalador cria .venv no projecto se necessário.",
+    )
     parser.add_argument("--skip-deps", action="store_true", help="Avisos mínimos de sistema")
     parser.add_argument("--skip-models", action="store_true", help="Não mostrar dicas extra de ambiente")
     parser.add_argument("--force", action="store_true", help="Reinstalar mesmo se já existir")
@@ -101,12 +105,6 @@ Nota: Texture2D não usa PyTorch local — geração via HF Inference API (cloud
     )
 
     args = parser.parse_args()
-
-    venv_dir = _project_root / ".venv"
-    if venv_dir.is_dir() and not args.use_venv:
-        from gamedev_shared.logging import Logger
-
-        Logger().warn(f"Venv em {venv_dir} — use --use-venv para instalação rápida")
 
     installer = Texture2DInstaller(args)
     sys.exit(0 if installer.run() else 1)

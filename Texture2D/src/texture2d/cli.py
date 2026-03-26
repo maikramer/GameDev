@@ -25,7 +25,6 @@ from rich.table import Table
 from .generator import TextureGenerator, default_model_id
 from .presets import TEXTURE_PRESETS, list_presets
 from .utils import format_bytes
-from .cursor_skill_install import install_agent_skill
 
 console = Console()
 
@@ -63,6 +62,8 @@ def skill_group() -> None:
 @click.option("--force", is_flag=True, help="Sobrescrever SKILL.md existente")
 def skill_install_cmd(target: Path, force: bool) -> None:
     """Copia SKILL.md para .cursor/skills/texture2d/."""
+    from .cursor_skill_install import install_agent_skill
+
     try:
         dest = install_agent_skill(target, force=force)
     except FileNotFoundError as e:

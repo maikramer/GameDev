@@ -190,7 +190,11 @@ Variáveis:
         default=os.environ.get("INSTALL_PREFIX", str(Path.home() / ".local")),
         help="Diretório de instalação (padrão: ~/.local)",
     )
-    parser.add_argument("--use-venv", action="store_true", help="Usar venv existente")
+    parser.add_argument(
+        "--use-venv",
+        action="store_true",
+        help="Legado (no-op). O instalador cria .venv no projecto se necessário.",
+    )
     parser.add_argument("--skip-deps", action="store_true", help="Pular verificação de deps do sistema")
     parser.add_argument("--skip-models", action="store_true", help="Pular configuração de modelos")
     parser.add_argument("--force", action="store_true", help="Forçar reinstalação")
@@ -206,11 +210,6 @@ Variáveis:
     )
 
     args = parser.parse_args()
-
-    venv_dir = _project_root / ".venv"
-    if venv_dir.is_dir() and not args.use_venv:
-        from gamedev_shared.logging import Logger
-        Logger().warn(f"Venv em {venv_dir} — use --use-venv para instalação mais rápida")
 
     installer = Text3DInstaller(args)
     sys.exit(0 if installer.run() else 1)

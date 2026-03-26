@@ -10,14 +10,15 @@
 #   ./install.sh all              # Instalar tudo
 #   ./install.sh --list           # Listar ferramentas
 #   ./install.sh materialize      # Instalar Materialize (Rust)
-#   ./install.sh text2d --use-venv
+#   ./install.sh text2d              # com .venv no projecto, instala no venv do projecto
 #
 # =============================================================================
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SHARED_SRC="$SCRIPT_DIR/Shared/src"
+SHARED_ROOT="$SCRIPT_DIR/Shared"
+SHARED_SRC="$SHARED_ROOT/src"
 PYTHON_CMD="${PYTHON_CMD:-python3}"
 
 RED='\033[0;31m'
@@ -25,16 +26,48 @@ GREEN='\033[0;32m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-if ! command -v "$PYTHON_CMD" &> /dev/null; then
-    echo -e "${RED}✗ Python 3 não encontrado.${NC}"
-    echo "Instale Python 3.10+:"
-    echo "  Ubuntu/Debian: sudo apt install python3"
-    echo "  macOS: brew install python3"
-    exit 1
-fi
+# -----------------------------------------------------------------------------
+# 1) Preparar ambiente do instalador (antes de carregar gamedev_shared)
+# -----------------------------------------------------------------------------
+prepare_installer_environment() {
+    echo -e "${CYAN}Preparando ambiente do instalador...${NC}"
+
+    if [ ! -d "$SHARED_SRC/gamedev_shared" ]; then
+        echo -e "${RED}✗ Monorepo incompleto: não existe $SHARED_SRC/gamedev_shared${NC}"
+        echo "  Clona o repositório completo (pasta Shared/ é obrigatória)."
+        exit 1
+    fi
+
+    if ! command -v "$PYTHON_CMD" &> /dev/null; then
+        echo -e "${RED}✗ Python 3 não encontrado.${NC}"
+        echo "Instale Python 3.10+:"
+        echo "  Ubuntu/Debian: sudo apt install python3"
+        echo "  macOS: brew install python3"
+        exit 1
+    fi
+
+    if ! "$PYTHON_CMD" -c "import sys; assert sys.version_info >= (3, 10)" 2>/dev/null; then
+        echo -e "${RED}✗ Python 3.10 ou superior é necessário.${NC}"
+        "$PYTHON_CMD" -V 2>/dev/null || true
+        exit 1
+    fi
+
+    export PYTHONPATH="$SHARED_SRC:${PYTHONPATH:-}"
+
+    # O instalador unificado usa Rich (Shared/config/requirements.txt).
+    if ! "$PYTHON_CMD" -c "import rich" 2>/dev/null; then
+        echo -e "${CYAN}  → pip: dependências do instalador (Rich)...${NC}"
+        if ! "$PYTHON_CMD" -m pip install -q -r "$SHARED_ROOT/config/requirements.txt"; then
+            echo -e "${RED}✗ Falha ao instalar dependências do instalador.${NC}"
+            echo "  Tenta manualmente: $PYTHON_CMD -m pip install -r Shared/config/requirements.txt"
+            exit 1
+        fi
+    fi
+}
+
+prepare_installer_environment
 
 echo -e "${CYAN}GameDev Monorepo — Instalador Unificado${NC}"
 echo "========================================"
 
-PYTHONPATH="$SHARED_SRC:${PYTHONPATH:-}" \
-    exec "$PYTHON_CMD" -m gamedev_shared.installer.unified "$@"
+exec "$PYTHON_CMD" -m gamedev_shared.installer.unified "$@"

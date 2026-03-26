@@ -23,8 +23,8 @@ tqdm>=4.66.0
 pydantic>=2.0.0
 
 # Monorepo: Text2D (FLUX.2 Klein / SDNQ). Em `setup.py` vira file:// absoluto.
-# Instalação manual a partir deste ficheiro: usar `../../Text2D` (relativo a config/).
-text2d @ file:../../Text2D
+# CWD do pip = raiz do projecto Text3D/ — irmão Text2D em ../Text2D.
+text2d @ file:../Text2D
 
 # Hunyuan3D (hy3dgen) — licença Tencent Hunyuan Community
 hy3dgen @ git+https://github.com/Tencent-Hunyuan/Hunyuan3D-2.git
@@ -32,8 +32,7 @@ hy3dgen @ git+https://github.com/Tencent-Hunyuan/Hunyuan3D-2.git
 # diffusers export_to_gif ainda usado em save_gif
 # (Hunyuan devolve trimesh; GIF permanece utilitário opcional)
 
-# Monorepo: biblioteca partilhada. Em setup.py vira file:// absoluto.
-gamedev-shared @ file:../../Shared
+# gamedev-shared: não repetir aqui — vem como dependência do text2d (evita conflito pip file://).
 
 pytest>=7.4.0
 black>=23.0.0

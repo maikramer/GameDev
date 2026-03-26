@@ -1,6 +1,6 @@
 # GameDev
 
-Monorepo com ferramentas de **texto para imagem** e **texto para 3D**, partilhando a mesma base de scripts e documentação.
+Monorepo com ferramentas de **texto para imagem**, **texto para 3D** e **texto para áudio**, partilhando a mesma base de scripts e documentação.
 
 ## Projetos
 
@@ -9,8 +9,9 @@ Monorepo com ferramentas de **texto para imagem** e **texto para 3D**, partilhan
 | [**Shared**](Shared/) | Biblioteca partilhada (`gamedev-shared`): logging, GPU, subprocess, instaladores, CLI. |
 | [**Text2D**](Text2D/) | CLI **text-to-image** com FLUX (quantização SDNQ), orientada a GPU modesta. |
 | [**Text3D**](Text3D/) | Pipeline **text-to-3D**: imagem 2D (via Text2D) → mesh GLB com Hunyuan3D; pintura opcional. |
-| [**GameAssets**](GameAssets/) | **Batch de prompts/assets**: perfil de jogo + estilo + CSV → `text2d` / `text3d` por subprocess. |
+| [**GameAssets**](GameAssets/) | **Batch de prompts/assets**: perfil + CSV → `text2d` ou `texture2d` (por perfil ou por linha) + opcional `text3d` / Materialize. |
 | [**Texture2D**](Texture2D/) | **Texturas 2D seamless** (tileable) via HF Inference API — sem GPU local. |
+| [**Text2Sound**](Text2Sound/) | CLI **text-to-audio** com Stable Audio Open 1.0: áudio estéreo 44.1 kHz, presets para game dev. |
 | [**Materialize**](Materialize/) | CLI **PBR maps** (Rust/wgpu): gera normal, AO, metallic, smoothness a partir de textura difusa. |
 
 Cada projeto tem o seu próprio `README`, `setup`, requisitos e licença.
@@ -22,8 +23,9 @@ GameDev/
   Shared/           ← gamedev-shared (pip): logging, GPU, subprocess, env, instaladores
   Text2D/           ← text2d (pip) — depende de Shared
   Text3D/           ← text3d (pip) — depende de Shared + Text2D
-  GameAssets/        ← gameassets (pip) — depende de Shared; chama text2d/text3d via subprocess
+  GameAssets/        ← gameassets (pip) — depende de Shared; chama text2d/texture2d/text3d via subprocess
   Texture2D/         ← texture2d (pip) — depende de Shared; inferência HF na cloud
+  Text2Sound/        ← text2sound (pip) — depende de Shared; Stable Audio Open 1.0
   Materialize/       ← materialize-cli (cargo) — instalador Python usa Shared
 ```
 
@@ -43,14 +45,16 @@ O monorepo inclui um instalador unificado que instala qualquer ferramenta automa
 # Linux/macOS
 ./install.sh --list                     # Listar ferramentas disponíveis
 ./install.sh materialize                # Instalar Materialize (Rust)
-./install.sh text2d --use-venv          # Instalar Text2D no venv
-./install.sh texture2d --use-venv       # Instalar Texture2D no venv
+./install.sh text2d                     # Cria Text2D/.venv se necessário; instala no venv do projecto
+./install.sh texture2d                  # Idem (Texture2D/.venv)
+./install.sh text2sound                 # Text2Sound (requer CUDA; instala PyTorch)
 ./install.sh all                        # Instalar tudo
 
 # Windows PowerShell
 .\install.ps1 materialize
-.\install.ps1 text2d --use-venv
-.\install.ps1 texture2d --use-venv
+.\install.ps1 text2d
+.\install.ps1 texture2d
+.\install.ps1 text2sound
 .\install.ps1 all
 
 # Windows CMD
@@ -62,7 +66,7 @@ Opções do instalador unificado:
 | Opção | Descrição |
 |-------|-----------|
 | `--action {install,uninstall,reinstall}` | Acção a executar (default: install) |
-| `--use-venv` | Usar .venv existente (projectos Python) |
+| `--use-venv` | Legado (opcional); o instalador **cria** sempre `projecto/.venv` se não existir e instala aí |
 | `--skip-deps` | Não instalar dependências de sistema |
 | `--skip-models` | Não configurar modelos/pesos |
 | `--force` | Forçar reinstalação |
@@ -85,17 +89,20 @@ python -m venv .venv && source .venv/bin/activate
 pip install -r config/requirements.txt && pip install -e .
 text3d --help
 
-# 4. GameAssets (batch; para GPU instala Text2D/Text3D e PATH ou TEXT2D_BIN/TEXT3D_BIN)
+# 4. GameAssets (batch; Text2D/Text3D na PATH ou TEXT2D_BIN/TEXT3D_BIN; Texture2D opcional TEXTURE2D_BIN)
 cd ../GameAssets && chmod +x scripts/setup.sh && ./scripts/setup.sh && source .venv/bin/activate && gameassets --help
 
 # 5. Texture2D (texturas seamless via HF API; sem PyTorch local)
 cd ../Texture2D && chmod +x scripts/setup.sh && ./scripts/setup.sh && source .venv/bin/activate && texture2d --help
 
-# 6. Materialize (Rust — requer cargo)
+# 6. Text2Sound (text-to-audio; Stable Audio Open 1.0; requer CUDA)
+cd ../Text2Sound && chmod +x scripts/setup.sh && ./scripts/setup.sh && source .venv/bin/activate && text2sound --help
+
+# 7. Materialize (Rust — requer cargo)
 cd ../Materialize && ./install.sh
 ```
 
-Instruções completas: [Shared/README.md](Shared/README.md), [Text2D/README.md](Text2D/README.md), [Text3D/README.md](Text3D/README.md), [GameAssets/README.md](GameAssets/README.md) e [Texture2D/README.md](Texture2D/README.md).
+Instruções completas: [Shared/README.md](Shared/README.md), [Text2D/README.md](Text2D/README.md), [Text3D/README.md](Text3D/README.md), [GameAssets/README.md](GameAssets/README.md), [Texture2D/README.md](Texture2D/README.md) e [Text2Sound/README.md](Text2Sound/README.md).
 
 ## Licenças
 

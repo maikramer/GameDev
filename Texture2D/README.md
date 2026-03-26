@@ -46,9 +46,11 @@ O `setup.sh` instala `gamedev-shared` a partir de `../Shared` (caminho do monore
 A partir da raiz do repositório:
 
 ```bash
-./install.sh texture2d --use-venv
-# Windows: .\install.ps1 texture2d --use-venv
+./install.sh texture2d
+# Windows: .\install.ps1 texture2d
 ```
+
+(O instalador unificado **cria** `Texture2D/.venv` se não existir, instala lá em modo editável e os wrappers em `~/.local/bin` apontam para esse Python. `scripts/setup.sh` continua opcional.)
 
 Lista ferramentas: `./install.sh --list`.
 
