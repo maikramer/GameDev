@@ -14,6 +14,13 @@ _KIND_HINTS: dict[str, str] = {
     "environment": "environment art piece, readable composition, game level visual",
 }
 
+# Descrições sonoras por kind (Text2Sound — não usar hints visuais de imagem)
+_AUDIO_KIND_HINTS: dict[str, str] = {
+    "prop": "short game sound effect, punchy and clear",
+    "character": "character-related audio, game-ready",
+    "environment": "ambient soundscape, loop-friendly atmospheric audio",
+}
+
 # Quando generate_3d=true, a mesma imagem alimenta image-to-3D; sombras/pedestal viram geometria fantasma.
 _I2M_REF_LIGHTING = (
     "Image-to-3D reference: even diffuse studio lighting, soft fill, "
@@ -111,6 +118,49 @@ def build_prompt(
         neg_parts.extend(_I2M_EXTRA_NEGATIVES)
     if not for_3d:
         neg_parts.extend(_UI_TEXT_NEGATIVES)
+    if neg_parts:
+        neg_joined = ", ".join(neg_parts)
+        main = f"{main} Avoid: {neg_joined}."
+
+    return main
+
+
+def build_audio_prompt(
+    profile: GameProfile,
+    preset: dict[str, Any],
+    row: ManifestRow,
+) -> str:
+    """Prompt para Text2Sound (áudio a partir de texto; sem referências visuais de imagem 3D)."""
+    prefix = str(preset.get("prompt_prefix") or "").strip()
+    label_hint = str(preset.get("hint_audio") or preset.get("hint_2d") or "").strip()
+
+    kind = (row.kind or "").strip().lower()
+    kind_extra = _AUDIO_KIND_HINTS.get(kind, "game audio, stereo, high quality")
+
+    mood = _mood_atmosphere(profile.genre, profile.tone)
+    idea = row.idea.strip()
+
+    chunks: list[str] = []
+    if prefix:
+        chunks.append(prefix)
+    if mood:
+        chunks.append(f"Mood: {mood}.")
+    chunks.append(f"{idea}.")
+    chunks.append(kind_extra + ".")
+    if label_hint:
+        chunks.append(label_hint + ".")
+
+    main = " ".join(chunks)
+    main = re.sub(r"\s+", " ", main).strip()
+
+    neg_parts: list[str] = []
+    neg_suffix = str(preset.get("negative_suffix") or "").strip()
+    if neg_suffix:
+        neg_parts.append(neg_suffix)
+    for kw in profile.negative_keywords:
+        kw = str(kw).strip()
+        if kw:
+            neg_parts.append(kw)
     if neg_parts:
         neg_joined = ", ".join(neg_parts)
         main = f"{main} Avoid: {neg_joined}."

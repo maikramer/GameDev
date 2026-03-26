@@ -27,12 +27,32 @@ image_ext: png
 # Opcional: seed base para reprodutibilidade (inteiro)
 # seed_base: 42
 
+# Fonte de imagens 2D: text2d (defeito, FLUX Klein) ou texture2d (texturas seamless HF).
+# image_source: text2d
+
 # Text2D em batch: low_vram=true recomendado em GPUs ~6 GB (CPU offload do FLUX).
 # Se der OOM, fecha o Godot/outros que usem a GPU antes do batch; em último caso cpu: true (lento).
 text2d:
   low_vram: true
   width: 768
   height: 768
+
+# Texture2D (HF API) — descomenta image_source + bloco abaixo para seamless em vez de Text2D.
+# Combo PBR: materialize: true gera mapas (normal, height, metallic) com o CLI materialize.
+# image_source: texture2d
+# texture2d:
+#   width: 1024
+#   height: 1024
+#   materialize: true
+#   materialize_maps_subdir: pbr_maps
+
+# Text2Sound com generate_audio no CSV: áudio por linha (Stable Audio Open); audio_subdir + bloco opcional.
+# audio_subdir: audio
+# text2sound:
+#   duration: 10
+#   steps: 100
+#   cfg_scale: 4.5
+#   audio_format: wav
 
 # Text3D com --with-3d: preset fast equilibra tempo/VRAM; texture=true activa Paint.
 # low_vram=true no text3d => Hunyuan *shape* em CPU (forma muito pior — evita salvo último recurso).
@@ -48,8 +68,8 @@ text3d:
   # materialize_maps_subdir: pbr_maps
 """
 
-MANIFEST_CSV = """id,idea,kind,generate_3d
-chest_01,"baú de madeira com ferrolhos dourados",prop,false
-hero_sword,"espada longa com gema azul no punho",prop,true
-forest_bg,"floresta densa ao entardecer",environment,false
+MANIFEST_CSV = """id,idea,kind,generate_3d,generate_audio,image_source
+chest_01,"baú de madeira com ferrolhos dourados",prop,false,false,
+hero_sword,"espada longa com gema azul no punho",prop,true,false,
+forest_bg,"floresta densa ao entardecer",environment,false,false,
 """

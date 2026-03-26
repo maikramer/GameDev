@@ -119,6 +119,56 @@ def test_text3d_materialize_forces_texture() -> None:
     assert p.text3d.materialize is True
 
 
+def test_from_dict_texture2d_defaults() -> None:
+    p = GameProfile.from_dict(
+        {
+            "title": "A",
+            "genre": "B",
+            "tone": "C",
+            "style_preset": "lowpoly",
+            "image_source": "texture2d",
+        }
+    )
+    assert p.image_source == "texture2d"
+    assert p.texture2d is not None
+    assert p.texture2d.materialize is False
+
+
+def test_from_dict_texture2d_materialize() -> None:
+    p = GameProfile.from_dict(
+        {
+            "title": "A",
+            "genre": "B",
+            "tone": "C",
+            "style_preset": "lowpoly",
+            "image_source": "texture2d",
+            "texture2d": {
+                "width": 512,
+                "materialize": True,
+                "materialize_maps_subdir": "maps",
+                "materialize_format": "png",
+            },
+        }
+    )
+    assert p.texture2d is not None
+    assert p.texture2d.width == 512
+    assert p.texture2d.materialize is True
+    assert p.texture2d.materialize_maps_subdir == "maps"
+
+
+def test_from_dict_image_source_invalid() -> None:
+    with pytest.raises(ValueError, match="image_source"):
+        GameProfile.from_dict(
+            {
+                "title": "A",
+                "genre": "B",
+                "tone": "C",
+                "style_preset": "lowpoly",
+                "image_source": "flux",
+            }
+        )
+
+
 def test_text3d_materialize_options() -> None:
     p = GameProfile.from_dict(
         {

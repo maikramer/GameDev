@@ -1,14 +1,16 @@
 # GameAssets
 
-CLI para **batches de prompts e assets** alinhados ao estilo e à ideia do teu jogo. Combina um perfil YAML (`game.yaml`), um manifest CSV e presets de estilo, e orquestra **`text2d`** e **`text3d`** (subprocess).
+CLI para **batches de prompts e assets** alinhados ao estilo e à ideia do teu jogo. Combina um perfil YAML (`game.yaml`), um manifest CSV e presets de estilo, e orquestra **`text2d`** ou **`texture2d`** (texturas seamless via API), opcionalmente **`text2sound`** (áudio por linha), **`text3d`**, e **Materialize** (PBR no GLB via Text3D ou mapas a partir de difusa no fluxo Texture2D).
 
 ## Requisitos
 
 - Python 3.10+
-- Comandos `text2d` e `text3d` no `PATH` quando fores correr **batch** (instala [Text2D](../Text2D) e [Text3D](../Text3D) nos respetivos ambientes), ou variáveis de ambiente:
-  - `TEXT2D_BIN` — caminho absoluto para o executável `text2d`
-  - `TEXT3D_BIN` — caminho absoluto para o executável `text3d`
-  - `MATERIALIZE_BIN` — opcional; usado pelo Text3D quando activas **PBR** (`text3d.materialize` no `game.yaml`) se o binário `materialize` não estiver no `PATH` (ver [Materialize](../Materialize) e [Text3D: PBR no GLB](../Text3D/docs/PBR_MATERIALIZE.md))
+- Comandos no `PATH` conforme o fluxo (instala os pacotes nos respetivos ambientes) ou variáveis de ambiente:
+  - `TEXT2D_BIN` — executável `text2d` ([Text2D](../Text2D)) quando usas geração 2D **FLUX** (`image_source: text2d` ou coluna `image_source` por linha)
+  - `TEXTURE2D_BIN` — executável `texture2d` ([Texture2D](../Texture2D)) quando usas **texturas seamless** (`image_source: texture2d` ou por linha no CSV)
+  - `TEXT3D_BIN` — executável `text3d` ([Text3D](../Text3D)) com `--with-3d`
+  - `TEXT2SOUND_BIN` — executável `text2sound` ([Text2Sound](../Text2Sound)) quando há linhas com **`generate_audio=true`** no CSV (e não usas `--skip-audio`)
+  - `MATERIALIZE_BIN` — opcional; **PBR no GLB** via Text3D (`text3d.materialize`) ou **mapas PBR a partir da difusa** no fluxo Texture2D+`texture2d.materialize` (ver [Materialize](../Materialize) e [Text3D: PBR no GLB](../Text3D/docs/PBR_MATERIALIZE.md))
 
 ## Instalação (recomendado)
 
@@ -91,10 +93,30 @@ gameassets batch --profile game.yaml --manifest manifest.csv --with-3d \
 - Sem `--with-3d`, **nunca** corre `text3d`, mesmo com coluna `generate_3d=true` (apenas aviso).
 - `--dry-run` mostra os comandos sem executar.
 - `--fail-fast` para no primeiro erro (defeito: continua).
-- `--log batch-log.jsonl` acrescenta um JSON por linha processada.
+- `--log batch-log.jsonl` acrescenta um JSON por linha processada, incluindo **`timings_sec`** (segundos, tempos de parede por subprocesso quando aplicável), por exemplo: `image_text2d` ou `image_texture2d`, `materialize_diffuse`, `text2sound` (quando `generate_audio`), `text3d` (passo único), ou `text3d_shape` / `text3d_texture` / `text3d_materialize_pbr` (com `phased_batch`). Registos incluem **`audio_path`** / **`audio_error`** quando aplicável. Linhas **Texture2D** incluem **`texture2d_api`: true** (custo da API Hugging Face não é calculado pelo GameAssets).
 - **Lock exclusivo:** na pasta do manifest é criado `.gameassets_batch.lock` (ficheiro `fcntl`) para **impedir dois batches na mesma pasta** — evita disputa de VRAM entre `text2d`/`text3d` em paralelo. Se o PID no lock já não existir, o lock é recuperado. `--skip-batch-lock` desliga (avançado).
 - **VRAM:** antes da execução, se `nvidia-smi` existir e a VRAM livre for inferior a ~1,8 GiB, mostra-se um aviso. `--skip-gpu-preflight` desliga o aviso.
 - **CUDA:** os subprocessos `text2d`/`text3d` recebem `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` se a variável ainda não estiver definida no ambiente (reduz falhas por fragmentação).
+
+### Text2Sound (`generate_audio`)
+
+- No CSV, coluna opcional **`generate_audio`** (`true`/`false`): quando `true`, após a imagem 2D (Fase 1) corre **Text2Sound** (Fase 1b) antes do Text3D.
+- Perfil: `audio_subdir` (defeito `audio`) e bloco opcional **`text2sound`** (duração, passos, formato `wav`/`flac`/`ogg`, etc.) — ver [Text2Sound](../Text2Sound).
+- **`--skip-audio`:** ignora a coluna e não invoca `text2sound`.
+- **`prompts`** inclui `prompt_audio` e `generate_audio` no JSONL / pré-visualização.
+
+### Text2D vs Texture2D (`image_source`)
+
+No **`game.yaml`**, **`image_source`** escolhe a ferramenta de imagem por defeito:
+
+| Valor | Ferramenta | Notas |
+|-------|--------------|--------|
+| `text2d` (defeito) | FLUX Klein — imagens gerais, referência para 3D | Consome VRAM local; bloco `text2d` no YAML |
+| `texture2d` | [Texture2D](../Texture2D) — texturas **seamless** (HF Inference API) | Pouca VRAM local; bloco `texture2d` no YAML (resolução, `materialize` para PBR em ficheiros separados, etc.) |
+
+**Por linha no CSV:** coluna opcional **`image_source`** (`text2d` ou `texture2d`) sobrepõe o defeito do perfil para essa linha (útil para misturar *props* com FLUX e *tiles* com Texture2D no mesmo manifest).
+
+Variável **`TEXTURE2D_BIN`** se `texture2d` não estiver no `PATH`.
 
 ### PBR no GLB (Materialize + Text3D)
 
@@ -134,7 +156,9 @@ Campos principais:
 | `images_subdir` / `meshes_subdir` | Usados em `split`: subpastas para PNG/JPG e GLB |
 | `image_ext` | `png` ou `jpg` |
 | `seed_base` | Opcional; seeds derivados por `id` para reprodutibilidade |
+| `image_source` | `text2d` (defeito) ou `texture2d` — ferramenta de imagem por defeito (sobreponível por coluna no CSV) |
 | `text2d` | Bloco opcional: `low_vram`, `cpu`, `width`, `height` |
+| `texture2d` | Bloco opcional se usas Texture2D (global ou só com linhas CSV `texture2d`): resolução, `steps`, `guidance_scale`, `preset`, … e **PBR em difusa:** `materialize`, `materialize_maps_subdir`, `materialize_bin`, `materialize_format`, etc. |
 | `text3d` | Bloco opcional: `preset`, `low_vram`, `texture` (omitido = **`true`**), `steps` / `octree_resolution` / `num_chunks` (alternativa mútua a `preset`), `no_mesh_repair`, `mesh_smooth`, `mc_level`, e **PBR:** `materialize`, `materialize_save_maps`, `materialize_export_maps_to_output`, `materialize_maps_subdir`, `materialize_bin`, `materialize_no_invert` |
 
 ### Hunyuan3D e qualidade
@@ -150,7 +174,7 @@ Podes criar `presets.local.yaml` ao lado do perfil e passar `--presets-local pre
 
 ## Manifest (`manifest.csv`)
 
-Cabeçalhos: **`id`**, **`idea`** (obrigatórios); opcionais: **`kind`** (`prop`, `character`, `environment`), **`generate_3d`** (`true`/`false`/`sim`/…). Com `path_layout: flat`, usa `id` com barra, por exemplo `Crystals/shard_blue`, para gravar ficheiros dentro de `Crystals/`.
+Cabeçalhos: **`id`**, **`idea`** (obrigatórios); opcionais: **`kind`** (`prop`, `character`, `environment`), **`generate_3d`** (`true`/`false`/`sim`/…), **`image_source`** (`text2d` \| `texture2d`) para sobrepor o `image_source` do `game.yaml` nessa linha. Com `path_layout: flat`, usa `id` com barra, por exemplo `Crystals/shard_blue`, para gravar ficheiros dentro de `Crystals/`.
 
 ## Licença
 

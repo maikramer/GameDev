@@ -63,6 +63,46 @@ class Text2DProfile:
 
 
 @dataclass
+class Text2SoundProfile:
+    """Opções passadas ao CLI text2sound generate (subconjunto)."""
+
+    duration: float | None = None
+    steps: int | None = None
+    cfg_scale: float | None = None
+    audio_format: str = "wav"
+    preset: str | None = None
+    sigma_min: float | None = None
+    sigma_max: float | None = None
+    sampler: str | None = None
+    trim: bool | None = None
+    model_id: str | None = None
+    # None = auto (CLI); True/False = --half / --no-half
+    half_precision: bool | None = None
+
+
+@dataclass
+class Texture2DProfile:
+    """Opções passadas ao CLI texture2d generate (HF seamless) + Materialize opcional para PBR."""
+
+    width: int | None = None
+    height: int | None = None
+    steps: int | None = None
+    guidance_scale: float | None = None
+    negative_prompt: str | None = None
+    preset: str | None = None
+    cfg_scale: float | None = None
+    lora_strength: float | None = None
+    model_id: str | None = None
+    # PBR a partir do PNG difuso (CLI materialize, não text3d)
+    materialize: bool = False
+    materialize_bin: str | None = None
+    materialize_format: str = "png"
+    materialize_quality: int = 95
+    materialize_verbose: bool = False
+    materialize_maps_subdir: str = "pbr_maps"
+
+
+@dataclass
 class GameProfile:
     title: str
     genre: str
@@ -72,13 +112,18 @@ class GameProfile:
     output_dir: str = "."
     images_subdir: str = "images"
     meshes_subdir: str = "meshes"
+    audio_subdir: str = "audio"
     # split: images_subdir/id.png e meshes_subdir/id.glb (comportamento clássico)
     # flat: output_dir / dirname(id) / basename.ext — PNG e GLB na mesma pasta (ex.: Godot por categoria)
     path_layout: str = "split"
     seed_base: int | None = None
     image_ext: str = "png"
+    # text2d: FLUX Klein (Text2D) · texture2d: texturas seamless (Texture2D) — escolhe image_source
+    image_source: str = "text2d"
     text2d: Text2DProfile | None = None
+    texture2d: Texture2DProfile | None = None
     text3d: Text3DProfile | None = None
+    text2sound: Text2SoundProfile | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> GameProfile:
@@ -111,6 +156,113 @@ class GameProfile:
                 cpu=bool(raw_t2.get("cpu", False)),
                 width=wi,
                 height=he,
+            )
+        tex2: Texture2DProfile | None = None
+        raw_tex2 = data.get("texture2d")
+        if isinstance(raw_tex2, dict):
+            w = raw_tex2.get("width")
+            h = raw_tex2.get("height")
+            st = raw_tex2.get("steps")
+            gs = raw_tex2.get("guidance_scale")
+            cfg = raw_tex2.get("cfg_scale")
+            lr = raw_tex2.get("lora_strength")
+            mq = raw_tex2.get("materialize_quality")
+            try:
+                wi_t = int(w) if w is not None else None
+                he_t = int(h) if h is not None else None
+                st_i = int(st) if st is not None else None
+                gs_f = float(gs) if gs is not None else None
+                cfg_f = float(cfg) if cfg is not None else None
+                lr_f = float(lr) if lr is not None else None
+                mq_i = int(mq) if mq is not None else None
+            except (TypeError, ValueError) as e:
+                raise ValueError(
+                    "texture2d.width, height, steps, guidance_scale, cfg_scale, "
+                    "lora_strength e materialize_quality devem ser números válidos"
+                ) from e
+            neg_prompt = raw_tex2.get("negative_prompt")
+            neg_s = (
+                str(neg_prompt).strip()
+                if neg_prompt not in (None, "")
+                else None
+            )
+            pr = raw_tex2.get("preset")
+            pr_s = str(pr).strip() if pr not in (None, "") else None
+            mid = raw_tex2.get("model_id")
+            mid_s = str(mid).strip() if mid not in (None, "") else None
+            msd = raw_tex2.get("materialize_maps_subdir")
+            msd_s = str(msd).strip() if msd not in (None, "") else "pbr_maps"
+            mf = raw_tex2.get("materialize_format")
+            mf_s = str(mf).strip().lower() if mf not in (None, "") else "png"
+            if mf_s not in ("png", "jpg", "jpeg", "tga", "exr"):
+                raise ValueError("texture2d.materialize_format deve ser png, jpg, tga ou exr")
+            mat_bin = raw_tex2.get("materialize_bin")
+            mat_bin_s = str(mat_bin).strip() if mat_bin not in (None, "") else None
+            mq_final = mq_i if mq_i is not None else 95
+            if not 0 <= mq_final <= 100:
+                raise ValueError("texture2d.materialize_quality deve estar entre 0 e 100")
+            tex2 = Texture2DProfile(
+                width=wi_t,
+                height=he_t,
+                steps=st_i,
+                guidance_scale=gs_f,
+                negative_prompt=neg_s,
+                preset=pr_s,
+                cfg_scale=cfg_f,
+                lora_strength=lr_f,
+                model_id=mid_s,
+                materialize=bool(raw_tex2.get("materialize", False)),
+                materialize_bin=mat_bin_s,
+                materialize_format="jpg" if mf_s == "jpeg" else mf_s,
+                materialize_quality=mq_final,
+                materialize_verbose=bool(raw_tex2.get("materialize_verbose", False)),
+                materialize_maps_subdir=msd_s,
+            )
+        ts2: Text2SoundProfile | None = None
+        raw_ts2 = data.get("text2sound")
+        if isinstance(raw_ts2, dict):
+            dur = raw_ts2.get("duration")
+            st = raw_ts2.get("steps")
+            cfg = raw_ts2.get("cfg_scale")
+            smin = raw_ts2.get("sigma_min")
+            smax = raw_ts2.get("sigma_max")
+            try:
+                dur_f = float(dur) if dur is not None else None
+                st_i = int(st) if st is not None else None
+                cfg_f = float(cfg) if cfg is not None else None
+                smin_f = float(smin) if smin is not None else None
+                smax_f = float(smax) if smax is not None else None
+            except (TypeError, ValueError) as e:
+                raise ValueError(
+                    "text2sound.duration, steps, cfg_scale, sigma_min e sigma_max "
+                    "devem ser números válidos"
+                ) from e
+            af_raw = raw_ts2.get("audio_format") or raw_ts2.get("format")
+            af = str(af_raw or "wav").lower().strip().lstrip(".")
+            if af not in ("wav", "flac", "ogg"):
+                raise ValueError("text2sound.audio_format deve ser wav, flac ou ogg")
+            pr_a = raw_ts2.get("preset")
+            pr_as = str(pr_a).strip() if pr_a not in (None, "") else None
+            samp = raw_ts2.get("sampler")
+            samp_s = str(samp).strip() if samp not in (None, "") else None
+            mid_a = raw_ts2.get("model_id")
+            mid_as = str(mid_a).strip() if mid_a not in (None, "") else None
+            trim_v = raw_ts2.get("trim")
+            trim_b: bool | None = None if trim_v is None else bool(trim_v)
+            hp_raw = raw_ts2.get("half_precision")
+            hp_b: bool | None = None if hp_raw is None else bool(hp_raw)
+            ts2 = Text2SoundProfile(
+                duration=dur_f,
+                steps=st_i,
+                cfg_scale=cfg_f,
+                audio_format=af,
+                preset=pr_as,
+                sigma_min=smin_f,
+                sigma_max=smax_f,
+                sampler=samp_s,
+                trim=trim_b,
+                model_id=mid_as,
+                half_precision=hp_b,
             )
         t3: Text3DProfile | None = None
         raw_t3 = data.get("text3d")
@@ -187,6 +339,12 @@ class GameProfile:
         pl = str(data.get("path_layout") or "split").strip().lower()
         if pl not in ("split", "flat"):
             raise ValueError("path_layout deve ser split ou flat")
+        isrc = str(data.get("image_source") or "text2d").strip().lower()
+        if isrc not in ("text2d", "texture2d"):
+            raise ValueError("image_source deve ser text2d ou texture2d")
+        if isrc == "texture2d" and tex2 is None:
+            tex2 = Texture2DProfile()
+        audio_sd = str(data.get("audio_subdir") or "audio").strip() or "audio"
         return cls(
             title=str(data["title"]),
             genre=str(data["genre"]),
@@ -196,11 +354,15 @@ class GameProfile:
             output_dir=_parse_output_dir(data.get("output_dir")),
             images_subdir=str(data.get("images_subdir") or "images"),
             meshes_subdir=str(data.get("meshes_subdir") or "meshes"),
+            audio_subdir=audio_sd,
             path_layout=pl,
             seed_base=sb,
             image_ext="jpg" if ext == "jpeg" else ext,
+            image_source=isrc,
             text2d=t2,
+            texture2d=tex2,
             text3d=t3,
+            text2sound=ts2,
         )
 
 

@@ -7,6 +7,7 @@ import json
 import shutil
 import sys
 import tempfile
+import time
 import zlib
 from pathlib import Path
 from typing import Any
@@ -25,10 +26,10 @@ from rich.table import Table
 
 from . import __version__
 from .batch_guard import batch_directory_lock, query_gpu_free_mib, subprocess_gpu_env
-from .manifest import ManifestRow, load_manifest
+from .manifest import ManifestRow, effective_image_source, load_manifest
 from .presets import get_preset, load_presets_bundle
-from .profile import GameProfile, load_profile
-from .prompt_builder import build_prompt
+from .profile import GameProfile, Text2SoundProfile, Texture2DProfile, load_profile
+from .prompt_builder import build_audio_prompt, build_prompt
 from .runner import merge_subprocess_output, resolve_binary, run_cmd
 from .templates import GAME_YAML, MANIFEST_CSV
 from .cursor_skill_install import install_agent_skill
@@ -46,6 +47,8 @@ Preset só num ficheiro teu (ex.: galaxy_orbital em presets-local.yaml):
     --presets-local presets-local.yaml --log run.jsonl
 
 Define TEXT2D_BIN / TEXT3D_BIN (e MATERIALIZE_BIN se usares text3d.materialize) se não estiverem no PATH.
+Com image_source: texture2d: TEXTURE2D_BIN e, se texture2d.materialize, MATERIALIZE_BIN (ou texture2d.materialize_bin).
+Com generate_audio no CSV: TEXT2SOUND_BIN se text2sound não estiver no PATH.
 """
 
 
@@ -74,6 +77,96 @@ def _materialize_maps_path_manifest(
 ) -> Path:
     """Destino dos mapas PBR com output_dir relativo resolvido face à pasta do manifest."""
     rel = _materialize_maps_path(profile, row)
+    if rel.is_absolute():
+        return rel.resolve()
+    return (manifest_dir / rel).resolve()
+
+
+def _text2sound_profile_effective(profile: GameProfile) -> Text2SoundProfile:
+    """Opções Text2Sound do perfil ou defaults."""
+    return profile.text2sound or Text2SoundProfile()
+
+
+def _audio_path_for_row(profile: GameProfile, row: ManifestRow) -> Path:
+    """Ficheiro de áudio final (extensão do perfil text2sound)."""
+    ts = _text2sound_profile_effective(profile)
+    ext = (ts.audio_format or "wav").lower().strip().lstrip(".")
+    root = Path(profile.output_dir)
+    rid = row.id
+    if profile.path_layout == "flat":
+        parts = rid.split("/")
+        if len(parts) >= 2:
+            sub = Path(*parts[:-1])
+            base = parts[-1]
+            dir_ = root / sub
+        else:
+            dir_ = root
+            base = rid
+        return dir_ / f"{base}.{ext}"
+    return root / profile.audio_subdir / f"{rid}.{ext}"
+
+
+def _audio_path_for_row_manifest(
+    profile: GameProfile,
+    manifest_dir: Path,
+    row: ManifestRow,
+) -> Path:
+    rel = _audio_path_for_row(profile, row)
+    if rel.is_absolute():
+        return rel.resolve()
+    return (manifest_dir / rel).resolve()
+
+
+def _append_text2sound_profile_args(ts: Text2SoundProfile, argv: list[str]) -> None:
+    """Extensões do perfil para `text2sound generate`."""
+    if ts.duration is not None:
+        argv.extend(["-d", str(ts.duration)])
+    if ts.steps is not None:
+        argv.extend(["-s", str(ts.steps)])
+    if ts.cfg_scale is not None:
+        argv.extend(["-c", str(ts.cfg_scale)])
+    fmt = (ts.audio_format or "wav").lower().strip().lstrip(".")
+    argv.extend(["-f", fmt])
+    if ts.preset and ts.preset.lower() != "none":
+        argv.extend(["-p", ts.preset])
+    if ts.sigma_min is not None:
+        argv.extend(["--sigma-min", str(ts.sigma_min)])
+    if ts.sigma_max is not None:
+        argv.extend(["--sigma-max", str(ts.sigma_max)])
+    if ts.sampler:
+        argv.extend(["--sampler", ts.sampler])
+    if ts.trim is not None:
+        argv.append("--trim" if ts.trim else "--no-trim")
+    if ts.model_id:
+        argv.extend(["-m", ts.model_id])
+    if ts.half_precision is True:
+        argv.append("--half")
+    elif ts.half_precision is False:
+        argv.append("--no-half")
+
+
+def _texture2d_profile_effective(profile: GameProfile) -> Texture2DProfile:
+    """Opções Texture2D do perfil ou defaults (para linhas CSV texture2d sem bloco no YAML)."""
+    return profile.texture2d or Texture2DProfile()
+
+
+def _row_uses_texture2d(profile: GameProfile, row: ManifestRow) -> bool:
+    return effective_image_source(profile, row) == "texture2d"
+
+
+def _texture2d_material_maps_path(profile: GameProfile, row: ManifestRow) -> Path:
+    """Destino dos mapas PBR (Materialize CLI) quando a linha usa texture2d."""
+    tt = _texture2d_profile_effective(profile)
+    sub = tt.materialize_maps_subdir or "pbr_maps"
+    return Path(profile.output_dir) / sub / _safe_row_dirname(row.id)
+
+
+def _texture2d_material_maps_path_manifest(
+    profile: GameProfile,
+    manifest_dir: Path,
+    row: ManifestRow,
+) -> Path:
+    rel = _texture2d_material_maps_path(profile, row)
     if rel.is_absolute():
         return rel.resolve()
     return (manifest_dir / rel).resolve()
@@ -139,6 +232,56 @@ def _append_text2d_profile_args(profile: GameProfile, argv: list[str]) -> None:
         argv.append("--low-vram")
     if t2.cpu:
         argv.append("--cpu")
+
+
+def _append_texture2d_profile_args(tt: Texture2DProfile, argv: list[str]) -> None:
+    """Extensões do perfil para `texture2d generate`."""
+    if tt.width is not None:
+        argv.extend(["-W", str(tt.width)])
+    if tt.height is not None:
+        argv.extend(["-H", str(tt.height)])
+    if tt.steps is not None:
+        argv.extend(["-s", str(tt.steps)])
+    if tt.guidance_scale is not None:
+        argv.extend(["-g", str(tt.guidance_scale)])
+    if tt.negative_prompt:
+        argv.extend(["-n", tt.negative_prompt])
+    if tt.preset and tt.preset.lower() != "none":
+        argv.extend(["-p", tt.preset])
+    if tt.cfg_scale is not None:
+        argv.extend(["--cfg-scale", str(tt.cfg_scale)])
+    if tt.lora_strength is not None:
+        argv.extend(["--lora-strength", str(tt.lora_strength)])
+    if tt.model_id:
+        argv.extend(["-m", tt.model_id])
+
+
+def _resolve_materialize_bin_texture2d(tt: Texture2DProfile) -> str:
+    """Binário Materialize para o fluxo texture2d (override no perfil ou MATERIALIZE_BIN)."""
+    if tt.materialize_bin:
+        return tt.materialize_bin
+    return resolve_binary("MATERIALIZE_BIN", "materialize")
+
+
+def _materialize_diffuse_argv(
+    materialize_bin: str,
+    tt: Texture2DProfile,
+    diffuse_path: Path,
+    output_dir: Path,
+) -> list[str]:
+    """Invocação materialize <difuso> -o <dir> (mapas PBR a partir de imagem)."""
+    args = [materialize_bin, str(diffuse_path), "-o", str(output_dir)]
+    fmt = tt.materialize_format or "png"
+    args.extend(["-f", fmt])
+    args.extend(["-q", str(tt.materialize_quality)])
+    if tt.materialize_verbose:
+        args.append("-v")
+    return args
+
+
+def _timing_append(rec: dict[str, Any], key: str, seconds: float) -> None:
+    t = rec.setdefault("timings_sec", {})
+    t[key] = round(seconds, 4)
 
 
 def _paths_for_row(profile: GameProfile, row: ManifestRow) -> tuple[Path, Path]:
@@ -285,12 +428,15 @@ def prompts_cmd(
     for row in rows:
         prompt_2d = build_prompt(profile, preset, row, for_3d=False)
         prompt_3d_hint = build_prompt(profile, preset, row, for_3d=True)
+        prompt_audio = build_audio_prompt(profile, preset, row)
         entries.append(
             {
                 "id": row.id,
                 "prompt": prompt_2d,
                 "prompt_3d_hint": prompt_3d_hint,
+                "prompt_audio": prompt_audio,
                 "generate_3d": row.generate_3d,
+                "generate_audio": row.generate_audio,
             }
         )
     if output:
@@ -313,12 +459,14 @@ def prompts_cmd(
     )
     table.add_column("id", style="cyan", no_wrap=True)
     table.add_column("3D?", justify="center")
-    table.add_column("prompt (início)", overflow="ellipsis", max_width=72)
+    table.add_column("áudio?", justify="center")
+    table.add_column("prompt (início)", overflow="ellipsis", max_width=64)
     for e in entries:
         p = e["prompt"]
-        preview = p if len(p) <= 72 else p[:69] + "..."
-        flag = "sim" if e["generate_3d"] else "não"
-        table.add_row(e["id"], flag, preview)
+        preview = p if len(p) <= 64 else p[:61] + "..."
+        flag3 = "sim" if e["generate_3d"] else "não"
+        flag_a = "sim" if e["generate_audio"] else "não"
+        table.add_row(e["id"], flag3, flag_a, preview)
     console.print(table)
 
 
@@ -377,7 +525,13 @@ def prompts_cmd(
     "--skip-text2d",
     "skip_text2d",
     is_flag=True,
-    help="Não executar Text2D: usa os PNG já em output_dir (exige --with-3d; valida PNG por linha com generate_3d).",
+    help="Não gerar imagens 2D (Text2D ou Texture2D): usa PNG já em output_dir (exige --with-3d; valida PNG por linha com generate_3d).",
+)
+@click.option(
+    "--skip-audio",
+    "skip_audio",
+    is_flag=True,
+    help="Não gerar áudio Text2Sound (ignora coluna generate_audio).",
 )
 def batch_cmd(
     profile_path: Path,
@@ -390,6 +544,7 @@ def batch_cmd(
     skip_batch_lock: bool,
     skip_gpu_preflight: bool,
     skip_text2d: bool,
+    skip_audio: bool,
 ) -> None:
     """Gera imagens (e opcionalmente meshes) para cada linha do manifest."""
     profile, rows, _bundle, preset = _build_context(
@@ -411,12 +566,32 @@ def batch_cmd(
             )
         )
 
+    def _row_sources() -> tuple[bool, bool]:
+        any_t2d = False
+        any_tex = False
+        for r in rows:
+            src = effective_image_source(profile, r)
+            if src == "text2d":
+                any_t2d = True
+            else:
+                any_tex = True
+        return any_t2d, any_tex
+
+    any_text2d_row, any_texture2d_row = _row_sources()
+
     text2d_bin: str | None = None
+    texture2d_bin: str | None = None
     if not skip_text2d:
-        try:
-            text2d_bin = resolve_binary("TEXT2D_BIN", "text2d")
-        except FileNotFoundError as e:
-            raise click.ClickException(str(e)) from e
+        if any_text2d_row:
+            try:
+                text2d_bin = resolve_binary("TEXT2D_BIN", "text2d")
+            except FileNotFoundError as e:
+                raise click.ClickException(str(e)) from e
+        if any_texture2d_row:
+            try:
+                texture2d_bin = resolve_binary("TEXTURE2D_BIN", "texture2d")
+            except FileNotFoundError as e:
+                raise click.ClickException(str(e)) from e
     text3d_bin: str | None = None
     if with_3d:
         try:
@@ -424,26 +599,71 @@ def batch_cmd(
         except FileNotFoundError as e:
             raise click.ClickException(str(e)) from e
 
+    any_audio_row = any(r.generate_audio for r in rows)
+    text2sound_bin: str | None = None
+    if any_audio_row and not skip_audio:
+        try:
+            text2sound_bin = resolve_binary("TEXT2SOUND_BIN", "text2sound")
+        except FileNotFoundError as e:
+            raise click.ClickException(str(e)) from e
+
     meta = Table(show_header=False, box=box.SIMPLE, title="[bold]Batch[/bold]")
     meta.add_row("Perfil", str(profile_path.resolve()))
     meta.add_row("Manifest", str(manifest_path.resolve()))
     meta.add_row("Linhas", str(len(rows)))
-    meta.add_row(
-        "text2d",
-        "[dim]omitido[/dim] (PNG existentes)" if skip_text2d else (text2d_bin or ""),
-    )
+    tt_eff = _texture2d_profile_effective(profile)
+    if skip_text2d:
+        img_pipeline = "[dim]omitido[/dim] (PNG existentes)"
+    elif any_texture2d_row and any_text2d_row:
+        img_pipeline = (
+            f"misto: text2d ({text2d_bin or '?'}) + texture2d ({texture2d_bin or '?'})"
+        )
+        if tt_eff.materialize:
+            img_pipeline += " → materialize (PBR em linhas texture2d)"
+    elif any_texture2d_row:
+        img_pipeline = f"texture2d ({texture2d_bin or ''})"
+        if tt_eff.materialize:
+            img_pipeline += " → materialize (PBR)"
+    else:
+        img_pipeline = text2d_bin or ""
+    meta.add_row("Imagem (2D)", img_pipeline)
+    if any_audio_row:
+        meta.add_row(
+            "text2sound",
+            "[dim]omitido (--skip-audio)[/dim]"
+            if skip_audio
+            else (text2sound_bin or ""),
+        )
     meta.add_row("text3d", text3d_bin or "[dim](desligado)[/dim]")
     meta.add_row("Modo", "[cyan]dry-run[/cyan]" if dry_run else "execução")
     if skip_text2d:
-        meta.add_row(
-            "Ordem",
-            "Text2D omitido → Text3D (só generate_3d, PNG no output_dir)",
-        )
+        ord_skip: list[str] = ["Geração 2D omitida"]
+        if any_audio_row and not skip_audio:
+            ord_skip.append("Text2Sound (linhas generate_audio)")
+        if with_3d:
+            ord_skip.append("Text3D (só generate_3d, PNG no output_dir)")
+        meta.add_row("Ordem", " → ".join(ord_skip))
+    elif any_texture2d_row or any_text2d_row:
+        if any_texture2d_row and any_text2d_row:
+            ord_parts = ["Geração 2D por linha (text2d e/ou texture2d)"]
+        elif any_texture2d_row:
+            ord_parts = ["Texture2D (todas as linhas)"]
+        else:
+            ord_parts = ["Text2D (todas as linhas)"]
+        if tt_eff.materialize and any_texture2d_row:
+            ord_parts.append("Materialize (mapas PBR nas linhas texture2d)")
+        if any_audio_row and not skip_audio:
+            ord_parts.append("Text2Sound (linhas generate_audio)")
+        if with_3d:
+            ord_parts.append("Text3D (só generate_3d)")
+        meta.add_row("Ordem", " → ".join(ord_parts))
     else:
-        meta.add_row(
-            "Ordem",
-            "Text2D (todas as linhas) → Text3D (só generate_3d, imagens já gravadas)",
-        )
+        ord_tail = "Text2D (todas as linhas)"
+        if any_audio_row and not skip_audio:
+            ord_tail += " → Text2Sound (linhas generate_audio)"
+        if with_3d:
+            ord_tail += " → Text3D (só generate_3d, imagens já gravadas)"
+        meta.add_row("Ordem", ord_tail)
     meta.add_row(
         "Lock",
         "[dim]desligado[/dim]" if (dry_run or skip_batch_lock) else f"{manifest_path.parent / '.gameassets_batch.lock'}",
@@ -465,28 +685,107 @@ def batch_cmd(
 
     if dry_run:
         if not skip_text2d:
-            console.print("[dim]--- Fase 1: Text2D (todas as linhas) ---[/dim]")
+            if any_texture2d_row and any_text2d_row:
+                p1_title = "--- Fase 1: Text2D / Texture2D (por linha) ---"
+            elif any_texture2d_row:
+                p1_title = "--- Fase 1: Texture2D (todas as linhas) ---"
+            else:
+                p1_title = "--- Fase 1: Text2D (todas as linhas) ---"
+            console.print(f"[dim]{p1_title}[/dim]")
             for row in rows:
                 prompt = build_prompt(profile, preset, row, for_3d=False)
                 img_path, mesh_path = _paths_for_row_manifest(
                     profile, manifest_dir, row
                 )
                 seed = _seed_for_row(profile, row.id)
-                t2d_args = [
-                    text2d_bin or "",
-                    "generate",
-                    prompt,
-                    "-o",
-                    str(img_path),
-                ]
-                if seed is not None:
-                    t2d_args.extend(["--seed", str(seed)])
-                _append_text2d_profile_args(profile, t2d_args)
+                tt_line = _texture2d_profile_effective(profile)
+                if _row_uses_texture2d(profile, row):
+                    t2d_args = [
+                        texture2d_bin or "",
+                        "generate",
+                        prompt,
+                        "-o",
+                        str(img_path),
+                    ]
+                    if seed is not None:
+                        t2d_args.extend(["--seed", str(seed)])
+                    _append_texture2d_profile_args(tt_line, t2d_args)
+                else:
+                    t2d_args = [
+                        text2d_bin or "",
+                        "generate",
+                        prompt,
+                        "-o",
+                        str(img_path),
+                    ]
+                    if seed is not None:
+                        t2d_args.extend(["--seed", str(seed)])
+                    _append_text2d_profile_args(profile, t2d_args)
                 console.print(f"[dim]{' '.join(t2d_args)}[/dim]")
+                if _row_uses_texture2d(profile, row) and tt_line.materialize:
+                    maps_ph = _texture2d_material_maps_path(profile, row)
+                    try:
+                        mbin_dr = _resolve_materialize_bin_texture2d(tt_line)
+                    except FileNotFoundError:
+                        mbin_dr = "materialize"
+                    margv = _materialize_diffuse_argv(
+                        mbin_dr, tt_line, img_path, maps_ph
+                    )
+                    console.print(f"[dim]{' '.join(margv)}[/dim]")
+                if (
+                    not skip_audio
+                    and text2sound_bin
+                    and row.generate_audio
+                ):
+                    ts_line = _text2sound_profile_effective(profile)
+                    audio_final = _audio_path_for_row_manifest(
+                        profile, manifest_dir, row
+                    )
+                    prompt_a = build_audio_prompt(profile, preset, row)
+                    argv_au = [
+                        text2sound_bin,
+                        "generate",
+                        prompt_a,
+                        "-o",
+                        str(audio_final),
+                    ]
+                    seed_a = _seed_for_row(profile, f"{row.id}:audio")
+                    if seed_a is not None:
+                        argv_au.extend(["--seed", str(seed_a)])
+                    _append_text2sound_profile_args(ts_line, argv_au)
+                    console.print(f"[dim]{' '.join(argv_au)}[/dim]")
         else:
             console.print(
-                "[dim]--- Text2D omitido (--skip-text2d); comandos só para Text3D ---[/dim]"
+                "[dim]--- Text2D omitido (--skip-text2d) ---[/dim]"
             )
+            if (
+                not skip_audio
+                and text2sound_bin
+                and any(r.generate_audio for r in rows)
+            ):
+                console.print(
+                    "[dim]--- Text2Sound (generate_audio; PNG em output_dir) ---[/dim]"
+                )
+                for row in rows:
+                    if not row.generate_audio:
+                        continue
+                    ts_line = _text2sound_profile_effective(profile)
+                    audio_final = _audio_path_for_row_manifest(
+                        profile, manifest_dir, row
+                    )
+                    prompt_a = build_audio_prompt(profile, preset, row)
+                    argv_au = [
+                        text2sound_bin,
+                        "generate",
+                        prompt_a,
+                        "-o",
+                        str(audio_final),
+                    ]
+                    seed_a = _seed_for_row(profile, f"{row.id}:audio")
+                    if seed_a is not None:
+                        argv_au.extend(["--seed", str(seed_a)])
+                    _append_text2sound_profile_args(ts_line, argv_au)
+                    console.print(f"[dim]{' '.join(argv_au)}[/dim]")
         if with_3d and text3d_bin and any(r.generate_3d for r in rows):
             t3d = profile.text3d
             phased = bool(t3d and t3d.phased_batch and t3d.texture)
@@ -570,8 +869,8 @@ def batch_cmd(
             console.print(
                 Panel(
                     f"[yellow]VRAM livre na GPU 0: ~{free_mib} MiB[/yellow] (recomendável ≥2 GiB "
-                    "para Text2D/Text3D sem OOM). Fecha outro [bold]gameassets batch[/bold], o "
-                    "[bold]Godot[/bold], ou [bold]text3d[/bold] órfão; ou activa "
+                    "para Text2D/Text2Sound/Text3D sem OOM). Fecha outro [bold]gameassets batch[/bold], o "
+                    "[bold]Godot[/bold], ou [bold]text3d[/bold]/[bold]text2sound[/bold] órfão; ou activa "
                     "[bold]text2d.cpu: true[/bold] no perfil. "
                     "O batch define [dim]PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True[/dim] "
                     "se ainda não estiver no ambiente.",
@@ -593,12 +892,15 @@ def batch_cmd(
                 TimeElapsedColumn(),
                 console=console,
             ) as progress:
-                task1 = progress.add_task(
-                    "[cyan]Fase 1: PNGs existentes[/cyan]"
-                    if skip_text2d
-                    else "[cyan]Fase 1: Text2D[/cyan]",
-                    total=len(rows),
-                )
+                f1_label = "[cyan]Fase 1: PNGs existentes[/cyan]"
+                if not skip_text2d:
+                    if any_texture2d_row and any_text2d_row:
+                        f1_label = "[cyan]Fase 1: Text2D / Texture2D[/cyan]"
+                    elif any_texture2d_row:
+                        f1_label = "[cyan]Fase 1: Texture2D[/cyan]"
+                    else:
+                        f1_label = "[cyan]Fase 1: Text2D[/cyan]"
+                task1 = progress.add_task(f1_label, total=len(rows))
                 results: list[dict[str, Any]] = []
                 pending_3d_indices: list[int] = []
 
@@ -611,7 +913,10 @@ def batch_cmd(
                         "status": "ok",
                         "image_path": _path_for_log(img_final, manifest_dir),
                         "mesh_path": None,
+                        "audio_path": None,
                         "error": None,
+                        "audio_error": None,
+                        "timings_sec": {},
                     }
 
                     if skip_text2d:
@@ -634,14 +939,27 @@ def batch_cmd(
                             continue
                         results.append(rec)
                         do_3d = with_3d and row.generate_3d
+                        defer_audio = (
+                            row.generate_audio
+                            and not skip_audio
+                            and bool(text2sound_bin)
+                        )
                         if do_3d and text3d_bin:
                             pending_3d_indices.append(idx)
                         else:
-                            append_log(rec)
+                            if not defer_audio:
+                                append_log(rec)
                         progress.advance(task1)
                         continue
 
-                    progress.update(task1, description=f"[cyan]{row.id}[/cyan] · Text2D")
+                    gen_label = (
+                        "Texture2D"
+                        if _row_uses_texture2d(profile, row)
+                        else "Text2D"
+                    )
+                    progress.update(
+                        task1, description=f"[cyan]{row.id}[/cyan] · {gen_label}"
+                    )
                     row_work = batch_tmp / f"{idx:04d}_{_safe_row_dirname(row.id)}"
                     row_work.mkdir(parents=True, exist_ok=True)
                     try:
@@ -649,28 +967,55 @@ def batch_cmd(
                         ext = profile.image_ext
                         img_tmp = row_work / f"ref.{ext}"
                         seed = _seed_for_row(profile, row.id)
+                        tt_line = _texture2d_profile_effective(profile)
+                        if _row_uses_texture2d(profile, row):
+                            rec["texture2d_api"] = True
+                            t2d_args = [
+                                texture2d_bin or "",
+                                "generate",
+                                prompt,
+                                "-o",
+                                str(img_tmp),
+                            ]
+                            if seed is not None:
+                                t2d_args.extend(["--seed", str(seed)])
+                            _append_texture2d_profile_args(tt_line, t2d_args)
+                            tool_fail = "texture2d falhou"
+                            tool_empty = "texture2d não produziu ficheiro de imagem"
+                            tool_short = "texture2d"
+                        else:
+                            t2d_args = [
+                                text2d_bin or "",
+                                "generate",
+                                prompt,
+                                "-o",
+                                str(img_tmp),
+                            ]
+                            if seed is not None:
+                                t2d_args.extend(["--seed", str(seed)])
+                            _append_text2d_profile_args(profile, t2d_args)
+                            tool_fail = "text2d falhou"
+                            tool_empty = "text2d não produziu ficheiro de imagem"
+                            tool_short = "text2d"
 
-                        t2d_args = [
-                            text2d_bin or "",
-                            "generate",
-                            prompt,
-                            "-o",
-                            str(img_tmp),
-                        ]
-                        if seed is not None:
-                            t2d_args.extend(["--seed", str(seed)])
-                        _append_text2d_profile_args(profile, t2d_args)
-
+                        t_img = time.perf_counter()
                         r2 = run_cmd(
                             t2d_args, extra_env=child_env, cwd=manifest_dir
                         )
+                        _timing_append(
+                            rec,
+                            "image_texture2d"
+                            if _row_uses_texture2d(profile, row)
+                            else "image_text2d",
+                            time.perf_counter() - t_img,
+                        )
                         if r2.returncode != 0:
                             failures += 1
-                            err = merge_subprocess_output(r2) or "text2d falhou"
+                            err = merge_subprocess_output(r2) or tool_fail
                             rec["status"] = "error"
                             rec["error"] = err
                             preview = merge_subprocess_output(r2, max_chars=4000) or err
-                            console.print(f"[red]text2d falhou[/red] {row.id}: {preview}")
+                            console.print(f"[red]{tool_short} falhou[/red] {row.id}: {preview}")
                             results.append(rec)
                             append_log(rec)
                             if not continue_on_error:
@@ -680,8 +1025,8 @@ def batch_cmd(
                         if not img_tmp.is_file():
                             failures += 1
                             rec["status"] = "error"
-                            rec["error"] = "text2d não produziu ficheiro de imagem"
-                            console.print(f"[red]text2d sem saída[/red] {row.id}")
+                            rec["error"] = tool_empty
+                            console.print(f"[red]{tool_short} sem saída[/red] {row.id}")
                             results.append(rec)
                             append_log(rec)
                             if not continue_on_error:
@@ -690,15 +1035,156 @@ def batch_cmd(
 
                         _install_file(img_tmp, img_final)
 
+                        if _row_uses_texture2d(profile, row) and tt_line.materialize:
+                            try:
+                                mat_bin = _resolve_materialize_bin_texture2d(tt_line)
+                            except FileNotFoundError as e:
+                                failures += 1
+                                rec["status"] = "error"
+                                rec["error"] = str(e)
+                                console.print(
+                                    f"[red]materialize não encontrado[/red] {row.id}: {e}"
+                                )
+                                results.append(rec)
+                                append_log(rec)
+                                if not continue_on_error:
+                                    raise click.Abort()
+                                continue
+                            maps_dst = _texture2d_material_maps_path_manifest(
+                                profile, manifest_dir, row
+                            )
+                            maps_dst.mkdir(parents=True, exist_ok=True)
+                            margv = _materialize_diffuse_argv(
+                                mat_bin, tt_line, img_final, maps_dst
+                            )
+                            t_mat = time.perf_counter()
+                            r_mat = run_cmd(
+                                margv, extra_env=child_env, cwd=manifest_dir
+                            )
+                            _timing_append(
+                                rec, "materialize_diffuse", time.perf_counter() - t_mat
+                            )
+                            if r_mat.returncode != 0:
+                                failures += 1
+                                err = (
+                                    merge_subprocess_output(r_mat)
+                                    or "materialize falhou"
+                                )
+                                rec["status"] = "error"
+                                rec["error"] = err
+                                preview = (
+                                    merge_subprocess_output(r_mat, max_chars=4000)
+                                    or err
+                                )
+                                console.print(
+                                    f"[red]materialize falhou[/red] {row.id}: {preview}"
+                                )
+                                results.append(rec)
+                                append_log(rec)
+                                if not continue_on_error:
+                                    raise click.Abort()
+                                continue
+
                         results.append(rec)
                         do_3d = with_3d and row.generate_3d
+                        defer_audio = (
+                            row.generate_audio
+                            and not skip_audio
+                            and bool(text2sound_bin)
+                        )
                         if do_3d and text3d_bin:
                             pending_3d_indices.append(idx)
                         else:
-                            append_log(rec)
+                            if not defer_audio:
+                                append_log(rec)
                     finally:
                         shutil.rmtree(row_work, ignore_errors=True)
                         progress.advance(task1)
+
+                if (
+                    not skip_audio
+                    and text2sound_bin
+                    and any(r.generate_audio for r in rows)
+                ):
+                    au_indices = [
+                        i
+                        for i, r in enumerate(rows)
+                        if r.generate_audio and results[i]["status"] == "ok"
+                    ]
+                    if au_indices:
+                        task_au = progress.add_task(
+                            "[cyan]Fase 1b: Text2Sound[/cyan]",
+                            total=len(au_indices),
+                        )
+                        for idx in au_indices:
+                            row = rows[idx]
+                            rec = results[idx]
+                            progress.update(
+                                task_au,
+                                description=f"[cyan]{row.id}[/cyan] · Text2Sound",
+                            )
+                            ts_line = _text2sound_profile_effective(profile)
+                            ext = (ts_line.audio_format or "wav").lower().strip().lstrip(
+                                "."
+                            )
+                            audio_tmp = (
+                                batch_tmp
+                                / f"{idx:04d}_{_safe_row_dirname(row.id)}_audio.{ext}"
+                            )
+                            audio_final = _audio_path_for_row_manifest(
+                                profile, manifest_dir, row
+                            )
+                            prompt_a = build_audio_prompt(profile, preset, row)
+                            argv_au = [
+                                text2sound_bin,
+                                "generate",
+                                prompt_a,
+                                "-o",
+                                str(audio_tmp),
+                            ]
+                            seed_a = _seed_for_row(profile, f"{row.id}:audio")
+                            if seed_a is not None:
+                                argv_au.extend(["--seed", str(seed_a)])
+                            _append_text2sound_profile_args(ts_line, argv_au)
+                            t_au = time.perf_counter()
+                            r_au = run_cmd(
+                                argv_au, extra_env=child_env, cwd=manifest_dir
+                            )
+                            _timing_append(
+                                rec, "text2sound", time.perf_counter() - t_au
+                            )
+                            if r_au.returncode == 0 and audio_tmp.is_file():
+                                _install_file(audio_tmp, audio_final)
+                                rec["audio_path"] = _path_for_log(
+                                    audio_final, manifest_dir
+                                )
+                            else:
+                                err_au = (
+                                    merge_subprocess_output(r_au)
+                                    or "text2sound falhou"
+                                )
+                                rec["audio_error"] = err_au
+                                preview_au = (
+                                    merge_subprocess_output(r_au, max_chars=4000)
+                                    or err_au
+                                )
+                                console.print(
+                                    f"[red]text2sound falhou[/red] {row.id}: {preview_au}"
+                                )
+                            progress.advance(task_au)
+
+                for idx, row in enumerate(rows):
+                    if (
+                        not row.generate_audio
+                        or skip_audio
+                        or not text2sound_bin
+                    ):
+                        continue
+                    if results[idx]["status"] != "ok":
+                        continue
+                    if idx in pending_3d_indices:
+                        continue
+                    append_log(results[idx])
 
                 if with_3d and text3d_bin and pending_3d_indices:
                     console.print(
@@ -765,8 +1251,12 @@ def batch_cmd(
                                 )
                                 if seed is not None:
                                     t3d_args.extend(["--seed", str(seed)])
+                                t_shape = time.perf_counter()
                                 r3 = run_cmd(
                                     t3d_args, extra_env=child_env, cwd=manifest_dir
+                                )
+                                _timing_append(
+                                    rec, "text3d_shape", time.perf_counter() - t_shape
                                 )
                                 if r3.returncode != 0:
                                     failures += 1
@@ -834,8 +1324,12 @@ def batch_cmd(
                                     materialize_maps_dir=maps_tmp,
                                     row=row,
                                 )
+                                t_paint = time.perf_counter()
                                 r4 = run_cmd(
                                     t_tex, extra_env=child_env, cwd=manifest_dir
+                                )
+                                _timing_append(
+                                    rec, "text3d_texture", time.perf_counter() - t_paint
                                 )
                                 if r4.returncode != 0:
                                     failures += 1
@@ -910,8 +1404,14 @@ def batch_cmd(
                                         materialize_maps_dir=maps_tmp,
                                         row=row,
                                     )
+                                    t_mpbr = time.perf_counter()
                                     r5 = run_cmd(
                                         t_mat, extra_env=child_env, cwd=manifest_dir
+                                    )
+                                    _timing_append(
+                                        rec,
+                                        "text3d_materialize_pbr",
+                                        time.perf_counter() - t_mpbr,
                                     )
                                     if r5.returncode != 0:
                                         failures += 1
@@ -983,9 +1483,11 @@ def batch_cmd(
                                 )
                                 if seed is not None:
                                     t3d_args.extend(["--seed", str(seed)])
+                                t_t3 = time.perf_counter()
                                 r3 = run_cmd(
                                     t3d_args, extra_env=child_env, cwd=manifest_dir
                                 )
+                                _timing_append(rec, "text3d", time.perf_counter() - t_t3)
                                 if r3.returncode != 0:
                                     failures += 1
                                     err = merge_subprocess_output(r3) or "text3d falhou"
@@ -1264,6 +1766,10 @@ def resume_cmd(
     except FileNotFoundError:
         text2d_bin = None
     try:
+        texture2d_bin: str | None = resolve_binary("TEXTURE2D_BIN", "texture2d")
+    except FileNotFoundError:
+        texture2d_bin = None
+    try:
         text3d_bin: str | None = resolve_binary("TEXT3D_BIN", "text3d")
     except FileNotFoundError:
         text3d_bin = None
@@ -1340,8 +1846,19 @@ def resume_cmd(
     plan_table.add_column("Fase", style="bold")
     plan_table.add_column("Pendentes", justify="right")
     plan_table.add_column("Ação")
-    plan_table.add_row("1. Imagem (text2d)", str(counts[NEED_IMAGE]),
-                       "text2d generate" if counts[NEED_IMAGE] > 0 else "[green]OK[/green]")
+    need_img_items = [it for it in items if it["state"] == NEED_IMAGE]
+    srcs = {effective_image_source(profile, it["row"]) for it in need_img_items}
+    if len(srcs) > 1:
+        img_label = "text2d/texture2d"
+    elif "texture2d" in srcs:
+        img_label = "texture2d"
+    else:
+        img_label = "text2d"
+    plan_table.add_row(
+        f"1. Imagem ({img_label})",
+        str(counts[NEED_IMAGE]),
+        f"{img_label} generate" if counts[NEED_IMAGE] > 0 else "[green]OK[/green]",
+    )
     plan_table.add_row("2. Shape (hunyuan)", str(counts[NEED_SHAPE] + counts[NEED_IMAGE]),
                        "text3d generate --from-image" if (counts[NEED_SHAPE] + counts[NEED_IMAGE]) > 0 else "[green]OK[/green]")
     paint_pending = counts[NEED_PAINT] + counts[NEED_SHAPE] + counts[NEED_IMAGE]
@@ -1358,8 +1875,25 @@ def resume_cmd(
         console.print("[bold green]Todos os assets estão completos.[/bold green]")
         return
 
-    if counts[NEED_IMAGE] > 0 and not text2d_bin:
-        console.print("[yellow]AVISO: text2d não encontrado — 27 imagens serão saltadas.[/yellow]")
+    if counts[NEED_IMAGE] > 0:
+        need_texture2d = any(
+            effective_image_source(profile, it["row"]) == "texture2d"
+            for it in items
+            if it["state"] == NEED_IMAGE
+        )
+        need_text2d = any(
+            effective_image_source(profile, it["row"]) == "text2d"
+            for it in items
+            if it["state"] == NEED_IMAGE
+        )
+        if need_texture2d and not texture2d_bin:
+            console.print(
+                "[yellow]AVISO: texture2d não encontrado — linhas texture2d serão saltadas.[/yellow]"
+            )
+        if need_text2d and not text2d_bin:
+            console.print(
+                "[yellow]AVISO: text2d não encontrado — linhas text2d serão saltadas.[/yellow]"
+            )
     if (counts[NEED_SHAPE] + counts[NEED_PAINT] + counts[NEED_MATERIALIZE]) > 0 and not text3d_bin:
         raise click.ClickException("text3d não encontrado. Define TEXT3D_BIN ou instala o pacote.")
 
@@ -1374,28 +1908,97 @@ def resume_cmd(
 
     # --- Fase 1: Imagens ---
     need_img = [it for it in items if it["state"] == NEED_IMAGE]
-    if need_img and text2d_bin:
-        console.print(f"\n[bold cyan]Fase 1: Text2D ({len(need_img)} imagens)[/bold cyan]")
+    img_mixed = (
+        len({effective_image_source(profile, x["row"]) for x in need_img}) > 1
+        if need_img
+        else False
+    )
+    img_phase = (
+        "Text2D / Texture2D"
+        if img_mixed
+        else (
+            "Texture2D"
+            if need_img
+            and effective_image_source(profile, need_img[0]["row"]) == "texture2d"
+            else "Text2D"
+        )
+    )
+    if need_img:
+        console.print(f"\n[bold cyan]Fase 1: {img_phase} ({len(need_img)} imagens)[/bold cyan]")
         with Progress(SpinnerColumn(), TextColumn("{task.description}"), BarColumn(),
                        TextColumn("{task.completed}/{task.total}"), TimeElapsedColumn(),
                        console=console) as progress:
-            task = progress.add_task("[cyan]Text2D[/cyan]", total=len(need_img))
+            task = progress.add_task(f"[cyan]{img_phase}[/cyan]", total=len(need_img))
             for it in need_img:
                 row = it["row"]
-                progress.update(task, description=f"[cyan]{row.id}[/cyan] · Text2D")
+                src = effective_image_source(profile, row)
+                tt_line = _texture2d_profile_effective(profile)
+                row_label = "Texture2D" if src == "texture2d" else "Text2D"
+                progress.update(
+                    task, description=f"[cyan]{row.id}[/cyan] · {row_label}"
+                )
                 it["row_work"].mkdir(parents=True, exist_ok=True)
                 tmp_img = it["row_work"] / f"image.{profile.image_ext}"
                 prompt_2d = build_prompt(profile, preset, row, for_3d=False)
-                argv = [text2d_bin, "generate", prompt_2d, "-o", str(tmp_img)]
-                _append_text2d_profile_args(profile, argv)
+                if src == "texture2d":
+                    img_bin = texture2d_bin
+                    if not img_bin:
+                        failures += 1
+                        console.print(
+                            f"  [red]FAIL[/red] {row.id} (texture2d não encontrado)"
+                        )
+                        progress.advance(task)
+                        continue
+                    argv = [img_bin, "generate", prompt_2d, "-o", str(tmp_img)]
+                    _append_texture2d_profile_args(tt_line, argv)
+                else:
+                    img_bin = text2d_bin
+                    if not img_bin:
+                        failures += 1
+                        console.print(
+                            f"  [red]FAIL[/red] {row.id} (text2d não encontrado)"
+                        )
+                        progress.advance(task)
+                        continue
+                    argv = [img_bin, "generate", prompt_2d, "-o", str(tmp_img)]
+                    _append_text2d_profile_args(profile, argv)
                 seed = _seed_for_row(profile, row.id)
                 if seed is not None:
                     argv.extend(["--seed", str(seed)])
                 r = run_cmd(argv, extra_env=child_env, cwd=manifest_dir)
                 if r.returncode == 0 and tmp_img.is_file():
                     _install_file(tmp_img, it["img_final"])
-                    it["state"] = NEED_SHAPE
-                    console.print(f"  [green]OK[/green] {row.id}")
+                    mat_ok = True
+                    if src == "texture2d" and tt_line.materialize:
+                        try:
+                            mat_b = _resolve_materialize_bin_texture2d(tt_line)
+                        except FileNotFoundError as e:
+                            failures += 1
+                            mat_ok = False
+                            console.print(
+                                f"  [red]FAIL[/red] {row.id} (materialize): {e}"
+                            )
+                        if mat_ok:
+                            maps_dst = _texture2d_material_maps_path_manifest(
+                                profile, manifest_dir, row
+                            )
+                            maps_dst.mkdir(parents=True, exist_ok=True)
+                            margv = _materialize_diffuse_argv(
+                                mat_b, tt_line, it["img_final"], maps_dst
+                            )
+                            r_m = run_cmd(
+                                margv, extra_env=child_env, cwd=manifest_dir
+                            )
+                            if r_m.returncode != 0:
+                                failures += 1
+                                mat_ok = False
+                                err_m = merge_subprocess_output(r_m, max_chars=200) or "?"
+                                console.print(
+                                    f"  [red]FAIL[/red] {row.id} (materialize): {err_m}"
+                                )
+                    if mat_ok:
+                        it["state"] = NEED_SHAPE
+                        console.print(f"  [green]OK[/green] {row.id}")
                 else:
                     failures += 1
                     console.print(f"  [red]FAIL[/red] {row.id}")
