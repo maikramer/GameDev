@@ -34,5 +34,4 @@ hy3dgen @ git+https://github.com/Tencent-Hunyuan/Hunyuan3D-2.git
 
 # gamedev-shared: não repetir aqui — vem como dependência do text2d (evita conflito pip file://).
 
-pytest>=7.4.0
-black>=23.0.0
+# Dev dependencies movidas para pyproject.toml [project.optional-dependencies.dev]

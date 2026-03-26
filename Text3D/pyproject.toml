@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "text3d"
+version = "0.1.0"
+description = "Text-to-3D com Text2D + Hunyuan3D-2mini (pouca VRAM)"
+requires-python = ">=3.10"
+license = "MIT"
+dependencies = [
+    "torch>=2.1.0",
+    "torchvision>=0.16.0",
+    "diffusers>=0.37.0",
+    "transformers>=4.48.0",
+    "accelerate>=0.24.0",
+    "huggingface-hub>=0.20.0",
+    "numpy>=1.24.0",
+    "Pillow>=10.0.0",
+    "trimesh>=4.0.0",
+    "imageio>=2.31.0",
+    "imageio-ffmpeg>=0.4.9",
+    "click>=8.1.0",
+    "rich>=13.0.0",
+    "rich-click>=1.8.0",
+    "tqdm>=4.66.0",
+    "pydantic>=2.0.0",
+    "text2d",
+    "hy3dgen @ git+https://github.com/Tencent-Hunyuan/Hunyuan3D-2.git",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Topic :: Multimedia :: Graphics :: 3D Modeling",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4.0", "pytest-cov>=4.0.0", "ruff>=0.11.0"]
+
+[project.scripts]
+text3d = "text3d.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+text3d = ["cursor_skill/*.md"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
