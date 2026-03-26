@@ -57,7 +57,8 @@ O monorepo inclui um instalador unificado que instala qualquer ferramenta automa
 ./install.sh text2sound                 # Text2Sound (requer CUDA; instala PyTorch)
 ./install.sh all                        # Instalar tudo
 
-# Windows PowerShell
+# Windows PowerShell (recomendado no Windows: o script detecta `python` e passa-o ao instalador)
+.\install.ps1 --list
 .\install.ps1 materialize
 .\install.ps1 text2d
 .\install.ps1 texture2d
@@ -65,7 +66,7 @@ O monorepo inclui um instalador unificado que instala qualquer ferramenta automa
 .\install.ps1 text2sound
 .\install.ps1 all
 
-# Windows CMD
+# Windows CMD (idem: `install.bat` passa o interpretador ao instalador)
 install.bat materialize
 ```
 

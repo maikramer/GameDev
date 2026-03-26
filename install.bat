@@ -22,4 +22,4 @@ if errorlevel 1 (
 set "SCRIPT_DIR=%~dp0"
 set "PYTHONPATH=%SCRIPT_DIR%Shared\src;%PYTHONPATH%"
 
-%PY% -m gamedev_shared.installer.unified %*
+%PY% -m gamedev_shared.installer.unified --python %PY% %*

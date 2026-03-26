@@ -68,8 +68,9 @@ function Prepare-InstallerEnvironment {
 
 $PythonExe = Prepare-InstallerEnvironment
 
-Write-Host "${Cyan}GameDev Monorepo — Instalador Unificado${Reset}"
+Write-Host "${Cyan}GameDev Monorepo - Instalador Unificado${Reset}"
 Write-Host "========================================"
 
-& $PythonExe -m gamedev_shared.installer.unified @args
+# Passa o Python detectado ao instalador (venv + pip usam o mesmo exe).
+& $PythonExe -m gamedev_shared.installer.unified --python $PythonExe @args
 exit $LASTEXITCODE
