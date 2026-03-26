@@ -2,8 +2,17 @@
 
 from __future__ import annotations
 
+import secrets
 import time
 from pathlib import Path
+from typing import Optional
+
+
+def resolve_effective_seed(seed: Optional[int]) -> int:
+    """Seed usado na geração: o valor dado ou um inteiro aleatório (reprodutível via JSON)."""
+    if seed is not None:
+        return int(seed)
+    return secrets.randbelow(2**32)
 
 
 def format_bytes(bytes_val: int | float) -> str:

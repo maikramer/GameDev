@@ -1,7 +1,8 @@
 """Text2Sound — núcleo de geração de áudio via difusão condicionada.
 
-Encapsula carregamento do modelo Stable Audio Open 1.0 e geração de áudio
-estéreo a 44.1 kHz com singleton de modelo e gestão automática de VRAM.
+Suporta ``stabilityai/stable-audio-open-1.0`` (música, até ~47s) e
+``stabilityai/stable-audio-open-small`` (efeitos, até ~11s), ambos via
+``stable-audio-tools`` e ``get_pretrained_model``.
 """
 
 from __future__ import annotations
@@ -18,7 +19,9 @@ from einops import rearrange
 from stable_audio_tools import get_pretrained_model
 from stable_audio_tools.inference.generation import generate_diffusion_cond
 
-DEFAULT_MODEL_ID = "stabilityai/stable-audio-open-1.0"
+from .models import MODEL_MUSIC_ID
+
+DEFAULT_MODEL_ID = MODEL_MUSIC_ID
 DEFAULT_SAMPLER = "dpmpp-3m-sde"
 DEFAULT_STEPS = 100
 DEFAULT_CFG_SCALE = 7.0
@@ -118,6 +121,11 @@ class AudioGenerator:
         return self._device
 
     @property
+    def half_precision(self) -> bool:
+        """True se o modelo está em float16 (manual ou heurística VRAM)."""
+        return self._half
+
+    @property
     def sample_rate(self) -> int:
         self._ensure_loaded()
         return int(self._model_config["sample_rate"])
@@ -191,7 +199,7 @@ class AudioGenerator:
 
         Args:
             prompt: Descrição textual do áudio desejado.
-            duration: Duração em segundos (0–47).
+            duration: Duração em segundos (limite máximo depende do modelo; ver ``ModelSpec`` / CLI).
             steps: Passos de difusão (mais = melhor qualidade, mais lento).
             cfg_scale: Classifier-free guidance scale.
             seed: Seed para reprodutibilidade (None = aleatório).

@@ -79,6 +79,12 @@ class TestAudioGenerator:
         gen = AudioGenerator(model_id="test/model")
         assert gen.model_id == "test/model"
 
+    def test_half_precision_property(self):
+        gen = AudioGenerator(device="cpu", half_precision=False)
+        assert gen.half_precision is False
+        gen_on = AudioGenerator(device="cpu", half_precision=True)
+        assert gen_on.half_precision is True
+
     def test_singleton_same_model(self):
         inst1 = AudioGenerator.get_instance(model_id="m1", device="cpu")
         inst2 = AudioGenerator.get_instance(model_id="m1", device="cpu")

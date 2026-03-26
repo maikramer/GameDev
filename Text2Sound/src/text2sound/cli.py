@@ -6,8 +6,18 @@ Text2Sound — CLI principal (text-to-audio).
 import os
 import sys
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Optional
+from typing import Generator, Optional
+
+try:
+    from importlib.metadata import version as _pkg_version
+
+    _CLI_VERSION = _pkg_version("text2sound")
+except Exception:
+    from text2sound import __version__ as _CLI_VERSION
+
+from click.core import ParameterSource
 
 from . import cli_rich  # noqa: F401 — configura rich-click antes dos comandos
 
@@ -32,8 +42,14 @@ from .generator import (
     DEFAULT_STEPS,
     AudioGenerator,
 )
+from .models import (
+    ModelSpec,
+    ProfileName,
+    get_spec,
+    resolve_model_from_profile,
+)
 from .presets import AUDIO_PRESETS, get_preset, list_presets
-from .utils import format_bytes, format_duration, generate_output_path
+from .utils import format_bytes, format_duration, generate_output_path, resolve_effective_seed
 
 console = Console()
 
@@ -45,12 +61,55 @@ def ensure_dirs() -> None:
     DEFAULT_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 
 
+@contextmanager
+def _quiet_third_party_tqdm(verbose: bool) -> Generator[None, None, None]:
+    """Reduz ruído de barras tqdm (Hub/weights) quando não está em modo verbose."""
+    if verbose:
+        yield
+        return
+    prev = os.environ.get("TQDM_DISABLE")
+    os.environ["TQDM_DISABLE"] = "1"
+    try:
+        yield
+    finally:
+        if prev is None:
+            os.environ.pop("TQDM_DISABLE", None)
+        else:
+            os.environ["TQDM_DISABLE"] = prev
+
+
+def _apply_spec_inference_defaults(
+    ctx: click.Context,
+    spec: ModelSpec,
+    duration: float,
+    steps: int,
+    cfg_scale: float,
+    sigma_min: float,
+    sigma_max: float,
+    sampler: str,
+) -> tuple[float, int, float, float, float, str]:
+    """Aplica defaults do ``ModelSpec`` quando o parâmetro veio do default do Click."""
+    if ctx.get_parameter_source("duration") == ParameterSource.DEFAULT:
+        duration = min(duration, spec.max_seconds)
+    if ctx.get_parameter_source("steps") == ParameterSource.DEFAULT:
+        steps = spec.default_steps
+    if ctx.get_parameter_source("cfg_scale") == ParameterSource.DEFAULT:
+        cfg_scale = spec.default_cfg
+    if ctx.get_parameter_source("sigma_min") == ParameterSource.DEFAULT:
+        sigma_min = spec.default_sigma_min
+    if ctx.get_parameter_source("sigma_max") == ParameterSource.DEFAULT:
+        sigma_max = spec.default_sigma_max
+    if ctx.get_parameter_source("sampler") == ParameterSource.DEFAULT:
+        sampler = spec.default_sampler
+    return duration, steps, cfg_scale, sigma_min, sigma_max, sampler
+
+
 @click.group()
-@click.version_option(version="0.1.0", prog_name="text2sound")
+@click.version_option(version=_CLI_VERSION, prog_name="text2sound")
 @click.option("--verbose", "-v", is_flag=True, help="Logs detalhados")
 @click.pass_context
 def cli(ctx: click.Context, verbose: bool) -> None:
-    """Text2Sound — text-to-audio · Stable Audio Open 1.0 (estéreo 44.1 kHz)."""
+    """Text2Sound — text-to-audio · Open 1.0 (música) ou Open Small (efeitos), 44.1 kHz."""
     ctx.ensure_object(dict)
     ctx.obj["VERBOSE"] = verbose
 
@@ -100,22 +159,29 @@ def skill_install_cmd(target: Path, force: bool) -> None:
 
 @cli.command("generate")
 @click.argument("prompt")
+@click.option(
+    "--profile",
+    type=click.Choice(["music", "effects"]),
+    default="music",
+    show_default=True,
+    help="music = Open 1.0 (até ~47s); effects = Open Small (até ~11s, efeitos)",
+)
 @click.option("--output", "-o", type=click.Path(), help="Ficheiro de saída")
 @click.option(
     "--duration",
     "-d",
     default=DEFAULT_DURATION,
     show_default=True,
-    type=click.FloatRange(0.5, 47),
-    help="Duração em segundos",
+    type=float,
+    help="Duração em segundos (máx. depende do modelo: 47 música, 11 efeitos)",
 )
 @click.option(
     "--steps",
     "-s",
     default=DEFAULT_STEPS,
     show_default=True,
-    type=click.IntRange(10, 150),
-    help="Passos de difusão",
+    type=click.IntRange(8, 150),
+    help="Passos de difusão (8+; Open Small usa ~8 por padrão com --profile effects)",
 )
 @click.option(
     "--cfg-scale",
@@ -173,7 +239,10 @@ def skill_install_cmd(target: Path, force: bool) -> None:
     "-m",
     "model_id",
     default=None,
-    help="ID do modelo HF (default: stable-audio-open-1.0)",
+    help=(
+        "Modelo: ID HF ou alias (music, full, effects, small, sfx). "
+        "Tem prioridade sobre --profile."
+    ),
 )
 @click.option(
     "--half/--no-half",
@@ -192,6 +261,7 @@ def skill_install_cmd(target: Path, force: bool) -> None:
 def generate_cmd(
     ctx: click.Context,
     prompt: str,
+    profile: ProfileName,
     output: Optional[str],
     duration: float,
     steps: int,
@@ -220,7 +290,41 @@ def generate_cmd(
         steps = preset_data.get("steps", steps)
         cfg_scale = preset_data.get("cfg_scale", cfg_scale)
 
+    try:
+        resolved_model_id = resolve_model_from_profile(profile, model_id)
+    except ValueError as e:
+        raise click.ClickException(str(e)) from e
+    spec = get_spec(resolved_model_id)
+
+    if not preset or preset == "None":
+        duration, steps, cfg_scale, sigma_min, sigma_max, sampler = (
+            _apply_spec_inference_defaults(
+                ctx,
+                spec,
+                duration,
+                steps,
+                cfg_scale,
+                sigma_min,
+                sigma_max,
+                sampler,
+            )
+        )
+    elif duration > spec.max_seconds:
+        raise click.ClickException(
+            f"Duração {duration}s excede o máximo deste modelo ({spec.max_seconds}s). "
+            f"Use --profile music ou reduza -d."
+        )
+
+    if duration < 0.5 or duration > spec.max_seconds:
+        raise click.ClickException(
+            f"Duração deve estar entre 0.5 e {spec.max_seconds}s para {spec.hf_id}."
+        )
+
+    effective_seed = resolve_effective_seed(seed)
+
     table = Table(show_header=False, box=box.SIMPLE)
+    table.add_row("[bold]Perfil[/bold]", profile)
+    table.add_row("[bold]Modelo[/bold]", f"[cyan]{resolved_model_id}[/cyan]")
     table.add_row("[bold]Prompt[/bold]", f"[cyan]{prompt}[/cyan]")
     table.add_row("[bold]Duração[/bold]", f"{duration}s ({format_duration(duration)})")
     table.add_row("[bold]Passos[/bold]", str(steps))
@@ -229,6 +333,8 @@ def generate_cmd(
     table.add_row("[bold]Sampler[/bold]", sampler)
     if seed is not None:
         table.add_row("[bold]Seed[/bold]", str(seed))
+    else:
+        table.add_row("[bold]Seed[/bold]", f"[dim]aleatório → {effective_seed}[/dim]")
     if preset and preset != "None":
         table.add_row("[bold]Preset[/bold]", preset)
     console.print(
@@ -237,7 +343,7 @@ def generate_cmd(
 
     try:
         gen = AudioGenerator.get_instance(
-            model_id=model_id or "stabilityai/stable-audio-open-1.0",
+            model_id=resolved_model_id,
             half_precision=half_precision,
         )
 
@@ -254,32 +360,43 @@ def generate_cmd(
             console=console,
         ) as progress:
             task = progress.add_task("[cyan]Carregando modelo...", total=None)
-            gen.load()
+            with _quiet_third_party_tqdm(verbose):
+                gen.load()
             progress.update(task, description="[cyan]Gerando áudio...")
 
-            result = gen.generate(
-                prompt=prompt,
-                duration=duration,
-                steps=steps,
-                cfg_scale=cfg_scale,
-                seed=seed,
-                sigma_min=sigma_min,
-                sigma_max=sigma_max,
-                sampler_type=sampler,
-            )
+            with _quiet_third_party_tqdm(verbose):
+                result = gen.generate(
+                    prompt=prompt,
+                    duration=duration,
+                    steps=steps,
+                    cfg_scale=cfg_scale,
+                    seed=effective_seed,
+                    sigma_min=sigma_min,
+                    sigma_max=sigma_max,
+                    sampler_type=sampler,
+                )
 
             progress.update(task, description="[cyan]Processando e gravando...")
 
             metadata = {
                 "prompt": prompt,
+                "profile": profile,
+                "model_id": resolved_model_id,
                 "duration": duration,
                 "steps": steps,
                 "cfg_scale": cfg_scale,
                 "seed": seed,
+                "seed_effective": effective_seed,
                 "sampler": sampler,
+                "sigma_min": sigma_min,
+                "sigma_max": sigma_max,
+                "trim": trim,
+                "half_precision": half_precision,
+                "half_precision_effective": gen.half_precision,
                 "format": fmt,
                 "sample_rate": result.sample_rate,
                 "device": result.device,
+                "text2sound_version": _CLI_VERSION,
             }
             if preset and preset != "None":
                 metadata["preset"] = preset
@@ -309,10 +426,12 @@ def generate_cmd(
         console.print(
             f"[dim]Sample rate: {result.sample_rate} Hz · "
             f"Duração: {format_duration(duration)} · "
-            f"Seed: {seed or 'aleatório'}[/dim]"
+            f"Seed: {effective_seed}[/dim]"
         )
         console.print(f"[dim]Tempo: {elapsed:.1f}s[/dim]")
 
+    except click.ClickException:
+        raise
     except Exception as e:
         console.print(f"\n[bold red]\u2717 Erro:[/bold red] {e}")
         if verbose:
@@ -322,32 +441,68 @@ def generate_cmd(
 
 @cli.command("batch")
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
-@click.option("--output-dir", "-d", type=click.Path(path_type=Path), default=None)
+@click.option(
+    "--profile",
+    type=click.Choice(["music", "effects"]),
+    default="music",
+    show_default=True,
+    help="music ou effects (Open Small, até ~11s)",
+)
+@click.option(
+    "--output-dir",
+    "-O",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Pasta de saída (em generate, -d é duração — aqui use -O)",
+)
 @click.option("--preset", "-p", default=None, help="Preset aplicado a todos os prompts")
 @click.option(
     "--duration",
     default=DEFAULT_DURATION,
-    type=click.FloatRange(0.5, 47),
+    type=float,
+    help="Duração por clip (máx. depende do modelo)",
 )
-@click.option("--steps", "-s", default=DEFAULT_STEPS, type=click.IntRange(10, 150))
+@click.option("--steps", "-s", default=DEFAULT_STEPS, type=click.IntRange(8, 150))
 @click.option("--cfg-scale", "-c", default=DEFAULT_CFG_SCALE, type=float)
+@click.option("--sigma-min", default=DEFAULT_SIGMA_MIN, type=float)
+@click.option("--sigma-max", default=DEFAULT_SIGMA_MAX, type=float)
+@click.option("--sampler", default=DEFAULT_SAMPLER, type=str)
 @click.option("--format", "-f", "fmt", default="wav", type=click.Choice(list(SUPPORTED_FORMATS)))
 @click.option("--trim/--no-trim", default=True)
-@click.option("--model", "-m", "model_id", default=None)
+@click.option("--model", "-m", "model_id", default=None, help="ID HF ou alias (music, effects, small, …)")
+@click.option(
+    "--half/--no-half",
+    "half_precision",
+    default=None,
+    help="Float16 (auto em GPUs modestas)",
+)
+@click.option(
+    "--seed",
+    type=int,
+    default=None,
+    help="Seed base por clip: usa seed, seed+1, seed+2, … (omitir = aleatório por linha)",
+)
 @click.pass_context
 def batch_cmd(
     ctx: click.Context,
     file: Path,
+    profile: ProfileName,
     output_dir: Optional[Path],
     preset: Optional[str],
     duration: float,
     steps: int,
     cfg_scale: float,
+    sigma_min: float,
+    sigma_max: float,
+    sampler: str,
     fmt: str,
     trim: bool,
     model_id: Optional[str],
+    half_precision: Optional[bool],
+    seed: Optional[int],
 ) -> None:
     """Gera áudios em batch a partir de um ficheiro de prompts (um por linha)."""
+    verbose = bool(ctx.obj.get("VERBOSE"))
     prompts = [
         line.strip()
         for line in file.read_text(encoding="utf-8").splitlines()
@@ -366,15 +521,47 @@ def batch_cmd(
         steps = preset_data.get("steps", steps)
         cfg_scale = preset_data.get("cfg_scale", cfg_scale)
 
+    try:
+        resolved_model_id = resolve_model_from_profile(profile, model_id)
+    except ValueError as e:
+        raise click.ClickException(str(e)) from e
+    spec = get_spec(resolved_model_id)
+
+    if not preset or preset == "None":
+        duration, steps, cfg_scale, sigma_min, sigma_max, sampler = (
+            _apply_spec_inference_defaults(
+                ctx,
+                spec,
+                duration,
+                steps,
+                cfg_scale,
+                sigma_min,
+                sigma_max,
+                sampler,
+            )
+        )
+    elif duration > spec.max_seconds:
+        raise click.ClickException(
+            f"Duração {duration}s excede o máximo deste modelo ({spec.max_seconds}s)."
+        )
+
+    if duration < 0.5 or duration > spec.max_seconds:
+        raise click.ClickException(
+            f"Duração deve estar entre 0.5 e {spec.max_seconds}s para {spec.hf_id}."
+        )
+
     console.print(f"[bold]Batch:[/bold] {len(prompts)} prompts de [cyan]{file}[/cyan]")
+    console.print(f"[dim]Modelo: {resolved_model_id} · perfil: {profile}[/dim]")
 
     out = output_dir or DEFAULT_AUDIO_DIR
     out.mkdir(parents=True, exist_ok=True)
 
     gen = AudioGenerator.get_instance(
-        model_id=model_id or "stabilityai/stable-audio-open-1.0",
+        model_id=resolved_model_id,
+        half_precision=half_precision,
     )
-    gen.load()
+    with _quiet_third_party_tqdm(verbose):
+        gen.load()
 
     ok_count = 0
     for idx, prompt_text in enumerate(prompts):
@@ -383,23 +570,45 @@ def batch_cmd(
         else:
             full_prompt = prompt_text
 
+        if seed is not None:
+            line_seed = int(seed) + idx
+        else:
+            line_seed = resolve_effective_seed(None)
+
         try:
-            result = gen.generate(
-                prompt=full_prompt,
-                duration=duration,
-                steps=steps,
-                cfg_scale=cfg_scale,
-            )
+            with _quiet_third_party_tqdm(verbose):
+                result = gen.generate(
+                    prompt=full_prompt,
+                    duration=duration,
+                    steps=steps,
+                    cfg_scale=cfg_scale,
+                    seed=line_seed,
+                    sigma_min=sigma_min,
+                    sigma_max=sigma_max,
+                    sampler_type=sampler,
+                )
 
             out_path = generate_output_path(prompt_text, out, fmt)
             metadata = {
                 "prompt": full_prompt,
+                "profile": profile,
+                "model_id": resolved_model_id,
                 "duration": duration,
                 "steps": steps,
                 "cfg_scale": cfg_scale,
+                "seed": seed,
+                "seed_effective": line_seed,
+                "sampler": sampler,
+                "sigma_min": sigma_min,
+                "sigma_max": sigma_max,
+                "trim": trim,
+                "half_precision": half_precision,
+                "half_precision_effective": gen.half_precision,
                 "format": fmt,
                 "sample_rate": result.sample_rate,
+                "device": result.device,
                 "batch_index": idx,
+                "text2sound_version": _CLI_VERSION,
             }
             if preset and preset != "None":
                 metadata["preset"] = preset
@@ -469,7 +678,8 @@ def info_cmd() -> None:
     t.add_column("Item", style="cyan", no_wrap=True)
     t.add_column("Valor", style="green")
 
-    t.add_row("Modelo (default)", "stabilityai/stable-audio-open-1.0")
+    t.add_row("Música (default)", "stabilityai/stable-audio-open-1.0 — até ~47s")
+    t.add_row("Efeitos", "stabilityai/stable-audio-open-small — até ~11s, steps~8, pingpong")
     t.add_row("Sample rate", "44100 Hz")
     t.add_row("Canais", "Estéreo (2)")
 
@@ -477,7 +687,7 @@ def info_cmd() -> None:
     t.add_row("HF Token", "[green]configurado[/green]" if token else "[red]não definido[/red]")
     t.add_row(
         "HF_HOME (cache Hub)",
-        os.environ.get("HF_HOME") or "[dim]~/.cache/huggingface (defeito)[/dim]",
+        os.environ.get("HF_HOME") or "[dim]~/.cache/huggingface (padrão)[/dim]",
     )
     t.add_row("Saída padrão", str(DEFAULT_AUDIO_DIR.resolve()))
     t.add_row("Presets disponíveis", str(len(AUDIO_PRESETS)))

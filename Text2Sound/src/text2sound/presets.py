@@ -2,6 +2,10 @@
 
 Cada preset define prompt, duração, passos de difusão e CFG scale
 otimizados para cenários comuns de game audio.
+
+Os presets assumem o modelo **Open 1.0** (música, até ~47s). Com
+``--profile effects`` (Open Small, máx. ~11s), presets com duração
+superior falham na validação — usa ``-d`` explícito ou perfil música.
 """
 
 from __future__ import annotations

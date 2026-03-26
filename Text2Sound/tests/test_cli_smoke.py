@@ -34,11 +34,13 @@ class TestCLISmoke:
         assert "--duration" in result.output
         assert "--steps" in result.output
         assert "--cfg-scale" in result.output
+        assert "--profile" in result.output
 
     def test_batch_help(self, runner):
         result = runner.invoke(cli, ["batch", "--help"])
         assert result.exit_code == 0
         assert "file" in result.output.lower()
+        assert "--output-dir" in result.output or "-O" in result.output
 
     def test_presets_command(self, runner):
         result = runner.invoke(cli, ["presets"])
@@ -50,6 +52,7 @@ class TestCLISmoke:
         result = runner.invoke(cli, ["info"])
         assert result.exit_code == 0
         assert "stable-audio-open-1.0" in result.output or "44100" in result.output
+        assert "open-small" in result.output or "Efeitos" in result.output
 
     def test_skill_help(self, runner):
         result = runner.invoke(cli, ["skill", "--help"])
@@ -77,3 +80,33 @@ class TestGenerateValidation:
     def test_invalid_format(self, runner):
         result = runner.invoke(cli, ["generate", "test", "--format", "mp3"])
         assert result.exit_code != 0
+
+    def test_effects_duration_over_max(self, runner):
+        result = runner.invoke(
+            cli,
+            [
+                "generate",
+                "laser",
+                "--profile",
+                "effects",
+                "--duration",
+                "12",
+            ],
+        )
+        assert result.exit_code != 0
+        assert "11" in result.output or "excede" in result.output.lower()
+
+    @pytest.mark.slow
+    def test_effects_duration_ok_reaches_generate(self, runner):
+        result = runner.invoke(
+            cli,
+            [
+                "generate",
+                "laser",
+                "--profile",
+                "effects",
+                "--duration",
+                "2",
+            ],
+        )
+        assert "Configuração" in result.output

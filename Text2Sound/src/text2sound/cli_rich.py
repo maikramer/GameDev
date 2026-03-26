@@ -5,10 +5,10 @@ from __future__ import annotations
 from typing import Final
 
 _HEADER: Final = (
-    "[bold cyan]Text2Sound[/bold cyan] — text-to-audio · Stable Audio Open 1.0"
+    "[bold cyan]Text2Sound[/bold cyan] — text-to-audio · Open 1.0 (música) / Open Small (efeitos)"
 )
 _FOOTER: Final = (
-    "[dim]Docs: README · Token HF: HF_TOKEN · Modelo: stabilityai/stable-audio-open-1.0[/dim]"
+    "[dim]README · HF_TOKEN · --profile music|effects · modelos no Hugging Face[/dim]"
 )
 
 
