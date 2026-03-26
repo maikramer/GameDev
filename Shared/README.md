@@ -16,6 +16,24 @@ Biblioteca partilhada do monorepo **GameDev** — código comum entre Text2D, Te
 | `gamedev_shared.installer.registry` | Registry de ferramentas do monorepo (ToolSpec, TOOLS, find_monorepo_root) |
 | `gamedev_shared.installer.unified` | Instalador unificado — instala qualquer ferramenta (`gamedev-install` CLI) |
 
+## Exemplo de uso
+
+```python
+from gamedev_shared.logging import get_logger
+
+log = get_logger("meu_modulo")
+log.info("Mensagem informativa")
+log.step("A processar item 1/10")
+log.success("Concluído com sucesso")
+```
+
+```python
+from gamedev_shared.subprocess_utils import resolve_binary, run_cmd
+
+bin_path = resolve_binary("TEXT2D_BIN", "text2d")
+result = run_cmd([bin_path, "generate", "um gato"], verbose=True)
+```
+
 ## Instalador unificado
 
 Ao instalar o pacote `gamedev-shared`, fica disponível o comando `gamedev-install`:
@@ -53,3 +71,30 @@ pip install -e "Shared/[cli]"
 - `gpu` — torch (para `gamedev_shared.gpu`)
 - `cli` — click + rich-click (para `gamedev_shared.cli_rich`)
 - `dev` — pytest
+
+## Desenvolvimento
+
+```bash
+# Instalar com extras de dev
+pip install -e "Shared/[dev]"
+
+# Correr testes
+pytest Shared/tests/ -v
+
+# Ou via Makefile na raiz do monorepo
+make test-shared
+```
+
+## Variáveis de Ambiente
+
+Definidas em `gamedev_shared.env` e usadas por todos os pacotes do monorepo:
+
+| Variável | Descrição |
+|----------|-----------|
+| `TEXT2D_BIN` | Caminho para o binário `text2d` (fallback: `text2d` no `PATH`) |
+| `TEXT3D_BIN` | Caminho para o binário `text3d` |
+| `TEXT2SOUND_BIN` | Caminho para o binário `text2sound` |
+| `TEXTURE2D_BIN` | Caminho para o binário `texture2d` |
+| `MATERIALIZE_BIN` | Caminho para o binário `materialize` |
+| `HF_HOME` | Diretório de cache Hugging Face |
+| `PYTORCH_CUDA_ALLOC_CONF` | Configuração de alocação CUDA (auto-definida pelo monorepo se vazia) |

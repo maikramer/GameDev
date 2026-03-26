@@ -97,6 +97,8 @@ O instalador não usa PyTorch local — apenas dependências em `config/requirem
 | `HF_TOKEN` | Token Hugging Face (ou `HUGGINGFACEHUB_API_TOKEN`) |
 | `TEXTURE2D_MODEL_ID` | Override do modelo (default: `gokaygokay/Flux-Seamless-Texture-LoRA`) |
 
+> **Nota:** a geração usa a HF Inference API (cloud). O tempo de resposta depende da carga dos servidores. Não há consumo de GPU local. A API pode ter rate limits — consulta a [documentação da HF Inference API](https://huggingface.co/docs/api-inference/) para detalhes.
+
 ## Integração com Materialize
 
 Gere a textura diffuse e use o Materialize para mapas PBR:
@@ -104,6 +106,39 @@ Gere a textura diffuse e use o Materialize para mapas PBR:
 ```bash
 texture2d generate "mossy stone" -o diffuse.png
 materialize diffuse.png --output-dir pbr/
+```
+
+## Integração com GameAssets
+
+O [GameAssets](../GameAssets/) pode usar `texture2d` como fonte de imagem:
+
+- No `game.yaml`, definir `image_source: texture2d` (global) ou por linha no CSV com coluna `image_source`.
+- Com `texture2d.materialize: true` no perfil, o GameAssets gera mapas PBR automaticamente via Materialize.
+
+```bash
+gameassets batch --profile game.yaml --manifest manifest.csv
+```
+
+Variável `TEXTURE2D_BIN` se o comando não estiver no `PATH`.
+
+## Estrutura
+
+```
+Texture2D/
+├── src/texture2d/
+│   ├── cli.py             # CLI Click (generate, batch, presets, info)
+│   ├── generator.py       # Cliente HF Inference API
+│   ├── presets.py         # 13 presets de materiais
+│   ├── image_processor.py # Processamento de imagem
+│   └── utils.py           # Utilitários
+├── config/
+│   ├── requirements.txt
+│   └── requirements-dev.txt
+├── scripts/
+│   ├── setup.sh           # Setup do venv + deps
+│   ├── install.sh         # Instalador com wrappers
+│   └── installer.py       # Instalador standalone
+└── tests/
 ```
 
 ## Testes

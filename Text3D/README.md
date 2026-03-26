@@ -32,6 +32,16 @@ pip install -e .
 
 ## Uso
 
+| Subcomando | Descrição |
+|-----------|-----------|
+| `text3d generate PROMPT` | Gera mesh 3D a partir de texto (Text2D → Hunyuan3D) |
+| `text3d doctor` | Verifica PyTorch, VRAM e dependências nativas |
+| `text3d info` | Mostra configuração, GPU, cache e ambiente |
+| `text3d models` | Lista modelos disponíveis |
+| `text3d convert FILE` | Converte mesh entre formatos (PLY → GLB, etc.) |
+| `text3d texture FILE` | Aplica textura Paint a um mesh existente |
+| `text3d skill install` | Instala Agent Skill Cursor no projeto |
+
 ```bash
 text3d generate "um robô futurista" --output robo.glb
 
@@ -143,6 +153,30 @@ text3d generate "carro" --mesh-smooth 1
 # Manter todas as ilhas (se precisares de peças separadas)
 text3d generate "objeto" --no-mesh-repair
 ```
+
+## Documentação adicional
+
+| Ficheiro | Descrição |
+|----------|-----------|
+| [docs/INSTALL.md](docs/INSTALL.md) | Guia de instalação detalhado |
+| [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Resolução de problemas |
+| [docs/EXAMPLES.md](docs/EXAMPLES.md) | Exemplos de uso avançado |
+| [docs/API.md](docs/API.md) | Referência da API Python |
+| [docs/PAINT_SETUP.md](docs/PAINT_SETUP.md) | Setup do Hunyuan3D-Paint + custom_rasterizer |
+| [docs/PBR_MATERIALIZE.md](docs/PBR_MATERIALIZE.md) | Fluxo PBR com Materialize CLI |
+
+## Variáveis de Ambiente
+
+| Variável | Descrição |
+|----------|-----------|
+| `TEXT2D_MODEL_ID` | Override do modelo HF para a fase Text2D |
+| `MATERIALIZE_BIN` | Caminho para o binário `materialize` (se não estiver no `PATH`) |
+| `HF_HOME` | Diretório de cache Hugging Face (defeito: `~/.cache/huggingface`) |
+| `PYTORCH_CUDA_ALLOC_CONF` | Configuração CUDA (auto-definida como `expandable_segments:True` se vazia) |
+| `TEXT3D_ALLOW_SHARED_GPU` | Permitir GPU partilhada com outros processos (`1` = sim) |
+| `TEXT3D_GPU_KILL_OTHERS` | Controlar terminação de processos GPU concorrentes (`0` = desligar, `1` = forçar) |
+| `TEXT3D_EXPORT_ROTATION_X_DEG` | Rotação X em graus ao exportar mesh (defeito: 90°, Hunyuan→Y-up) |
+| `TEXT3D_EXPORT_ROTATION_X_RAD` | Alternativa em radianos |
 
 ## Créditos
 

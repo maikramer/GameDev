@@ -111,6 +111,48 @@ text2sound --help   # ajuda completa
 | `--seed` | aleatório | Seed para reprodutibilidade |
 | `--trim/--no-trim` | trim | Remover silêncio trailing |
 
+## Estrutura
+
+```
+Text2Sound/
+├── src/text2sound/
+│   ├── cli.py             # CLI Click (generate, batch, presets, info)
+│   ├── generator.py       # Pipeline Stable Audio Open
+│   ├── presets.py         # Presets de áudio para game dev
+│   ├── audio_processor.py # Processamento de áudio (trim, etc.)
+│   └── utils.py           # Utilitários
+├── config/
+│   ├── requirements.txt
+│   └── requirements-dev.txt
+├── scripts/
+│   ├── setup.sh           # Setup do venv + deps
+│   └── installer.py       # Instalador standalone
+└── tests/
+```
+
+## Variáveis de Ambiente
+
+| Variável | Descrição |
+|----------|-----------|
+| `HF_TOKEN` | Token Hugging Face para autenticação (ou `HUGGINGFACEHUB_API_TOKEN`) |
+| `HF_HOME` | Diretório de cache Hugging Face (padrão: `~/.cache/huggingface`) |
+| `PYTORCH_CUDA_ALLOC_CONF` | Configuração de alocação CUDA (auto-definida se vazia) |
+
+## Integração com GameAssets
+
+O [GameAssets](../GameAssets/) pode invocar `text2sound` automaticamente durante um batch:
+
+1. No `manifest.csv`, adicionar coluna **`generate_audio`** com valor `true` nas linhas desejadas.
+2. No `game.yaml`, configurar o bloco **`text2sound`** (duração, passos, formato, etc.).
+3. Correr `gameassets batch` — o áudio é gerado após a imagem 2D de cada linha.
+
+```bash
+# GameAssets invoca text2sound por linha com generate_audio=true
+gameassets batch --profile game.yaml --manifest manifest.csv
+```
+
+Variável `TEXT2SOUND_BIN` se o comando não estiver no `PATH`.
+
 ## Desenvolvimento
 
 ```bash

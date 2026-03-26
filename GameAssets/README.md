@@ -48,6 +48,14 @@ O ficheiro `activate.sh` segue o padrão do Text2D: corre um comando já com o v
 
 ## Fluxo em 3 passos
 
+| Subcomando | Descrição |
+|-----------|-----------|
+| `gameassets init` | Cria `game.yaml` e `manifest.csv` numa pasta |
+| `gameassets prompts` | Pré-visualiza prompts sem gerar imagens |
+| `gameassets batch` | Gera imagens (e opcionalmente 3D/áudio) em batch |
+| `gameassets info` | Mostra configuração, binários detetados, e ambiente |
+| `gameassets skill install` | Instala Agent Skill Cursor no projeto |
+
 ### 1. Inicializar
 
 ```bash
@@ -175,6 +183,39 @@ Podes criar `presets.local.yaml` ao lado do perfil e passar `--presets-local pre
 ## Manifest (`manifest.csv`)
 
 Cabeçalhos: **`id`**, **`idea`** (obrigatórios); opcionais: **`kind`** (`prop`, `character`, `environment`), **`generate_3d`** (`true`/`false`/`sim`/…), **`image_source`** (`text2d` \| `texture2d`) para sobrepor o `image_source` do `game.yaml` nessa linha. Com `path_layout: flat`, usa `id` com barra, por exemplo `Crystals/shard_blue`, para gravar ficheiros dentro de `Crystals/`.
+
+## Estrutura
+
+```
+GameAssets/
+├── src/gameassets/
+│   ├── cli.py             # CLI Click (init, prompts, batch, info)
+│   ├── profile.py         # Parsing do game.yaml
+│   ├── manifest.py        # Parsing do manifest.csv
+│   ├── prompt_builder.py  # Construção de prompts com perfil + preset
+│   ├── runner.py          # Execução de subprocessos (text2d, text3d, etc.)
+│   ├── presets.py         # Carregamento de presets YAML
+│   ├── templates.py       # Templates de prompt
+│   ├── batch_guard.py     # Lock exclusivo + VRAM preflight
+│   └── data/presets.yaml  # Presets embutidos
+├── config/
+│   ├── requirements.txt
+│   └── requirements-dev.txt
+├── scripts/
+│   └── setup.sh           # Setup do venv + deps
+└── tests/
+```
+
+## Variáveis de Ambiente
+
+| Variável | Descrição |
+|----------|-----------|
+| `TEXT2D_BIN` | Caminho para o binário `text2d` (se não estiver no `PATH`) |
+| `TEXTURE2D_BIN` | Caminho para o binário `texture2d` |
+| `TEXT3D_BIN` | Caminho para o binário `text3d` |
+| `TEXT2SOUND_BIN` | Caminho para o binário `text2sound` |
+| `MATERIALIZE_BIN` | Caminho para o binário `materialize` (para PBR via Text3D ou Texture2D) |
+| `PYTORCH_CUDA_ALLOC_CONF` | Auto-definida como `expandable_segments:True` se vazia (reduz fragmentação CUDA) |
 
 ## Licença
 

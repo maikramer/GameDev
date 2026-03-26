@@ -52,6 +52,13 @@ Documentação detalhada: [docs/INSTALL.md](docs/INSTALL.md). Problemas de GPU/c
 
 ## Uso
 
+| Subcomando | Descrição |
+|-----------|-----------|
+| `text2d generate PROMPT` | Gera uma imagem a partir de texto |
+| `text2d info` | Mostra configuração e ambiente (GPU, cache, modelo) |
+| `text2d models` | Lista modelos disponíveis |
+| `text2d skill install` | Instala Agent Skill Cursor no projeto |
+
 ```bash
 text2d generate "um gato com um cartaz que diz olá mundo"
 
@@ -68,8 +75,13 @@ text2d models
 
 ### Variáveis de ambiente
 
-- `TEXT2D_MODEL_ID` — outro repositório HF compatível com `Flux2KleinPipeline`.
-- `HF_HOME` — cache Hugging Face (predefinido `~/.cache/huggingface`).
+| Variável | Descrição |
+|----------|-----------|
+| `TEXT2D_MODEL_ID` | Repositório HF alternativo compatível com `Flux2KleinPipeline` |
+| `HF_HOME` | Cache Hugging Face (por defeito: `~/.cache/huggingface`) |
+| `TEXT2D_MODELS_DIR` | Diretório de modelos locais; o instalador grava em `~/.config/text2d/config.env` quando existe `Text2D/models/` com pesos |
+| `TEXT2D_OUTPUT_DIR` | Diretório de saída das imagens (criado pelo instalador em `~/.text2d/outputs`) |
+| `PYTORCH_CUDA_ALLOC_CONF` | Configuração CUDA (auto-definida se vazia) |
 
 ### Guidance
 
@@ -78,6 +90,28 @@ O checkpoint **SDNQ Disty0** usa por defeito **guidance 1.0** (ver [card do mode
 ## GGUF / Unsloth
 
 Pesos **GGUF** destinam-se a fluxos **ComfyUI-GGUF**, não a este CLI (Diffusers).
+
+## Estrutura
+
+```
+Text2D/
+├── src/text2d/
+│   ├── cli.py             # CLI Click (generate, info, models)
+│   ├── generator.py       # Pipeline FLUX + inferência
+│   ├── cli_rich.py        # Configuração Rich para o CLI
+│   └── utils/             # Utilitários (paths, etc.)
+├── docs/
+│   ├── INSTALL.md         # Guia de instalação detalhado
+│   └── TROUBLESHOOTING.md # Resolução de problemas
+├── config/
+│   ├── requirements.txt
+│   └── requirements-dev.txt
+├── scripts/
+│   ├── setup.sh           # Setup do venv + deps
+│   ├── install.sh         # Instalador com wrappers
+│   └── installer.py       # Instalador Python standalone
+└── tests/
+```
 
 ## Desenvolvimento
 
