@@ -1,0 +1,32 @@
+target-version = "py310"
+line-length = 120
+src = [
+    "Shared/src",
+    "Text2D/src",
+    "Text3D/src",
+    "GameAssets/src",
+    "Texture2D/src",
+    "Text2Sound/src",
+]
+
+exclude = [
+    ".venv",
+    "venv",
+    "build",
+    "dist",
+    ".eggs",
+    "__pycache__",
+    "node_modules",
+    ".git",
+]
+
+[lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+
+[lint.per-file-ignores]
+"**/tests/**" = ["S101", "PLR2004"]
+
+[format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"

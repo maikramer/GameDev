@@ -1,0 +1,60 @@
+# CI for the GameDev monorepo.
+# Text2D, Text3D, and Text2Sound are intentionally not tested here: they depend on
+# PyTorch/CUDA and large model downloads, which are too heavy for default GitHub-hosted runners.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ruff
+        run: python -m pip install ruff
+      - name: Ruff check
+        run: ruff check .
+      - name: Ruff format
+        run: ruff format --check .
+
+  test-python:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - package: Shared
+            install_cmd: cd Shared && pip install -e '.[dev]'
+          - package: GameAssets
+            install_cmd: cd Shared && pip install -e . && cd ../GameAssets && pip install -e '.[dev]'
+          - package: Texture2D
+            install_cmd: cd Shared && pip install -e . && cd ../Texture2D && pip install -e '.[dev]'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install package (Shared + target)
+        run: ${{ matrix.install_cmd }}
+      - name: Run pytest
+        working-directory: ${{ matrix.package }}
+        run: pytest
+
+  test-rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Clippy
+        run: cargo clippy --manifest-path Materialize/Cargo.toml -- -D warnings
+      - name: Tests
+        run: cargo test --manifest-path Materialize/Cargo.toml
