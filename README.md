@@ -109,7 +109,64 @@ Instruções completas: [Shared/README.md](Shared/README.md), [Text2D/README.md]
 - Código deste repositório: ver [Text2D/LICENSE](Text2D/LICENSE), [Text3D/LICENSE](Text3D/LICENSE) e [Texture2D/LICENSE](Texture2D/LICENSE) (MIT nos respetivos pacotes).
 - **Modelos pré-treinados** não são necessariamente MIT; obrigação de cumprimento das licenças dos autores (BFL, Disty0, Tencent Hunyuan, etc.).
 
+## Desenvolvimento
+
+### Ferramentas de qualidade
+
+O monorepo usa ferramentas centralizadas para lint, formatação, testes e type-checking:
+
+| Ferramenta | Âmbito | Config |
+|------------|--------|--------|
+| [**Ruff**](https://docs.astral.sh/ruff/) | Lint + format (Python) | `ruff.toml` (raiz) |
+| [**MyPy**](https://mypy.readthedocs.io/) | Type-checking (Python) | `mypy.ini` (raiz) |
+| [**Pytest**](https://pytest.org/) + **pytest-cov** | Testes + cobertura | `pyproject.toml` por pacote |
+| [**Cargo Clippy**](https://doc.rust-lang.org/clippy/) | Lint (Rust) | via Makefile |
+| [**Pre-commit**](https://pre-commit.com/) | Hooks de pré-commit | `.pre-commit-config.yaml` |
+| [**GitHub Actions**](https://github.com/features/actions) | CI (lint + test + clippy) | `.github/workflows/ci.yml` |
+
+### Makefile (GNU Make)
+
+```bash
+make help            # Listar todos os targets
+make lint            # Ruff check + Cargo clippy
+make fmt             # Ruff format + Cargo fmt
+make fmt-check       # Verificar formatação sem alterar
+make test            # Pytest em todos os pacotes + Cargo test
+make test-shared     # Pytest só no Shared
+make test-text2d     # Pytest só no Text2D
+make typecheck       # MyPy no Shared/src
+make check           # lint + fmt-check + typecheck + test (CI completo)
+make clean           # Remover __pycache__, caches, builds
+make install-hooks   # Instalar pre-commit hooks
+```
+
+> **Windows:** requer GNU Make (via Git Bash, MSYS2 ou WSL).
+
+### Setup de desenvolvimento
+
+```bash
+# 1. Instalar pre-commit hooks
+pip install pre-commit
+make install-hooks
+
+# 2. Instalar dependências de dev num pacote (exemplo: Shared)
+cd Shared && pip install -e ".[dev]" && cd ..
+
+# 3. Correr testes
+make test-shared
+
+# 4. Lint e format
+make lint
+make fmt
+```
+
+### pyproject.toml
+
+Cada pacote Python tem um `pyproject.toml` (PEP 621) com metadata, dependências e config do pytest.
+Os ficheiros `setup.py` existentes permanecem para compatibilidade com instaladores legados.
+
 ## Contribuir
 
 - Preferir commits pequenos e mensagens no estilo [Conventional Commits](https://www.conventionalcommits.org/).
 - Ignorar ambientes virtuais e caches: o `.gitignore` na raiz alinha-se com os de cada subpasta.
+- Correr `make check` antes de submeter PRs.
