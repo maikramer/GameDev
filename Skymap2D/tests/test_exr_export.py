@@ -4,6 +4,7 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
+import pytest
 from PIL import Image
 
 from skymap2d.exr_export import pil_rgb_to_linear_f32, write_exr_rgb_linear
@@ -24,6 +25,7 @@ class TestPilRgbToLinear:
 
 class TestWriteExrRoundtrip:
     def test_write_and_read_rgb(self) -> None:
+        pytest.importorskip("OpenEXR")
         import OpenEXR
 
         h, w = 8, 16
