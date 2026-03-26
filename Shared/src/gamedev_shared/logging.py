@@ -2,7 +2,23 @@
 
 from __future__ import annotations
 
+import sys
 from typing import Optional
+
+
+def _configure_stdio_utf8() -> None:
+    """Evita UnicodeEncodeError no Windows (cp1252) com Rich e símbolos como ✓."""
+    if sys.platform != "win32":
+        return
+    for stream in (sys.stdout, sys.stderr):
+        if stream is not None and hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8")
+            except (OSError, ValueError):
+                pass
+
+
+_configure_stdio_utf8()
 
 try:
     from rich import box

@@ -198,15 +198,29 @@ class BaseInstaller:
         module_name: str | None = None,
         target_binary: Path | None = None,
     ) -> Path:
-        """Cria wrapper bash em ``bin_dir``.
+        """Cria wrapper em ``bin_dir`` (``.cmd`` no Windows, bash nos outros).
 
         Modo Python (module_name)::
-            exec "<python_path>" -m <module_name> "$@"
+            "<python>" -m <module_name> [args]
 
         Modo binário (target_binary)::
-            exec "<target_binary>" "$@"
+            "<target_binary>" [args]
         """
         self.bin_dir.mkdir(parents=True, exist_ok=True)
+        if self.is_windows:
+            wrapper = self.bin_dir / f"{bin_name}.cmd"
+            with open(wrapper, "w", encoding="utf-8", newline="\r\n") as f:
+                f.write("@echo off\r\n")
+                f.write(f"REM {self.project_name} — gerado por installer\r\n")
+                if target_binary:
+                    f.write(f'"{target_binary}" %*\r\n')
+                else:
+                    py = python_path or self.python_cmd
+                    mod = module_name or self.cli_name
+                    f.write(f'"{py}" -m {mod} %*\r\n')
+            self.logger.success(str(wrapper))
+            return wrapper
+
         wrapper = self.bin_dir / bin_name
         with open(wrapper, "w", encoding="utf-8") as f:
             f.write("#!/bin/bash\n")
@@ -267,7 +281,13 @@ class BaseInstaller:
             else:
                 lines.append(f"✓ {self.cli_name} no PATH: {found}")
         else:
-            if self.logger.rich_available:
+            if self.is_windows:
+                hint = f'[yellow]Adiciona ao PATH (PowerShell):[/yellow] $env:Path += ";{self.bin_dir}"'
+                if self.logger.rich_available:
+                    lines.append(hint)
+                else:
+                    lines.append(f"Adicione ao PATH: {self.bin_dir}")
+            elif self.logger.rich_available:
                 lines.append(
                     f'[yellow]Adiciona ao PATH:[/yellow] export PATH="{self.bin_dir}:$PATH"'
                 )

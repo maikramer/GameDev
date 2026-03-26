@@ -251,8 +251,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--force", action="store_true", help="Forçar reinstalação")
     parser.add_argument(
         "--python",
-        default="python3",
-        help="Comando Python (default: python3)",
+        default="python" if platform.system() == "Windows" else "python3",
+        help="Comando Python (default: python no Windows, python3 nos outros)",
     )
 
     args = parser.parse_args(argv)

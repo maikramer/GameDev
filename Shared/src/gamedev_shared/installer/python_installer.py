@@ -218,16 +218,26 @@ class PythonProjectInstaller(BaseInstaller):
             python_path=python_path,
             module_name=self.cli_name,
         )
+        mod = self.cli_name
         for alias in extra_aliases or []:
-            wrapper = self.bin_dir / alias
-            with open(wrapper, "w", encoding="utf-8") as f:
-                f.write("#!/bin/bash\n")
-                f.write(f'exec "{self.bin_dir}/{self.cli_name}" generate "$@"\n')
-            wrapper.chmod(0o755)
-            self.logger.success(str(wrapper))
+            if self.is_windows:
+                w = self.bin_dir / f"{alias}.cmd"
+                with open(w, "w", encoding="utf-8", newline="\r\n") as f:
+                    f.write("@echo off\r\n")
+                    f.write(f'"{python_path}" -m {mod} generate %*\r\n')
+                self.logger.success(str(w))
+            else:
+                wrapper = self.bin_dir / alias
+                with open(wrapper, "w", encoding="utf-8") as f:
+                    f.write("#!/bin/bash\n")
+                    f.write(f'exec "{self.bin_dir}/{self.cli_name}" generate "$@"\n')
+                wrapper.chmod(0o755)
+                self.logger.success(str(wrapper))
 
     def create_activate_wrapper(self) -> Optional[Path]:
         """Cria wrapper que activa o venv (para desenvolvimento)."""
+        if self.is_windows:
+            return None
         if not self.venv_exists:
             return None
         wrapper = self.bin_dir / f"{self.cli_name}-activate"

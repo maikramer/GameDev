@@ -33,9 +33,17 @@ def setup_rich_click(
     try:
         import rich_click.rich_click as _rc
 
-        _rc.USE_RICH_MARKUP = use_rich_markup
+        # rich-click>=1.9: usar TEXT_MARKUP / OPTIONS_TABLE_COLUMN_TYPES em vez de
+        # USE_RICH_MARKUP / SHOW_METAVARS_COLUMN (evita PendingDeprecationWarning).
+        _rc.TEXT_MARKUP = "rich" if use_rich_markup else "ansi"
         _rc.GROUP_ARGUMENTS_OPTIONS = group_arguments_options
-        _rc.SHOW_METAVARS_COLUMN = show_metavars_column
+        if not show_metavars_column:
+            _rc.OPTIONS_TABLE_COLUMN_TYPES = [
+                "required",
+                "opt_short",
+                "opt_long",
+                "help",
+            ]
         _rc.HEADER_TEXT = header
         _rc.FOOTER_TEXT = footer
         return True

@@ -1,5 +1,6 @@
 """Testes para gamedev_shared.installer.base."""
 
+import sys
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -72,6 +73,8 @@ class TestBaseInstallerCreateWrapper:
             module_name="test_mod",
         )
         assert wrapper.exists()
+        if sys.platform == "win32":
+            assert wrapper.suffix == ".cmd"
         content = wrapper.read_text()
         assert "/usr/bin/python3" in content
         assert "test_mod" in content
@@ -89,6 +92,8 @@ class TestBaseInstallerCreateWrapper:
             target_binary=binary,
         )
         assert wrapper.exists()
+        if sys.platform == "win32":
+            assert wrapper.suffix == ".cmd"
         content = wrapper.read_text()
         assert str(binary) in content
 

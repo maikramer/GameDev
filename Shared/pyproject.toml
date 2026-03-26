@@ -6,7 +6,10 @@ build-backend = "setuptools.build_meta"
 name = "gamedev-shared"
 version = "0.1.0"
 description = "Biblioteca partilhada do monorepo GameDev (logging, GPU, instaladores, CLI, subprocess)"
+readme = "README.md"
 requires-python = ">=3.10"
+authors = [{ name = "GameDev" }]
+license = "MIT"
 dependencies = [
     "rich>=13.0.0",
 ]
