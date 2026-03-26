@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Test / tooling
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Ambiente
+.venv/
+venv/
+.env
+
+# Saídas locais
+outputs/
