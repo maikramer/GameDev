@@ -14,6 +14,7 @@ No monorepo [GameDev](../README.md), o pacote depende de [**gamedev-shared**](..
 - **Batch** — gera múltiplos skymaps a partir de um ficheiro de prompts
 - **Metadata JSON** — cada skymap acompanha ficheiro `.json` com seed, prompt final, parâmetros
 - **Ratio 2:1** — defaults optimizados (2048×1024) para projeção equirectangular
+- **Saída EXR (opcional)** — RGB float32 em espaço **linear** (OpenEXR), para motores que preferem `.exr`. O modelo continua a devolver LDR; o EXR empacota o mesmo conteúdo sem segunda curva sRGB. *Não* usamos o [Materialize](../Materialize/) aqui: esse fluxo gera mapas PBR (normal, height, …) a partir de texturas; para panoramas basta o `skymap2d` com `--format exr`.
 
 ## Arranque rápido
 
@@ -29,6 +30,10 @@ skymap2d generate "sunset over mountains, warm golden light" -o sky_sunset.png
 
 # 4. Usar preset
 skymap2d generate "dramatic sky" --preset Storm -o sky_storm.png
+
+# 5. EXR (RGB linear) em vez de PNG
+skymap2d generate "clear blue sky" --format exr -o sky_clear.exr
+# ou: -o sky_clear.exr  (a extensão .exr define o formato)
 ```
 
 ## Instalação
@@ -79,7 +84,9 @@ O instalador não usa PyTorch local — apenas dependências em `config/requirem
 
 | Parâmetro | Default | Descrição |
 |-----------|---------|-----------|
-| `--output/-o` | auto | Ficheiro de saída (.png) |
+| `--output/-o` | auto | Ficheiro de saída (`.png` ou `.exr`) |
+| `--format` | png | `png` ou `exr` (se `-o` não tiver extensão, usa isto) |
+| `--exr-scale` | 1.0 | Multiplica valores lineares ao gravar EXR |
 | `--width/-W` | 2048 | Largura (ratio 2:1 recomendado) |
 | `--height/-H` | 1024 | Altura |
 | `--steps/-s` | 40 | Passos de inferência (10–100) |

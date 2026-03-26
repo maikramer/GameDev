@@ -9,6 +9,15 @@ import time
 from pathlib import Path
 from typing import Optional
 
+# Windows (cp1252): Rich spinners/símbolos exigem UTF-8 no stdout/stderr.
+if sys.platform == "win32":
+    for _stream in (sys.stdout, sys.stderr):
+        if _stream is not None and hasattr(_stream, "reconfigure"):
+            try:
+                _stream.reconfigure(encoding="utf-8")
+            except (OSError, ValueError):
+                pass
+
 from . import cli_rich  # noqa: F401 — configura rich-click antes dos comandos
 
 if cli_rich.RICH_CLICK:
@@ -81,7 +90,7 @@ def skill_install_cmd(target: Path, force: bool) -> None:
 
 @cli.command("generate")
 @click.argument("prompt")
-@click.option("--output", "-o", type=click.Path(), help="Ficheiro de saída (.png)")
+@click.option("--output", "-o", type=click.Path(), help="Ficheiro de saída (.png ou .exr)")
 @click.option("--width", "-W", default=2048, show_default=True, type=int)
 @click.option("--height", "-H", default=1024, show_default=True, type=int)
 @click.option("--steps", "-s", default=40, show_default=True, help="Passos de inferência")
@@ -124,6 +133,20 @@ def skill_install_cmd(target: Path, force: bool) -> None:
     is_flag=True,
     help="Logs detalhados",
 )
+@click.option(
+    "--format",
+    "image_format",
+    type=click.Choice(["png", "exr"], case_sensitive=False),
+    default="png",
+    help="png (8-bit) ou exr (RGB float linear; útil em motores que preferem OpenEXR)",
+)
+@click.option(
+    "--exr-scale",
+    default=1.0,
+    show_default=True,
+    type=float,
+    help="Multiplicador dos valores lineares ao gravar EXR (ex.: 2.0 para mais intensidade)",
+)
 @click.pass_context
 def generate_cmd(
     ctx: click.Context,
@@ -140,6 +163,8 @@ def generate_cmd(
     lora_strength: float,
     model_id: Optional[str],
     verbose_flag: bool,
+    image_format: str,
+    exr_scale: float,
 ) -> None:
     """Gera um skymap equirectangular 360° a partir do PROMPT."""
     verbose = bool(ctx.obj.get("VERBOSE")) or verbose_flag
@@ -152,6 +177,9 @@ def generate_cmd(
     if preset and preset != "None":
         table.add_row("[bold]Preset[/bold]", preset)
     table.add_row("[bold]Modelo[/bold]", model_id or default_model_id())
+    table.add_row("[bold]Formato[/bold]", image_format.lower())
+    if image_format.lower() == "exr" and exr_scale != 1.0:
+        table.add_row("[bold]EXR scale[/bold]", str(exr_scale))
     console.print(
         Panel(table, title="[bold green]Configuração", border_style="green")
     )
@@ -159,12 +187,25 @@ def generate_cmd(
     try:
         gen = SkymapGenerator(model_id=model_id)
 
+        fmt_opt = image_format.lower()
         if output is None:
             ensure_dirs()
             ts = int(time.time())
             safe = "".join(c if c.isalnum() else "_" for c in prompt[:40])
-            output = str(DEFAULT_SKYMAP_DIR / f"{safe}_{ts}.png")
+            ext = ".exr" if fmt_opt == "exr" else ".png"
+            output = str(DEFAULT_SKYMAP_DIR / f"{safe}_{ts}{ext}")
         out_path = Path(output)
+        if out_path.suffix == "":
+            out_path = out_path.with_suffix(".exr" if fmt_opt == "exr" else ".png")
+        suf = out_path.suffix.lower()
+        if suf == ".exr":
+            fmt = "exr"
+        elif suf == ".png":
+            fmt = "png"
+        else:
+            raise click.BadParameter(
+                "Extensão de saída deve ser .png ou .exr (ou omite a extensão e usa --format)."
+            )
 
         start = time.time()
         with Progress(
@@ -195,6 +236,8 @@ def generate_cmd(
             params=metadata,
             output_dir=out_path.parent,
             filename=out_path.name,
+            image_format=fmt,
+            exr_scale=exr_scale,
         )
 
         elapsed = time.time() - start
@@ -246,6 +289,20 @@ def presets_cmd() -> None:
 @click.option("--steps", "-s", default=40, type=int)
 @click.option("--guidance", "-g", "guidance_scale", default=6.0, type=float)
 @click.option("--model", "-m", "model_id", default=None)
+@click.option(
+    "--format",
+    "image_format",
+    type=click.Choice(["png", "exr"], case_sensitive=False),
+    default="png",
+    help="png ou exr (RGB linear float)",
+)
+@click.option(
+    "--exr-scale",
+    default=1.0,
+    show_default=True,
+    type=float,
+    help="Multiplicador linear ao gravar EXR",
+)
 @click.pass_context
 def batch_cmd(
     ctx: click.Context,
@@ -257,6 +314,8 @@ def batch_cmd(
     steps: int,
     guidance_scale: float,
     model_id: Optional[str],
+    image_format: str,
+    exr_scale: float,
 ) -> None:
     """Gera skymaps em batch a partir de um ficheiro de prompts (um por linha)."""
     prompts = [
@@ -295,13 +354,16 @@ def batch_cmd(
 
         ts = int(time.time())
         safe = "".join(c if c.isalnum() else "_" for c in prompts[idx][:30])
-        fname = f"{safe}_{ts}.png"
+        ext = ".exr" if image_format.lower() == "exr" else ".png"
+        fname = f"{safe}_{ts}{ext}"
         saved = save_image(
             image,
             prompt=metadata.get("prompt_final", prompts[idx]),
             params=metadata,
             output_dir=out,
             filename=fname,
+            image_format=image_format.lower(),
+            exr_scale=exr_scale,
         )
         ok_count += 1
         console.print(

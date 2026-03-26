@@ -21,22 +21,40 @@ def save_image(
     output_dir: Optional[Path] = None,
     filename: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
+    *,
+    image_format: str = "png",
+    exr_scale: float = 1.0,
 ) -> Path:
     """Grava uma imagem com metadata JSON ao lado.
 
+    ``image_format``: ``png`` (8-bit sRGB) ou ``exr`` (RGB float32 linear, mesmo
+    conteúdo que o PNG após descodificação sRGB — ver ``exr_export``).
+
     Returns:
-        Path do ficheiro PNG gravado.
+        Path do ficheiro gravado (.png ou .exr).
     """
     out_dir = output_dir or DEFAULT_OUTPUT_DIR
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    fmt = (image_format or "png").lower()
+    if fmt not in ("png", "exr"):
+        raise ValueError(f"image_format deve ser png ou exr, recebido: {image_format}")
+
     if filename is None:
         ts = int(datetime.now().timestamp())
-        filename = f"skymap_{ts}.png"
+        ext = ".exr" if fmt == "exr" else ".png"
+        filename = f"skymap_{ts}{ext}"
 
     filepath = out_dir / filename
-    image.save(filepath, "PNG")
-    logger.info(f"Imagem gravada em {filepath}")
+    if fmt == "exr":
+        from .exr_export import pil_rgb_to_linear_f32, write_exr_rgb_linear
+
+        linear = pil_rgb_to_linear_f32(image)
+        write_exr_rgb_linear(filepath, linear, scale=exr_scale)
+        logger.info(f"EXR gravado em {filepath}")
+    else:
+        image.save(filepath, "PNG")
+        logger.info(f"Imagem gravada em {filepath}")
 
     metadata_path = filepath.with_suffix(".json")
     metadata_dict: Dict[str, Any] = {
@@ -45,6 +63,8 @@ def save_image(
         "params": params,
         "image_path": str(filepath),
         "filename": filename,
+        "image_format": fmt,
+        "color_space": "linear_rgb" if fmt == "exr" else "srgb_png",
     }
     if metadata:
         metadata_dict.update(metadata)

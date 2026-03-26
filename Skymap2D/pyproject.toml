@@ -6,21 +6,24 @@ build-backend = "setuptools.build_meta"
 name = "skymap2d"
 version = "0.1.0"
 description = "CLI para geração de skymaps equirectangular 360° via HF Inference API (Flux LoRA)"
+readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
+authors = [{ name = "Skymap2D Project" }]
 dependencies = [
     "huggingface-hub>=0.24.0",
+    "numpy>=1.24.0",
+    "OpenEXR>=3.2.0",
     "Pillow>=10.0.0",
     "python-dotenv>=1.0.0",
     "click>=8.1.0",
     "rich>=13.0.0",
     "rich-click>=1.8.0",
-    "gamedev-shared",
+    "gamedev-shared @ file:../Shared",
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Topic :: Multimedia :: Graphics",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
