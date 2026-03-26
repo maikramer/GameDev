@@ -1,0 +1,15 @@
+# Skymap2D — dependências de runtime (skymaps equirectangular via HF Inference API)
+# Uso: pip install -r config/requirements.txt
+# Nota: NÃO usa PyTorch/Diffusers — geração é 100% cloud (InferenceClient).
+
+huggingface-hub>=0.24.0
+Pillow>=10.0.0
+python-dotenv>=1.0.0
+
+click>=8.1.0
+rich>=13.0.0
+rich-click>=1.8.0
+
+# Monorepo: biblioteca partilhada. Em setup.py vira file:// absoluto.
+# Caminho relativo ao CWD do projeto (Skymap2D/) — usado por scripts/setup.sh e pip -r.
+gamedev-shared @ file:../Shared
