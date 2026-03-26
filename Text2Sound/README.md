@@ -1,16 +1,24 @@
 # Text2Sound
 
-CLI para geração de áudio estéreo a 44.1 kHz a partir de prompts de texto, usando o modelo [Stable Audio Open 1.0](https://huggingface.co/stabilityai/stable-audio-open-1.0).
+CLI para geração de áudio estéreo a 44.1 kHz a partir de prompts de texto, com dois checkpoints Hugging Face (mesma biblioteca `stable-audio-tools`):
+
+| Uso | Modelo | Duração máx. | Comando |
+|-----|--------|----------------|---------|
+| Música / ambientes longos | [Stable Audio Open 1.0](https://huggingface.co/stabilityai/stable-audio-open-1.0) | ~47 s | `--profile music` (padrão) |
+| Efeitos / SFX curtos | [Stable Audio Open Small](https://huggingface.co/stabilityai/stable-audio-open-small) | ~11 s | `--profile effects` |
+
+Ambos os repositórios podem ser **gated**: aceita os termos no Hub e define `HF_TOKEN`. Licenças: ver os model cards (Open Small: Stability AI Community License).
 
 ## Funcionalidades
 
-- **Geração text-to-audio** — áudio estéreo de até 47 segundos
+- **Dois perfis** — `music` (Open 1.0, até ~47 s) e `effects` (Open Small, até ~11 s; defaults ~8 steps, CFG 1.0, sampler `pingpong`)
+- **Geração text-to-audio** — áudio estéreo conforme o modelo escolhido
 - **Presets para game dev** — ambient, battle, menu, footsteps, weather, UI, nature, dungeon, tavern, etc.
 - **Múltiplos formatos** — WAV, FLAC, OGG
 - **Batch processing** — gerar vários áudios a partir de ficheiro de prompts
 - **Seed** — reprodutibilidade total
 - **Trim automático** — remoção de silêncio trailing
-- **Metadados JSON** — parâmetros de geração gravados ao lado do áudio
+- **Metadados JSON** — parâmetros de geração gravados ao lado do áudio (inclui `seed_effective`, sigmas, trim, versão da CLI)
 - **Gestão de VRAM** — limpeza automática após cada geração
 
 ## Requisitos
@@ -49,8 +57,20 @@ python3 scripts/installer.py --use-venv
 ```bash
 text2sound generate "ocean waves crashing on a sandy beach at sunset"
 text2sound generate "epic orchestral battle music" --duration 45 --steps 120
+text2sound generate "short alien laser shot" --profile effects -d 1.5
 text2sound generate "footsteps on gravel" -d 5 -s 80 --format flac
 text2sound generate "rain and thunder" --seed 42 --cfg-scale 8
+```
+
+### Modelo e aliases
+
+- **`--profile music`** (padrão): `stabilityai/stable-audio-open-1.0`
+- **`--profile effects`**: `stabilityai/stable-audio-open-small`
+- **`--model`** tem prioridade sobre o perfil: aceita o ID HF completo ou aliases `music`, `full`, `effects`, `small`, `sfx`
+
+```bash
+text2sound generate "loop" --model small -d 8
+text2sound generate "score" --model music -d 30
 ```
 
 ### Usar presets
@@ -63,9 +83,12 @@ text2sound generate --preset ambient "with gentle river flowing"  # preset + cus
 
 ### Batch
 
+O diretório de saída usa **`-O` / `--output-dir`** (em `generate`, `-d` é sempre **duração**).
+
 ```bash
 # Ficheiro prompts.txt (um prompt por linha, # = comentário)
-text2sound batch prompts.txt --format flac --output-dir sounds/
+text2sound batch prompts.txt --format flac -O sounds/
+text2sound batch prompts.txt --seed 1000   # seeds 1000, 1001, 1002, … por linha
 ```
 
 ### Informações
@@ -102,8 +125,8 @@ text2sound --help   # ajuda completa
 
 | Parâmetro | Default | Descrição |
 |-----------|---------|-----------|
-| `--duration` | 30 | Duração em segundos (0.5–47) |
-| `--steps` | 100 | Passos de difusão (10–150) |
+| `--duration` | 30 | Duração em segundos (máx. ~47 música, ~11 efeitos; mín. 0.5) |
+| `--steps` | 100 | Passos de difusão (8–150; efeitos ~8) |
 | `--cfg-scale` | 7.0 | Classifier-free guidance (1–15) |
 | `--sigma-min` | 0.3 | Noise schedule mínimo |
 | `--sigma-max` | 500 | Noise schedule máximo |
@@ -158,9 +181,11 @@ Variável `TEXT2SOUND_BIN` se o comando não estiver no `PATH`.
 ```bash
 pip install -e ".[dev]"
 pytest tests/ -v
+# Excluir testes lentos (carregam modelo/GPU):
+pytest tests/ -v -m "not slow"
 ```
 
 ## Licença
 
 MIT — ver [LICENSE](LICENSE).
-Os pesos do modelo seguem a licença do [Stable Audio Open](https://huggingface.co/stabilityai/stable-audio-open-1.0).
+Os pesos seguem as licenças dos model cards: [Open 1.0](https://huggingface.co/stabilityai/stable-audio-open-1.0) e [Open Small](https://huggingface.co/stabilityai/stable-audio-open-small) (Stability AI Community License para o Small).
