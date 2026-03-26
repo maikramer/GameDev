@@ -46,6 +46,12 @@ text2d:
 #   materialize: true
 #   materialize_maps_subdir: pbr_maps
 
+# Skymap2D (HF API) — descomenta image_source + bloco abaixo para skymaps equirectangular 360°.
+# image_source: skymap2d
+# skymap2d:
+#   width: 2048
+#   height: 1024
+
 # Text2Sound com generate_audio no CSV: áudio por linha (Stable Audio Open); audio_subdir + bloco opcional.
 # audio_subdir: audio
 # text2sound:
@@ -72,4 +78,5 @@ MANIFEST_CSV = """id,idea,kind,generate_3d,generate_audio,image_source
 chest_01,"baú de madeira com ferrolhos dourados",prop,false,false,
 hero_sword,"espada longa com gema azul no punho",prop,true,false,
 forest_bg,"floresta densa ao entardecer",environment,false,false,
+sky_sunset,"pôr do sol sobre montanhas, nuvens douradas",skymap,false,false,skymap2d
 """

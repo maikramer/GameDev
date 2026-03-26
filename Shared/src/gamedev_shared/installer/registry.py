@@ -105,6 +105,17 @@ TOOLS: dict[str, ToolSpec] = {
         extra_aliases=("texture2d-generate",),
         needs_pytorch=False,
     ),
+    "skymap2d": ToolSpec(
+        name="Skymap2D",
+        kind=ToolKind.PYTHON,
+        folder="Skymap2D",
+        cli_name="skymap2d",
+        python_module="skymap2d",
+        description="Skymaps equirectangular 360° via HF Inference API (sem GPU local)",
+        min_python=(3, 10),
+        extra_aliases=("skymap2d-generate",),
+        needs_pytorch=False,
+    ),
     "materialize": ToolSpec(
         name="Materialize CLI",
         kind=ToolKind.RUST,

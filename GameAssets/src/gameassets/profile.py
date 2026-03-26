@@ -103,6 +103,21 @@ class Texture2DProfile:
 
 
 @dataclass
+class Skymap2DProfile:
+    """Opções passadas ao CLI skymap2d generate (HF equirectangular 360°)."""
+
+    width: int | None = None
+    height: int | None = None
+    steps: int | None = None
+    guidance_scale: float | None = None
+    negative_prompt: str | None = None
+    preset: str | None = None
+    cfg_scale: float | None = None
+    lora_strength: float | None = None
+    model_id: str | None = None
+
+
+@dataclass
 class GameProfile:
     title: str
     genre: str
@@ -118,10 +133,11 @@ class GameProfile:
     path_layout: str = "split"
     seed_base: int | None = None
     image_ext: str = "png"
-    # text2d: FLUX Klein (Text2D) · texture2d: texturas seamless (Texture2D) — escolhe image_source
+    # text2d: FLUX Klein (Text2D) · texture2d: texturas seamless (Texture2D) · skymap2d: skymaps 360° (Skymap2D)
     image_source: str = "text2d"
     text2d: Text2DProfile | None = None
     texture2d: Texture2DProfile | None = None
+    skymap2d: Skymap2DProfile | None = None
     text3d: Text3DProfile | None = None
     text2sound: Text2SoundProfile | None = None
 
@@ -217,6 +233,48 @@ class GameProfile:
                 materialize_quality=mq_final,
                 materialize_verbose=bool(raw_tex2.get("materialize_verbose", False)),
                 materialize_maps_subdir=msd_s,
+            )
+        sky2: Skymap2DProfile | None = None
+        raw_sky2 = data.get("skymap2d")
+        if isinstance(raw_sky2, dict):
+            w = raw_sky2.get("width")
+            h = raw_sky2.get("height")
+            st = raw_sky2.get("steps")
+            gs = raw_sky2.get("guidance_scale")
+            cfg = raw_sky2.get("cfg_scale")
+            lr = raw_sky2.get("lora_strength")
+            try:
+                wi_s = int(w) if w is not None else None
+                he_s = int(h) if h is not None else None
+                st_s = int(st) if st is not None else None
+                gs_s = float(gs) if gs is not None else None
+                cfg_s = float(cfg) if cfg is not None else None
+                lr_s = float(lr) if lr is not None else None
+            except (TypeError, ValueError) as e:
+                raise ValueError(
+                    "skymap2d.width, height, steps, guidance_scale, cfg_scale "
+                    "e lora_strength devem ser números válidos"
+                ) from e
+            neg_prompt_s = raw_sky2.get("negative_prompt")
+            neg_ss = (
+                str(neg_prompt_s).strip()
+                if neg_prompt_s not in (None, "")
+                else None
+            )
+            pr_s2 = raw_sky2.get("preset")
+            pr_ss = str(pr_s2).strip() if pr_s2 not in (None, "") else None
+            mid_s2 = raw_sky2.get("model_id")
+            mid_ss = str(mid_s2).strip() if mid_s2 not in (None, "") else None
+            sky2 = Skymap2DProfile(
+                width=wi_s,
+                height=he_s,
+                steps=st_s,
+                guidance_scale=gs_s,
+                negative_prompt=neg_ss,
+                preset=pr_ss,
+                cfg_scale=cfg_s,
+                lora_strength=lr_s,
+                model_id=mid_ss,
             )
         ts2: Text2SoundProfile | None = None
         raw_ts2 = data.get("text2sound")
@@ -340,10 +398,12 @@ class GameProfile:
         if pl not in ("split", "flat"):
             raise ValueError("path_layout deve ser split ou flat")
         isrc = str(data.get("image_source") or "text2d").strip().lower()
-        if isrc not in ("text2d", "texture2d"):
-            raise ValueError("image_source deve ser text2d ou texture2d")
+        if isrc not in ("text2d", "texture2d", "skymap2d"):
+            raise ValueError("image_source deve ser text2d, texture2d ou skymap2d")
         if isrc == "texture2d" and tex2 is None:
             tex2 = Texture2DProfile()
+        if isrc == "skymap2d" and sky2 is None:
+            sky2 = Skymap2DProfile()
         audio_sd = str(data.get("audio_subdir") or "audio").strip() or "audio"
         return cls(
             title=str(data["title"]),
@@ -361,6 +421,7 @@ class GameProfile:
             image_source=isrc,
             text2d=t2,
             texture2d=tex2,
+            skymap2d=sky2,
             text3d=t3,
             text2sound=ts2,
         )
