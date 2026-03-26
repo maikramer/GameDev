@@ -23,7 +23,7 @@ Ao instalar o pacote `gamedev-shared`, fica disponível o comando `gamedev-insta
 ```bash
 gamedev-install --list                     # Listar ferramentas
 gamedev-install materialize                # Instalar Materialize (Rust)
-gamedev-install text2d --use-venv          # Instalar Text2D no venv
+gamedev-install text2d                    # Cria projecto/.venv se necessário; wrappers usam esse Python
 gamedev-install all                        # Instalar tudo
 gamedev-install materialize --action uninstall
 ```

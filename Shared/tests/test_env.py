@@ -66,4 +66,6 @@ class TestToolBins:
     def test_mapping(self):
         assert TOOL_BINS["text2d"] == "TEXT2D_BIN"
         assert TOOL_BINS["text3d"] == "TEXT3D_BIN"
+        assert TOOL_BINS["text2sound"] == "TEXT2SOUND_BIN"
+        assert TOOL_BINS["texture2d"] == "TEXTURE2D_BIN"
         assert TOOL_BINS["materialize"] == "MATERIALIZE_BIN"

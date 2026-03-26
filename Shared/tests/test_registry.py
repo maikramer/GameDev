@@ -17,9 +17,18 @@ class TestToolSpec:
     def test_all_tools_registered(self):
         assert "text2d" in TOOLS
         assert "text3d" in TOOLS
+        assert "text2sound" in TOOLS
         assert "gameassets" in TOOLS
         assert "texture2d" in TOOLS
         assert "materialize" in TOOLS
+
+    def test_text2sound_is_python(self):
+        spec = TOOLS["text2sound"]
+        assert spec.kind == ToolKind.PYTHON
+        assert spec.python_module == "text2sound"
+        assert spec.needs_pytorch is True
+        assert spec.needs_cuda is True
+        assert "text2sound-generate" in spec.extra_aliases
 
     def test_materialize_is_rust(self):
         spec = TOOLS["materialize"]

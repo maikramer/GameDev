@@ -10,6 +10,8 @@ import os
 
 TEXT2D_BIN = "TEXT2D_BIN"
 TEXT3D_BIN = "TEXT3D_BIN"
+TEXT2SOUND_BIN = "TEXT2SOUND_BIN"
+TEXTURE2D_BIN = "TEXTURE2D_BIN"
 MATERIALIZE_BIN = "MATERIALIZE_BIN"
 HF_HOME = "HF_HOME"
 PYTORCH_CUDA_ALLOC_CONF = "PYTORCH_CUDA_ALLOC_CONF"
@@ -17,6 +19,8 @@ PYTORCH_CUDA_ALLOC_CONF = "PYTORCH_CUDA_ALLOC_CONF"
 TOOL_BINS = {
     "text2d": TEXT2D_BIN,
     "text3d": TEXT3D_BIN,
+    "text2sound": TEXT2SOUND_BIN,
+    "texture2d": TEXTURE2D_BIN,
     "materialize": MATERIALIZE_BIN,
 }
 """Mapeamento tool_name → nome da variável de ambiente do binário."""

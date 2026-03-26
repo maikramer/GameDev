@@ -82,6 +82,18 @@ TOOLS: dict[str, ToolSpec] = {
         min_python=(3, 10),
         needs_pytorch=False,
     ),
+    "text2sound": ToolSpec(
+        name="Text2Sound",
+        kind=ToolKind.PYTHON,
+        folder="Text2Sound",
+        cli_name="text2sound",
+        python_module="text2sound",
+        description="CLI text-to-audio com Stable Audio Open 1.0",
+        min_python=(3, 10),
+        extra_aliases=("text2sound-generate",),
+        needs_pytorch=True,
+        needs_cuda=True,
+    ),
     "texture2d": ToolSpec(
         name="Texture2D",
         kind=ToolKind.PYTHON,

@@ -8,14 +8,18 @@ from typing import Optional
 
 from .base import BaseInstaller
 
+# Política do monorepo: o pacote do projecto é sempre instalado com
+# ``pip install -e`` (modo editável). Alterações ao código-fonte refletem-se
+# no venv ou no prefix — não há modo wheel-only neste instalador.
+
 
 class PythonProjectInstaller(BaseInstaller):
-    """Instalador para projectos Python (pip install -e, venv, requirements).
+    """Instalador para projectos Python (sempre ``pip install -e``).
 
-    Estende ``BaseInstaller`` com:
-    - Gestão de venv existente
-    - Instalação via pip (editável ou system-wide)
-    - Ficheiro de requirements
+    Política:
+    - Cria ``projecto/.venv`` se não existir e instala **sempre** nesse venv.
+    - Os wrappers em ``bin_dir`` apontam para ``.venv/bin/python`` (ou ``Scripts`` no Windows).
+    - ``install_system_wide`` mantém-se só para subclasses/testes; o fluxo normal não o usa.
     """
 
     def __init__(
@@ -46,7 +50,10 @@ class PythonProjectInstaller(BaseInstaller):
         self.skip_pytorch = skip_pytorch
 
         self.venv_dir = self.project_root / ".venv"
-        self.venv_python = self.venv_dir / "bin" / "python"
+        if self.is_windows:
+            self.venv_python = self.venv_dir / "Scripts" / "python.exe"
+        else:
+            self.venv_python = self.venv_dir / "bin" / "python"
         self.venv_exists = self.venv_python.is_file()
         self.requirements_file = self.project_root / "config" / "requirements.txt"
 
@@ -70,18 +77,42 @@ class PythonProjectInstaller(BaseInstaller):
         if not self.skip_deps:
             self.install_system_deps()
 
-        if self.use_venv:
-            if not self.venv_exists:
-                self.logger.error(
-                    f"Não existe venv em {self.venv_dir}. "
-                    "Execute scripts/setup.sh ou crie .venv; ou instale sem --use-venv."
-                )
-                return False
-            self.logger.info(f"Usando venv existente: {self.venv_dir}")
-            self.install_in_venv()
-        else:
-            self.install_system_wide()
+        if not self.ensure_project_venv():
+            return False
 
+        self.install_in_venv()
+
+        return True
+
+    # ------------------------------------------------------------------
+    # venv do projecto
+    # ------------------------------------------------------------------
+
+    def ensure_project_venv(self) -> bool:
+        """Garante ``projecto/.venv`` com um interpretador válido (cria se necessário)."""
+        if self.venv_python.is_file():
+            self.venv_exists = True
+            self.logger.info(f"Venv do projecto: {self.venv_dir}")
+            return True
+
+        self.logger.step(f"Criando ambiente virtual em {self.venv_dir}...")
+        try:
+            subprocess.run(
+                [self.python_cmd, "-m", "venv", str(self.venv_dir)],
+                check=True,
+            )
+        except subprocess.CalledProcessError as e:
+            self.logger.error(f"Falha ao criar venv: {e}")
+            if not self.is_windows:
+                self.logger.info("Em Debian/Ubuntu: sudo apt install python3-venv")
+            return False
+
+        if not self.venv_python.is_file():
+            self.logger.error(f"Python não encontrado após criar venv: {self.venv_python}")
+            return False
+
+        self.venv_exists = True
+        self.logger.success(f"Venv criado: {self.venv_dir}")
         return True
 
     # ------------------------------------------------------------------
@@ -89,8 +120,17 @@ class PythonProjectInstaller(BaseInstaller):
     # ------------------------------------------------------------------
 
     def install_in_venv(self) -> None:
-        self.logger.step("Instalando no venv existente...")
+        """Instala dependências e o pacote em modo editável no ``.venv`` do projecto."""
+        self.logger.step("Instalando no venv do projecto...")
         python = str(self.venv_python)
+        pip_cmd = [python, "-m", "pip", "install"]
+
+        _root = str(self.project_root)
+        subprocess.run(
+            [python, "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"],
+            check=True,
+            cwd=_root,
+        )
 
         if not self.force:
             try:
@@ -105,9 +145,25 @@ class PythonProjectInstaller(BaseInstaller):
             except subprocess.CalledProcessError:
                 pass
 
-        pip_cmd = [python, "-m", "pip", "install"]
+        if not self.skip_pytorch:
+            self.install_pytorch(pip_cmd, cwd=self.project_root)
+
+        if self.requirements_file.is_file():
+            self.logger.info(f"Instalando dependências: {self.requirements_file}")
+            subprocess.run(
+                pip_cmd + ["-r", str(self.requirements_file)],
+                check=True,
+                cwd=_root,
+            )
+        else:
+            self.logger.warn(f"Ficheiro em falta: {self.requirements_file}")
+
         self.logger.info("Instalando pacote em modo editável...")
-        subprocess.run(pip_cmd + ["-e", str(self.project_root)], check=True)
+        subprocess.run(
+            pip_cmd + ["-e", str(self.project_root)],
+            check=True,
+            cwd=_root,
+        )
         self.logger.success("Instalado no venv")
 
     # ------------------------------------------------------------------
@@ -117,23 +173,33 @@ class PythonProjectInstaller(BaseInstaller):
     def install_system_wide(self) -> None:
         self.logger.step(f"Instalando {self.project_name} (system-wide / prefix)...")
         pip_cmd = [self.python_cmd, "-m", "pip", "install"]
+        _root = str(self.project_root)
 
         subprocess.run(
             [self.python_cmd, "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"],
             check=True,
+            cwd=_root,
         )
 
         if not self.skip_pytorch:
-            self.install_pytorch(pip_cmd)
+            self.install_pytorch(pip_cmd, cwd=self.project_root)
 
         if self.requirements_file.is_file():
             self.logger.info(f"Instalando dependências: {self.requirements_file}")
-            subprocess.run(pip_cmd + ["-r", str(self.requirements_file)], check=True)
+            subprocess.run(
+                pip_cmd + ["-r", str(self.requirements_file)],
+                check=True,
+                cwd=_root,
+            )
         else:
             self.logger.warn(f"Ficheiro em falta: {self.requirements_file}")
 
         self.logger.info(f"Instalando pacote {self.cli_name} em modo editável...")
-        subprocess.run(pip_cmd + ["-e", str(self.project_root)], check=True)
+        subprocess.run(
+            pip_cmd + ["-e", str(self.project_root)],
+            check=True,
+            cwd=_root,
+        )
         self.logger.success("Instalação concluída")
 
     # ------------------------------------------------------------------
@@ -141,8 +207,12 @@ class PythonProjectInstaller(BaseInstaller):
     # ------------------------------------------------------------------
 
     def create_cli_wrappers(self, extra_aliases: list[str] | None = None) -> None:
-        """Cria wrapper principal e aliases opcionais."""
-        python_path = str(self.venv_python) if (self.venv_exists and self.use_venv) else self.python_cmd
+        """Cria wrapper principal e aliases opcionais.
+
+        Os wrappers em ``bin_dir`` usam sempre o Python de ``projecto/.venv`` quando
+        esse venv existe — nunca um interpretador arbitrário de outro ambiente.
+        """
+        python_path = str(self.venv_python) if self.venv_exists else self.python_cmd
         self.create_wrapper(
             self.cli_name,
             python_path=python_path,
@@ -158,7 +228,7 @@ class PythonProjectInstaller(BaseInstaller):
 
     def create_activate_wrapper(self) -> Optional[Path]:
         """Cria wrapper que activa o venv (para desenvolvimento)."""
-        if not (self.venv_exists and self.use_venv):
+        if not self.venv_exists:
             return None
         wrapper = self.bin_dir / f"{self.cli_name}-activate"
         with open(wrapper, "w", encoding="utf-8") as f:

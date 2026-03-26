@@ -214,7 +214,10 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(
         prog="gamedev-install",
-        description="Instalador unificado do monorepo GameDev",
+        description=(
+            "Instalador unificado do monorepo GameDev. "
+            "Ferramentas Python: instalação em modo editável (pip install -e) por defeito."
+        ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=_build_epilog(available),
     )
@@ -238,7 +241,11 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Prefixo de instalação (default: ~/.local)",
     )
-    parser.add_argument("--use-venv", action="store_true", help="Usar .venv existente (Python)")
+    parser.add_argument(
+        "--use-venv",
+        action="store_true",
+        help="(Legado / no-op.) O instalador cria ``projecto/.venv`` se não existir e instala sempre aí.",
+    )
     parser.add_argument("--skip-deps", action="store_true", help="Não instalar deps de sistema")
     parser.add_argument("--skip-models", action="store_true", help="Não configurar modelos")
     parser.add_argument("--force", action="store_true", help="Forçar reinstalação")
@@ -299,7 +306,7 @@ def _build_epilog(available: list[ToolSpec]) -> str:
         "",
         "Exemplos:",
         "  gamedev-install materialize               # Instalar Materialize (Rust)",
-        "  gamedev-install text2d --use-venv          # Instalar Text2D no venv",
+        "  gamedev-install text2d                    # Com Text2D/.venv, instala no venv do projecto",
         "  gamedev-install gameassets --skip-deps      # Instalar GameAssets (sem deps sistema)",
         "  gamedev-install materialize --action uninstall",
         "  gamedev-install all                        # Instalar tudo",

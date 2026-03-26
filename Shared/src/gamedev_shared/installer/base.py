@@ -126,10 +126,23 @@ class BaseInstaller:
         except (ValueError, subprocess.CalledProcessError):
             return 10
 
-    def install_pytorch(self, pip_cmd: list[str] | None = None) -> None:
-        """Instala PyTorch com CUDA (se disponível) ou CPU."""
+    def install_pytorch(
+        self,
+        pip_cmd: list[str] | None = None,
+        *,
+        cwd: str | Path | None = None,
+    ) -> None:
+        """Instala PyTorch com CUDA (se disponível) ou CPU.
+
+        ``cwd`` deve ser a raiz do projecto quando ``requirements.txt`` usa caminhos
+        relativos (``file:../Shared``), para o pip resolver bem a partir do CWD.
+        """
         if pip_cmd is None:
             pip_cmd = [self.python_cmd, "-m", "pip", "install"]
+
+        _kw: dict = {}
+        if cwd is not None:
+            _kw["cwd"] = str(cwd)
 
         has_cuda = shutil.which("nvidia-smi") is not None
         py_minor = self._python_minor()
@@ -146,7 +159,9 @@ class BaseInstaller:
                             self.logger.info(f"CUDA detectado: {cuda_version}")
                             if py_minor >= 13:
                                 self.logger.info("Python 3.13+ — torch+torchvision (PyPI)...")
-                                subprocess.run(pip_cmd + ["torch", "torchvision"], check=True)
+                                subprocess.run(
+                                    pip_cmd + ["torch", "torchvision"], check=True, **_kw
+                                )
                                 return
                             idx = (
                                 "https://download.pytorch.org/whl/cu121"
@@ -157,6 +172,7 @@ class BaseInstaller:
                             subprocess.run(
                                 pip_cmd + ["torch", "torchvision", "--index-url", idx],
                                 check=True,
+                                **_kw,
                             )
                             return
             except Exception:
@@ -167,6 +183,7 @@ class BaseInstaller:
             pip_cmd
             + ["torch", "torchvision", "--index-url", "https://download.pytorch.org/whl/cpu"],
             check=True,
+            **_kw,
         )
 
     # ------------------------------------------------------------------
