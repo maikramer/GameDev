@@ -3,7 +3,15 @@
 from .base import BaseInstaller
 from .python_installer import PythonProjectInstaller
 from .rust_installer import RustProjectInstaller
-from .registry import ToolKind, ToolSpec, TOOLS, find_monorepo_root, list_available_tools, get_tool
+from .registry import (
+    ToolKind,
+    ToolSpec,
+    TOOLS,
+    find_monorepo_root,
+    get_tool,
+    list_available_tools,
+    try_find_monorepo_root,
+)
 
 __all__ = [
     "BaseInstaller",
@@ -13,6 +21,7 @@ __all__ = [
     "ToolSpec",
     "TOOLS",
     "find_monorepo_root",
+    "try_find_monorepo_root",
     "list_available_tools",
     "get_tool",
     "install_tool",

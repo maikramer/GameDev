@@ -12,6 +12,9 @@ TEXT2D_BIN = "TEXT2D_BIN"
 TEXT3D_BIN = "TEXT3D_BIN"
 TEXT2SOUND_BIN = "TEXT2SOUND_BIN"
 TEXTURE2D_BIN = "TEXTURE2D_BIN"
+SKYMAP2D_BIN = "SKYMAP2D_BIN"
+RIGGING3D_BIN = "RIGGING3D_BIN"
+GAMEASSETS_BIN = "GAMEASSETS_BIN"
 MATERIALIZE_BIN = "MATERIALIZE_BIN"
 HF_HOME = "HF_HOME"
 PYTORCH_CUDA_ALLOC_CONF = "PYTORCH_CUDA_ALLOC_CONF"
@@ -21,9 +24,16 @@ TOOL_BINS = {
     "text3d": TEXT3D_BIN,
     "text2sound": TEXT2SOUND_BIN,
     "texture2d": TEXTURE2D_BIN,
+    "skymap2d": SKYMAP2D_BIN,
+    "rigging3d": RIGGING3D_BIN,
+    "gameassets": GAMEASSETS_BIN,
     "materialize": MATERIALIZE_BIN,
 }
-"""Mapeamento tool_name → nome da variável de ambiente do binário."""
+"""Mapeamento tool_name → nome da variável de ambiente do binário.
+
+Inclui ferramentas Python e ``materialize`` (Rust); o valor é o nome da env var
+(``MATERIALIZE_BIN``), não o binário cargo.
+"""
 
 
 # ---------------------------------------------------------------------------

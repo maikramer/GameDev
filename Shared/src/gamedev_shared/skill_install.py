@@ -5,19 +5,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-
-def _find_monorepo_root(package_dir: Path) -> Path | None:
-    """Navega de package_dir para cima até encontrar a raiz do monorepo GameDev.
-
-    Assume layout ``GameDev/<Tool>/src/<pkg>/`` — sobe até encontrar pasta
-    que contenha ``.git`` ou ``Shared``.
-    """
-    current = package_dir
-    for _ in range(6):
-        current = current.parent
-        if (current / ".git").exists() or (current / "Shared").exists():
-            return current
-    return None
+from .installer.registry import try_find_monorepo_root
 
 
 def resolve_skill_source(
@@ -37,7 +25,7 @@ def resolve_skill_source(
     Raises:
         FileNotFoundError: Skill não encontrada em nenhuma localização.
     """
-    gamedev = _find_monorepo_root(package_dir)
+    gamedev = try_find_monorepo_root(package_dir)
     if gamedev is not None:
         cand = gamedev / ".cursor" / "create-skill" / tool_name
         if cand.is_dir() and (cand / "SKILL.md").is_file():

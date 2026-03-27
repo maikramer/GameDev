@@ -3,32 +3,32 @@
 import pytest
 from pathlib import Path
 
+from gamedev_shared.installer.registry import try_find_monorepo_root
 from gamedev_shared.skill_install import (
     resolve_skill_source,
     install_agent_skill,
-    _find_monorepo_root,
 )
 
 
 class TestFindMonorepoRoot:
-    def test_with_git(self, tmp_path):
+    def test_with_git_and_shared(self, tmp_path):
         (tmp_path / ".git").mkdir()
-        pkg = tmp_path / "Tool" / "src" / "pkg"
-        pkg.mkdir(parents=True)
-        result = _find_monorepo_root(pkg)
-        assert result == tmp_path
-
-    def test_with_shared(self, tmp_path):
         (tmp_path / "Shared").mkdir()
         pkg = tmp_path / "Tool" / "src" / "pkg"
         pkg.mkdir(parents=True)
-        result = _find_monorepo_root(pkg)
+        result = try_find_monorepo_root(pkg)
         assert result == tmp_path
+
+    def test_shared_only_returns_none(self, tmp_path):
+        (tmp_path / "Shared").mkdir()
+        pkg = tmp_path / "Tool" / "src" / "pkg"
+        pkg.mkdir(parents=True)
+        assert try_find_monorepo_root(pkg) is None
 
     def test_not_found(self, tmp_path):
         deep = tmp_path / "a" / "b" / "c" / "d" / "e" / "f" / "g" / "h"
         deep.mkdir(parents=True)
-        assert _find_monorepo_root(deep) is None
+        assert try_find_monorepo_root(deep) is None
 
 
 class TestResolveSkillSource:
@@ -36,6 +36,7 @@ class TestResolveSkillSource:
         gamedev = tmp_path / "GameDev"
         gamedev.mkdir()
         (gamedev / ".git").mkdir()
+        (gamedev / "Shared").mkdir()
         skill_dir = gamedev / ".cursor" / "create-skill" / "mytool"
         skill_dir.mkdir(parents=True)
         (skill_dir / "SKILL.md").write_text("# Skill")

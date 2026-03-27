@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any, Tuple
+
 
 def setup_rich_click(
     header: str,
@@ -49,3 +51,28 @@ def setup_rich_click(
         return True
     except ImportError:
         return False
+
+
+def setup_rich_click_module(
+    header: str,
+    footer: str,
+    *,
+    use_rich_markup: bool = True,
+    group_arguments_options: bool = True,
+    show_metavars_column: bool = True,
+) -> Tuple[Any, bool]:
+    """Configura rich-click se existir e devolve ``(módulo click, usou_rich_click)``."""
+    ok = setup_rich_click(
+        header,
+        footer,
+        use_rich_markup=use_rich_markup,
+        group_arguments_options=group_arguments_options,
+        show_metavars_column=show_metavars_column,
+    )
+    if ok:
+        import rich_click as click
+
+        return click, True
+    import click as click_std
+
+    return click_std, False

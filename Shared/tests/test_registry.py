@@ -8,8 +8,9 @@ from gamedev_shared.installer.registry import (
     ToolSpec,
     TOOLS,
     find_monorepo_root,
-    list_available_tools,
     get_tool,
+    list_available_tools,
+    try_find_monorepo_root,
 )
 
 
@@ -20,6 +21,8 @@ class TestToolSpec:
         assert "text2sound" in TOOLS
         assert "gameassets" in TOOLS
         assert "texture2d" in TOOLS
+        assert "skymap2d" in TOOLS
+        assert "rigging3d" in TOOLS
         assert "materialize" in TOOLS
 
     def test_text2sound_is_python(self):
@@ -102,6 +105,18 @@ class TestFindMonorepoRoot:
     def test_raises_if_not_found(self, tmp_path: Path):
         with pytest.raises(FileNotFoundError, match="Raiz do monorepo"):
             find_monorepo_root(tmp_path / "nonexistent")
+
+
+class TestTryFindMonorepoRoot:
+    def test_returns_none_if_not_found(self, tmp_path: Path):
+        assert try_find_monorepo_root(tmp_path / "nowhere") is None
+
+    def test_finds_when_git_and_shared(self, tmp_path: Path):
+        (tmp_path / ".git").mkdir()
+        (tmp_path / "Shared").mkdir()
+        pkg = tmp_path / "Rigging3D" / "src" / "rigging3d"
+        pkg.mkdir(parents=True)
+        assert try_find_monorepo_root(pkg) == tmp_path
 
 
 class TestListAvailableTools:
