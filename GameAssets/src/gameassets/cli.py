@@ -674,8 +674,9 @@ def batch_cmd(
             src = effective_image_source(profile, r)
             if src == "text2d":
                 any_t2d = True
-            else:
+            elif src == "texture2d":
                 any_tex = True
+            # skymap2d: pipeline próprio (Skymap2D); não usar binário texture2d
         return any_t2d, any_tex
 
     any_text2d_row, any_texture2d_row = _row_sources()

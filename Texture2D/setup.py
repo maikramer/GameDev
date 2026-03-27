@@ -1,13 +1,10 @@
-"""Texture2D — Setup Script — Texturas 2D seamless via HF Inference API."""
+"""Texture2D — setup — Texturas 2D seamless via HF Inference API."""
 
 from pathlib import Path
 
 from setuptools import find_packages, setup
 
 here = Path(__file__).resolve().parent
-
-with open(here / "README.md", encoding="utf-8") as fh:
-    long_description = fh.read()
 
 shared_local = (here.parent / "Shared").resolve()
 requirements = []
@@ -22,13 +19,7 @@ with open(here / "config" / "requirements.txt", encoding="utf-8") as fh:
             requirements.append(line)
 
 setup(
-    name="texture2d",
-    version="0.1.0",
-    author="Texture2D Project",
-    description="CLI para geração de texturas 2D seamless via HF Inference API (Flux LoRA)",
-    long_description=long_description,
-    long_description_content_type="text/markdown",
-    url="https://github.com/seu-usuario/texture2d",
+    # name/version/description/readme/authors: declarados em pyproject.toml ([project])
     package_dir={"": "src"},
     packages=find_packages(where="src"),
     package_data={"texture2d": ["cursor_skill/*.md"]},
@@ -36,7 +27,6 @@ setup(
         "Development Status :: 3 - Alpha",
         "Intended Audience :: Developers",
         "Topic :: Multimedia :: Graphics",
-        "License :: OSI Approved :: MIT License",
         "Programming Language :: Python :: 3",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",

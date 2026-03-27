@@ -11,6 +11,7 @@ requires-python = ">=3.10"
 authors = [{ name = "GameDev" }]
 license = "MIT"
 dependencies = [
+    "click>=8.1.0",
     "rich>=13.0.0",
 ]
 classifiers = [
@@ -23,7 +24,7 @@ classifiers = [
 
 [project.optional-dependencies]
 gpu = ["torch>=2.1.0"]
-cli = ["click>=8.1.0", "rich-click>=1.8.0"]
+cli = ["rich-click>=1.8.0"]
 dev = ["pytest>=7.4.0", "pytest-cov>=4.0.0", "ruff>=0.11.0", "mypy>=1.10.0"]
 
 [project.scripts]
