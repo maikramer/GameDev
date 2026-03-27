@@ -129,15 +129,17 @@ Instruções completas: [Shared/README.md](Shared/README.md), [Text2D/README.md]
 |-----------|---------|------|
 | Código do monorepo (Text2D, Text3D, Texture2D, Skymap2D, Rigging3D, GameAssets, Shared) | MIT | Ver `LICENSE` em cada pasta |
 | Materialize CLI (Rust) | MIT | [Materialize/LICENSE](Materialize/LICENSE) |
-| FLUX.2 Klein (pesos) | Consultar model card | [Disty0/FLUX.2-klein-4B-SDNQ](https://huggingface.co/Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic) |
-| Hunyuan3D-2mini (pesos) | Tencent Community License | [tencent/Hunyuan3D-2mini](https://huggingface.co/tencent/Hunyuan3D-2mini) |
-| Stable Audio Open 1.0 (pesos) | Consultar model card | [stabilityai/stable-audio-open-1.0](https://huggingface.co/stabilityai/stable-audio-open-1.0) |
-| Flux-Seamless-Texture-LoRA (pesos) | Consultar model card | [gokaygokay/Flux-Seamless-Texture-LoRA](https://huggingface.co/gokaygokay/Flux-Seamless-Texture-LoRA) |
-| Flux-LoRA-Equirectangular-v3 (pesos) | Consultar model card | [MultiTrickFox/Flux-LoRA-Equirectangular-v3](https://huggingface.co/MultiTrickFox/Flux-LoRA-Equirectangular-v3) |
+| FLUX.2 Klein 4B (oficial, BF16) | Apache 2.0 | [black-forest-labs/FLUX.2-klein-4B](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B) — uso comercial permitido segundo o model card; mais VRAM que o SDNQ |
+| FLUX.2 Klein 4B SDNQ (default Text2D) | FLUX Non-Commercial (metadata HF) | [Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic](https://huggingface.co/Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic) declara `flux-non-commercial-license`; **não** é o mesmo regime que o checkpoint oficial Apache 2.0. Para produto comercial, prefira `TEXT2D_MODEL_ID=black-forest-labs/FLUX.2-klein-4B` ou acordo com a BFL |
+| Hunyuan3D-2mini (shape, Text3D) | Tencent Hunyuan 3D Community License | [tencent/Hunyuan3D-2mini](https://huggingface.co/tencent/Hunyuan3D-2mini) — lê o `LICENSE` no repositório: restrições de território (ex.: UE, Reino Unido, Coreia do Sul), política de uso aceitável e obrigações em cadeia |
+| Hunyuan3D-2 (paint, Text3D) | Tencent Hunyuan 3D 2.0 Community License | [tencent/Hunyuan3D-2](https://huggingface.co/tencent/Hunyuan3D-2) — mesmo tipo de acordo comunitário; pesos de textura em subpasta do repo |
+| Stable Audio Open 1.0 / Open Small (Text2Sound) | Stability AI Community License | [stabilityai/stable-audio-open-1.0](https://huggingface.co/stabilityai/stable-audio-open-1.0), [stabilityai/stable-audio-open-small](https://huggingface.co/stabilityai/stable-audio-open-small) — modelos **gated** (aceitar no Hub); uso comercial gratuito com teto de receita anual (ver `LICENSE.md` no repo, atualmente ~USD 1M; alterações: [stability.ai/license](https://stability.ai/license)) |
+| Flux-Seamless-Texture-LoRA (Texture2D) | Apache 2.0 (metadata HF) | [gokaygokay/Flux-Seamless-Texture-LoRA](https://huggingface.co/gokaygokay/Flux-Seamless-Texture-LoRA) — LoRA sobre FLUX.1-dev: cumpre também os termos do modelo base e da API de inferência |
+| Flux-LoRA-Equirectangular-v3 (Skymap2D) | Base FLUX.1 [dev] (NCL) + card HF | [MultiTrickFox/Flux-LoRA-Equirectangular-v3](https://huggingface.co/MultiTrickFox/Flux-LoRA-Equirectangular-v3) — sem SPDX no README; modelo base [FLUX.1-dev](https://huggingface.co/black-forest-labs/FLUX.1-dev) está sob licença não comercial BFL; origem Civitai no card |
 | UniRig (código em `Rigging3D/…/unirig/`) | MIT | [VAST-AI-Research/UniRig](https://github.com/VAST-AI-Research/UniRig) · [THIRD_PARTY.md](Rigging3D/THIRD_PARTY.md) |
-| UniRig (pesos) | Consultar model card | [VAST-AI/UniRig](https://huggingface.co/VAST-AI/UniRig) |
+| UniRig (pesos HF) | MIT (vários mirrors listam MIT) | [VAST-AI/UniRig](https://huggingface.co/VAST-AI/UniRig) — confirma no README/`LICENSE` do snapshot que usas; [exemplo com LICENSE MIT](https://huggingface.co/apozz/UniRig-safetensors) |
 
-> **Atenção:** os pesos dos modelos pré-treinados têm licenças próprias — consulta os model cards antes de distribuir ou usar em produção.
+> **Atenção:** os pesos têm licenças próprias. **Inference API** (Texture2D, Skymap2D): além do modelo, aplicam-se [termos Hugging Face](https://huggingface.co/terms-of-service) e políticas da API. **Não** redistribuir checkpoints sem cumprir a licença e atribuições do autor. Shap-E (`openai/shap-e`) em scripts legados Text3D exige aceitar termos no Hub.
 
 ## Variáveis de Ambiente
 

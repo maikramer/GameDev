@@ -136,4 +136,6 @@ pytest tests/ -v
 
 ## Licença
 
-MIT
+- **Código:** MIT — [LICENSE](LICENSE).
+- **Pesos (default):** [Flux-LoRA-Equirectangular-v3](https://huggingface.co/MultiTrickFox/Flux-LoRA-Equirectangular-v3) — LoRA sobre [FLUX.1-dev](https://huggingface.co/black-forest-labs/FLUX.1-dev) (licença **não comercial** BFL); inferência via [HF Inference API](https://huggingface.co/docs/api-inference/) — aplica-se também os [termos HF](https://huggingface.co/terms-of-service).
+- **Tabela completa:** [GameDev/README.md](../README.md) (secção Licenças).

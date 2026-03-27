@@ -150,4 +150,6 @@ pytest tests/ -v
 
 ## Licença
 
-MIT
+- **Código:** MIT — [LICENSE](LICENSE).
+- **Pesos (default):** [Flux-Seamless-Texture-LoRA](https://huggingface.co/gokaygokay/Flux-Seamless-Texture-LoRA) — metadata HF indica Apache 2.0; cumpre também os termos do **modelo base** (FLUX) e da [HF Inference API](https://huggingface.co/docs/api-inference/).
+- **Tabela completa:** [GameDev/README.md](../README.md) (secção Licenças).

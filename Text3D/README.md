@@ -6,7 +6,7 @@ Os **valores por defeito** do CLI/API estão em [`src/text3d/defaults.py`](src/t
 
 **Atalhos:** `--preset fast` (menos tempo/VRAM), `balanced` (igual aos defeitos), `hq` (alta qualidade, GPU grande) — ajusta `--steps`, `--octree-resolution` e `--num-chunks` em conjunto (se usares `--preset`, não esperes que `--steps`/`--octree-resolution`/`--num-chunks` “ganhem” ao perfil — o preset tem prioridade). **`text3d doctor`** verifica PyTorch, VRAM e se o **Paint** pode carregar (`custom_rasterizer`). O CLI define `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` se a variável ainda não existir (menos fragmentação de VRAM).
 
-> **Licença dos pesos Hunyuan:** [Tencent Hunyuan Community](https://huggingface.co/tencent/Hunyuan3D-2mini) — uso não comercial; lê o model card antes de uso em produção.
+> **Licença dos pesos Hunyuan:** [Tencent Hunyuan 3D Community License](https://huggingface.co/tencent/Hunyuan3D-2mini) — lê o ficheiro `LICENSE` nos repositórios ([2mini](https://huggingface.co/tencent/Hunyuan3D-2mini), [Hunyuan3D-2 / Paint](https://huggingface.co/tencent/Hunyuan3D-2)): restrições de território, política de uso aceitável e obrigações. **Text2D (FLUX):** o default SDNQ no monorepo não é o mesmo regime que o BF16 Apache 2.0 da BFL — ver [Text2D/README](../Text2D/README.md) e [GameDev/README](../README.md).
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 
@@ -181,4 +181,4 @@ text3d generate "objeto" --no-mesh-repair
 ## Créditos
 
 - **Tencent Hunyuan3D** — [Hunyuan3D-2](https://github.com/Tencent-Hunyuan/Hunyuan3D-2), [Hunyuan3D-2mini](https://huggingface.co/tencent/Hunyuan3D-2mini)
-- **Text2D** — FLUX.2 Klein (SDNQ) no pacote `text2d` do monorepo
+- **Text2D** — FLUX.2 Klein (SDNQ Disty0 por defeito; opcional BF16 BFL via `TEXT2D_MODEL_ID`) no pacote `text2d` do monorepo — licenças: [GameDev/README](../README.md)

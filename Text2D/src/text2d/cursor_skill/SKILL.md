@@ -44,7 +44,7 @@ text2d -v generate "teste"
 
 | Variável | Função |
 |----------|--------|
-| `TEXT2D_MODEL_ID` | Repo Hugging Face alternativo compatível com o pipeline Klein |
+| `TEXT2D_MODEL_ID` | Repo Hugging Face alternativo compatível com o pipeline Klein (default SDNQ = termos Disty0; `black-forest-labs/FLUX.2-klein-4B` = Apache 2.0 no card BFL) |
 | `HF_HOME` | Raiz do cache Hugging Face |
 
 ## Notas importantes
@@ -52,6 +52,7 @@ text2d -v generate "teste"
 - **Primeira execução:** download de pesos — pode parecer “parado” durante rede/disco.
 - Pesos **GGUF** são para fluxos tipo ComfyUI-GGUF, **não** este CLI Diffusers.
 - **Guidance** padrão **1.0** para o checkpoint SDNQ Disty0.
+- **Licenças:** o default SDNQ (Disty0) declara no Hub termos tipo **non-commercial**; o BF16 oficial BFL é **Apache 2.0** — ver `Text2D/README.md` e `GameDev/README.md`.
 - Em **GameAssets**, resolução 2D elevada + outras apps na mesma GPU (ex.: **Godot** + editor 3D) aumenta risco de **OOM**; reduzir `width`/`height` no bloco `text2d` do `game.yaml` ou libertar VRAM.
 
 ## Ferramentas relacionadas

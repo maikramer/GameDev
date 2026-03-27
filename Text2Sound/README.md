@@ -7,7 +7,7 @@ CLI para geração de áudio estéreo a 44.1 kHz a partir de prompts de texto, c
 | Música / ambientes longos | [Stable Audio Open 1.0](https://huggingface.co/stabilityai/stable-audio-open-1.0) | ~47 s | `--profile music` (padrão) |
 | Efeitos / SFX curtos | [Stable Audio Open Small](https://huggingface.co/stabilityai/stable-audio-open-small) | ~11 s | `--profile effects` |
 
-Ambos os repositórios podem ser **gated**: aceita os termos no Hub e define `HF_TOKEN`. Licenças: ver os model cards (Open Small: Stability AI Community License).
+Ambos os repositórios podem ser **gated**: aceita os termos no Hub e define `HF_TOKEN`. **Stability AI Community License** (`LICENSE.md` em cada repo): pesquisa e uso não comercial; uso comercial com **teto de receita** (ver texto atual no repositório e [stability.ai/license](https://stability.ai/license)). Resumo: [GameDev/README.md — Licenças](../README.md).
 
 ## Funcionalidades
 
@@ -187,5 +187,5 @@ pytest tests/ -v -m "not slow"
 
 ## Licença
 
-MIT — ver [LICENSE](LICENSE).
-Os pesos seguem as licenças dos model cards: [Open 1.0](https://huggingface.co/stabilityai/stable-audio-open-1.0) e [Open Small](https://huggingface.co/stabilityai/stable-audio-open-small) (Stability AI Community License para o Small).
+- **Código:** MIT — [LICENSE](LICENSE).
+- **Pesos:** [Stable Audio Open 1.0](https://huggingface.co/stabilityai/stable-audio-open-1.0) e [Stable Audio Open Small](https://huggingface.co/stabilityai/stable-audio-open-small) — **Stability AI Community License** (aceitar no Hub; condições de uso comercial e limite de receita no `LICENSE.md` de cada repositório e em [stability.ai/license](https://stability.ai/license)).

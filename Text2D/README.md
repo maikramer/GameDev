@@ -11,7 +11,7 @@ CLI de **text-to-imagem** com [FLUX.2 Klein 4B](https://huggingface.co/black-for
 | VRAM    | ~6 GB+ com `--low-vram` e 512² | Depende do checkpoint; GPUs modestas: `--low-vram` |
 | Disco   | ~8 GB  | Cache HF + pesos SDNQ (~2,5 GB em disco) |
 
-**Licença dos pesos:** consulte o [model card Disty0](https://huggingface.co/Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic) (pode diferir do Apache 2.0 do modelo base BFL).
+**Licença dos pesos:** o default é o checkpoint SDNQ [Disty0](https://huggingface.co/Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic), que no Hugging Face está associado a **FLUX Non-Commercial** (`flux-non-commercial-license` no metadata), **distinto** do oficial [black-forest-labs/FLUX.2-klein-4B](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B) (**Apache 2.0** no model card). Para uso comercial com menos ambiguidade, define `TEXT2D_MODEL_ID=black-forest-labs/FLUX.2-klein-4B` (mais VRAM). Resumo: [Licenças no monorepo](../README.md).
 
 ## Instalação rápida
 
@@ -77,7 +77,7 @@ text2d models
 
 | Variável | Descrição |
 |----------|-----------|
-| `TEXT2D_MODEL_ID` | Repositório HF alternativo compatível com `Flux2KleinPipeline` |
+| `TEXT2D_MODEL_ID` | Repositório HF alternativo compatível com `Flux2KleinPipeline` (ex.: `black-forest-labs/FLUX.2-klein-4B` para Apache 2.0; default SDNQ = termos Disty0) |
 | `HF_HOME` | Cache Hugging Face (por defeito: `~/.cache/huggingface`) |
 | `TEXT2D_MODELS_DIR` | Diretório de modelos locais; o instalador grava em `~/.config/text2d/config.env` quando existe `Text2D/models/` com pesos |
 | `TEXT2D_OUTPUT_DIR` | Diretório de saída das imagens (criado pelo instalador em `~/.text2d/outputs`) |
@@ -122,4 +122,5 @@ pytest tests/ -v
 
 ## Licença
 
-Código do projeto: MIT — [LICENSE](LICENSE). Pesos e termos de uso: repositórios Hugging Face respetivos.
+- **Código:** MIT — [LICENSE](LICENSE).
+- **Pesos:** o default SDNQ segue o [card Disty0](https://huggingface.co/Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic) (non-commercial no metadata HF). O checkpoint BF16 BFL está em [FLUX.2-klein-4B](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B) (Apache 2.0). Tabela completa: [GameDev/README.md — Licenças](../README.md).

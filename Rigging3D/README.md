@@ -13,7 +13,7 @@ Dependências pesadas (PyTorch, bpy, flash_attn, etc.) estão no grupo `[inferen
 
 Pós-pip: **spconv**, **torch_scatter**, **torch_cluster** — vê o [README do UniRig](https://github.com/VAST-AI-Research/UniRig).
 
-Pesos: [Hugging Face — VAST-AI/UniRig](https://huggingface.co/VAST-AI/UniRig).
+Pesos: [Hugging Face — VAST-AI/UniRig](https://huggingface.co/VAST-AI/UniRig) — confirma o `LICENSE` / README do snapshot que usas (mirrors com MIT existem; ver [GameDev/README](../README.md)).
 
 ## Requisitos
 
@@ -49,3 +49,4 @@ export RIGGING3D_ROOT=/outro/caminho
 
 - Rigging3D (CLI): **MIT** — [`LICENSE`](LICENSE)
 - Código UniRig: **MIT** — [`unirig/LICENSE`](src/rigging3d/unirig/LICENSE) · [`THIRD_PARTY.md`](THIRD_PARTY.md)
+- **Pesos HF:** o repositório [VAST-AI/UniRig](https://huggingface.co/VAST-AI/UniRig) pode não incluir `LICENSE` na raiz; valida termos no card e em forks com ficheiro explícito se necessário. Tabela no [README do monorepo](../README.md).

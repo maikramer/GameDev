@@ -45,4 +45,11 @@ O subcomando aceita `-v` / `--verbose`. Também: `text2d -v generate "..."`.
 
 ## O modelo Disty0 não carrega ou licença
 
-Consulte o [model card](https://huggingface.co/Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic) para termos e requisitos de aceitação no Hub.
+1. **Hub:** confirma no [model card Disty0](https://huggingface.co/Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic) se há passos extra (aceitar termos, login `huggingface-cli`).
+2. **Termos do checkpoint:** o metadata HF associa este repositório a **FLUX Non-Commercial** — não é o mesmo regime que o modelo oficial **Apache 2.0** ([black-forest-labs/FLUX.2-klein-4B](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B)).
+3. **Uso comercial:** para reduzir ambiguidade jurídica, usa o oficial com mais VRAM:
+   ```bash
+   export TEXT2D_MODEL_ID=black-forest-labs/FLUX.2-klein-4B
+   text2d generate "prompt" ...
+   ```
+4. **Resumo do monorepo:** [GameDev/README.md — secção Licenças](../../README.md).

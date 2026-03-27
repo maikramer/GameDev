@@ -222,4 +222,5 @@ GameAssets/
 
 ## Licença
 
-MIT (alinhado ao resto do monorepo). Os modelos (FLUX, Hunyuan, etc.) têm licenças próprias.
+- **Código:** MIT (alinhado ao resto do monorepo).
+- **Modelos invocados** (`text2d`, `texture2d`, `skymap2d`, `text2sound`, `text3d`, `rigging3d`): cada ferramenta descarrega ou usa pesos com licenças próprias (FLUX, Tencent Hunyuan, Stability Audio, UniRig, etc.). **Não** confundir a MIT do `gameassets` com a licença dos checkpoints. Tabela e notas: [README do monorepo — Licenças](../README.md).
