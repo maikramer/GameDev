@@ -5,9 +5,15 @@ from __future__ import annotations
 import zlib
 from pathlib import Path
 
-from gameassets.cli import _paths_for_row, _seed_for_row, _text3d_argv
+from gameassets.cli import (
+    _paths_for_row,
+    _rigging3d_output_path,
+    _rigging3d_pipeline_argv,
+    _seed_for_row,
+    _text3d_argv,
+)
 from gameassets.manifest import ManifestRow
-from gameassets.profile import GameProfile, Text3DProfile
+from gameassets.profile import GameProfile, Rigging3DProfile, Text3DProfile
 
 
 def test_seed_for_row_none_when_no_base() -> None:
@@ -95,14 +101,16 @@ def test_text3d_argv_minimal() -> None:
         style_preset="lowpoly",
         text3d=None,
     )
-    argv = _text3d_argv("/bin/text3d", p, Path("/a.png"), Path("/m.glb"))
+    img = Path("/a.png")
+    mesh = Path("/m.glb")
+    argv = _text3d_argv("/bin/text3d", p, img, mesh)
     assert argv[:6] == [
         "/bin/text3d",
         "generate",
         "--from-image",
-        "/a.png",
+        str(img),
         "-o",
-        "/m.glb",
+        str(mesh),
     ]
 
 
@@ -240,3 +248,37 @@ def test_text3d_argv_materialize_maps_dir_override() -> None:
     )
     idx = argv.index("--materialize-output-dir") + 1
     assert argv[idx] == str(override)
+
+
+def test_rigging3d_output_path() -> None:
+    m = Path("meshes") / "hero.glb"
+    assert _rigging3d_output_path(m, "_rigged").name == "hero_rigged.glb"
+    assert _rigging3d_output_path(m, "rigged").name == "hero_rigged.glb"
+
+
+def test_rigging3d_pipeline_argv_minimal() -> None:
+    argv = _rigging3d_pipeline_argv(
+        "rigging3d",
+        Path("/in.glb"),
+        Path("/out_rigged.glb"),
+        seed=42,
+        rig_profile=None,
+    )
+    assert argv[0] == "rigging3d"
+    assert argv[1] == "pipeline"
+    assert "--seed" in argv
+    assert "42" in argv
+
+
+def test_rigging3d_pipeline_argv_with_profile() -> None:
+    rg = Rigging3DProfile(root="/u", python="/py/bin/python")
+    argv = _rigging3d_pipeline_argv(
+        "rigging3d",
+        Path("/a.glb"),
+        Path("/b.glb"),
+        seed=None,
+        rig_profile=rg,
+    )
+    assert argv.index("--root") + 1 < len(argv)
+    assert argv[argv.index("--root") + 1] == "/u"
+    assert argv[argv.index("--python") + 1] == "/py/bin/python"

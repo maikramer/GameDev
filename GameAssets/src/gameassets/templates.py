@@ -72,11 +72,15 @@ text3d:
   # materialize_save_maps: true
   # materialize_export_maps_to_output: false
   # materialize_maps_subdir: pbr_maps
+
+# Rigging3D após Text3D (--with-rig + coluna generate_rig=true no CSV). Requer bash, GPU CUDA; ver Rigging3D/README.md.
+# rigging3d:
+#   output_suffix: "_rigged"
 """
 
-MANIFEST_CSV = """id,idea,kind,generate_3d,generate_audio,image_source
-chest_01,"baú de madeira com ferrolhos dourados",prop,false,false,
-hero_sword,"espada longa com gema azul no punho",prop,true,false,
-forest_bg,"floresta densa ao entardecer",environment,false,false,
-sky_sunset,"pôr do sol sobre montanhas, nuvens douradas",skymap,false,false,skymap2d
+MANIFEST_CSV = """id,idea,kind,generate_3d,generate_audio,generate_rig,image_source
+chest_01,"baú de madeira com ferrolhos dourados",prop,false,false,false,
+hero_sword,"espada longa com gema azul no punho",prop,true,false,false,
+forest_bg,"floresta densa ao entardecer",environment,false,false,false,
+sky_sunset,"pôr do sol sobre montanhas, nuvens douradas",skymap,false,false,false,skymap2d
 """

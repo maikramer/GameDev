@@ -28,7 +28,7 @@ from . import __version__
 from .batch_guard import batch_directory_lock, query_gpu_free_mib, subprocess_gpu_env
 from .manifest import ManifestRow, effective_image_source, load_manifest
 from .presets import get_preset, load_presets_bundle
-from .profile import GameProfile, Text2SoundProfile, Texture2DProfile, load_profile
+from .profile import GameProfile, Rigging3DProfile, Text2SoundProfile, Texture2DProfile, load_profile
 from .prompt_builder import build_audio_prompt, build_prompt
 from .runner import merge_subprocess_output, resolve_binary, run_cmd
 from .templates import GAME_YAML, MANIFEST_CSV
@@ -46,7 +46,7 @@ Preset só num ficheiro teu (ex.: galaxy_orbital em presets-local.yaml):
   gameassets batch --profile game.yaml --manifest manifest.csv --with-3d \\
     --presets-local presets-local.yaml --log run.jsonl
 
-Define TEXT2D_BIN / TEXT3D_BIN (e MATERIALIZE_BIN se usares text3d.materialize) se não estiverem no PATH.
+Define TEXT2D_BIN / TEXT3D_BIN / RIGGING3D_BIN (e MATERIALIZE_BIN se usares text3d.materialize) se não estiverem no PATH.
 Com image_source: texture2d: TEXTURE2D_BIN e, se texture2d.materialize, MATERIALIZE_BIN (ou texture2d.materialize_bin).
 Com generate_audio no CSV: TEXT2SOUND_BIN se text2sound não estiver no PATH.
 """
@@ -305,6 +305,89 @@ def _paths_for_row(profile: GameProfile, row: ManifestRow) -> tuple[Path, Path]:
     return img, mesh
 
 
+def _rigging3d_output_path(mesh_final: Path, suffix: str) -> Path:
+    """ex.: ``hero.glb`` + ``_rigged`` → ``hero_rigged.glb``."""
+    s = (suffix or "_rigged").strip()
+    if s and not s.startswith("_"):
+        s = f"_{s}"
+    if not s:
+        s = "_rigged"
+    return mesh_final.with_name(f"{mesh_final.stem}{s}.glb")
+
+
+def _rigging3d_pipeline_argv(
+    rigging3d_bin: str,
+    mesh_in: Path,
+    mesh_out: Path,
+    *,
+    seed: int | None,
+    rig_profile: Rigging3DProfile | None,
+) -> list[str]:
+    args = [
+        rigging3d_bin,
+        "pipeline",
+        "--input",
+        str(mesh_in),
+        "--output",
+        str(mesh_out),
+    ]
+    if seed is not None:
+        args.extend(["--seed", str(seed)])
+    if rig_profile:
+        if rig_profile.root:
+            args.extend(["--root", rig_profile.root])
+        if rig_profile.python:
+            args.extend(["--python", rig_profile.python])
+    return args
+
+
+def _rigging3d_pipeline_failed(
+    profile: GameProfile,
+    row: ManifestRow,
+    mesh_final: Path,
+    rec: dict[str, Any],
+    manifest_dir: Path,
+    child_env: dict[str, str],
+    rigging3d_bin: str | None,
+    with_rig: bool,
+) -> bool:
+    """Corre ``rigging3d pipeline`` após GLB do Text3D. Devolve True se o rig falhou."""
+    if not with_rig or not row.generate_rig or not rigging3d_bin:
+        return False
+    if not row.generate_3d:
+        return False
+    if not mesh_final.is_file():
+        return False
+    rg = profile.rigging3d
+    sfx = rg.output_suffix if rg else "_rigged"
+    rig_out = _rigging3d_output_path(mesh_final, sfx)
+    seed = _seed_for_row(profile, row.id)
+    argv = _rigging3d_pipeline_argv(
+        rigging3d_bin,
+        mesh_final,
+        rig_out,
+        seed=seed,
+        rig_profile=rg,
+    )
+    t0 = time.perf_counter()
+    r = run_cmd(argv, extra_env=child_env, cwd=manifest_dir)
+    _timing_append(rec, "rigging3d", time.perf_counter() - t0)
+    if r.returncode != 0:
+        err = merge_subprocess_output(r) or "rigging3d falhou"
+        rec["status"] = "error"
+        rec["error"] = err
+        preview = merge_subprocess_output(r, max_chars=4000) or err
+        console.print(f"[red]rigging3d falhou[/red] {row.id}: {preview}")
+        return True
+    if not rig_out.is_file():
+        rec["status"] = "error"
+        rec["error"] = "rigging3d não produziu GLB rigado"
+        console.print(f"[red]rigging3d sem GLB[/red] {row.id}")
+        return True
+    rec["rig_mesh_path"] = _path_for_log(rig_out, manifest_dir)
+    return False
+
+
 def _build_context(
     profile_path: Path,
     manifest_path: Path,
@@ -437,6 +520,7 @@ def prompts_cmd(
                 "prompt_audio": prompt_audio,
                 "generate_3d": row.generate_3d,
                 "generate_audio": row.generate_audio,
+                "generate_rig": row.generate_rig,
             }
         )
     if output:
@@ -460,13 +544,15 @@ def prompts_cmd(
     table.add_column("id", style="cyan", no_wrap=True)
     table.add_column("3D?", justify="center")
     table.add_column("áudio?", justify="center")
+    table.add_column("rig?", justify="center")
     table.add_column("prompt (início)", overflow="ellipsis", max_width=64)
     for e in entries:
         p = e["prompt"]
         preview = p if len(p) <= 64 else p[:61] + "..."
         flag3 = "sim" if e["generate_3d"] else "não"
         flag_a = "sim" if e["generate_audio"] else "não"
-        table.add_row(e["id"], flag3, flag_a, preview)
+        flag_r = "sim" if e["generate_rig"] else "não"
+        table.add_row(e["id"], flag3, flag_a, flag_r, preview)
     console.print(table)
 
 
@@ -533,6 +619,12 @@ def prompts_cmd(
     is_flag=True,
     help="Não gerar áudio Text2Sound (ignora coluna generate_audio).",
 )
+@click.option(
+    "--with-rig",
+    "with_rig",
+    is_flag=True,
+    help="Após Text3D, corre rigging3d pipeline nas linhas com generate_rig=true (GLB rigado).",
+)
 def batch_cmd(
     profile_path: Path,
     manifest_path: Path,
@@ -545,6 +637,7 @@ def batch_cmd(
     skip_gpu_preflight: bool,
     skip_text2d: bool,
     skip_audio: bool,
+    with_rig: bool,
 ) -> None:
     """Gera imagens (e opcionalmente meshes) para cada linha do manifest."""
     profile, rows, _bundle, preset = _build_context(
@@ -561,6 +654,26 @@ def batch_cmd(
             Panel(
                 "[yellow]Há linhas com generate_3d=true mas 3D está desligado.[/yellow]\n"
                 "Usa [bold]--with-3d[/bold] para gerar meshes.",
+                title="Aviso",
+                border_style="yellow",
+            )
+        )
+
+    if not with_3d and any(r.generate_rig for r in rows):
+        console.print(
+            Panel(
+                "[yellow]Há linhas com generate_rig=true mas --with-3d está desligado.[/yellow]\n"
+                "O rigging3d só corre após Text3D; activa [bold]--with-3d[/bold] e generate_3d.",
+                title="Aviso",
+                border_style="yellow",
+            )
+        )
+
+    if not with_rig and any(r.generate_rig for r in rows):
+        console.print(
+            Panel(
+                "[yellow]Há linhas com generate_rig=true mas o rig está desligado.[/yellow]\n"
+                "Usa [bold]--with-rig[/bold] para correr rigging3d após o GLB do Text3D.",
                 title="Aviso",
                 border_style="yellow",
             )
@@ -596,6 +709,13 @@ def batch_cmd(
     if with_3d:
         try:
             text3d_bin = resolve_binary("TEXT3D_BIN", "text3d")
+        except FileNotFoundError as e:
+            raise click.ClickException(str(e)) from e
+
+    rigging3d_bin: str | None = None
+    if with_rig and any(r.generate_rig for r in rows):
+        try:
+            rigging3d_bin = resolve_binary("RIGGING3D_BIN", "rigging3d")
         except FileNotFoundError as e:
             raise click.ClickException(str(e)) from e
 
@@ -635,6 +755,7 @@ def batch_cmd(
             else (text2sound_bin or ""),
         )
     meta.add_row("text3d", text3d_bin or "[dim](desligado)[/dim]")
+    meta.add_row("rigging3d", rigging3d_bin or "[dim](desligado)[/dim]")
     meta.add_row("Modo", "[cyan]dry-run[/cyan]" if dry_run else "execução")
     if skip_text2d:
         ord_skip: list[str] = ["Geração 2D omitida"]
@@ -854,6 +975,32 @@ def batch_cmd(
                     if seed is not None:
                         t3d_args.extend(["--seed", str(seed)])
                     console.print(f"[dim]{' '.join(t3d_args)}[/dim]")
+        if (
+            with_rig
+            and rigging3d_bin
+            and any(r.generate_3d and r.generate_rig for r in rows)
+        ):
+            console.print(
+                "[dim]--- Rigging3D (após GLB do Text3D; generate_rig=true) ---[/dim]"
+            )
+            for row in rows:
+                if not row.generate_3d or not row.generate_rig:
+                    continue
+                _img_path, mesh_path = _paths_for_row_manifest(
+                    profile, manifest_dir, row
+                )
+                seed = _seed_for_row(profile, row.id)
+                rg = profile.rigging3d
+                sfx = rg.output_suffix if rg else "_rigged"
+                rig_out = _rigging3d_output_path(mesh_path, sfx)
+                rg_args = _rigging3d_pipeline_argv(
+                    rigging3d_bin,
+                    mesh_path,
+                    rig_out,
+                    seed=seed,
+                    rig_profile=rg,
+                )
+                console.print(f"[dim]{' '.join(rg_args)}[/dim]")
         console.print(
             Panel("[green]dry-run concluído[/green]", border_style="green", title="Batch")
         )
@@ -913,6 +1060,7 @@ def batch_cmd(
                         "status": "ok",
                         "image_path": _path_for_log(img_final, manifest_dir),
                         "mesh_path": None,
+                        "rig_mesh_path": None,
                         "audio_path": None,
                         "error": None,
                         "audio_error": None,
@@ -1208,6 +1356,7 @@ def batch_cmd(
                         maps_tmp: Path | None,
                         row: ManifestRow,
                     ) -> None:
+                        nonlocal failures
                         if (
                             maps_tmp is not None
                             and t3_opts
@@ -1219,6 +1368,17 @@ def batch_cmd(
                             dst_maps.mkdir(parents=True, exist_ok=True)
                             _install_maps_dir(maps_tmp, dst_maps)
                         rec["mesh_path"] = _path_for_log(mesh_final, manifest_dir)
+                        if _rigging3d_pipeline_failed(
+                            profile,
+                            row,
+                            mesh_final,
+                            rec,
+                            manifest_dir,
+                            child_env,
+                            rigging3d_bin,
+                            with_rig,
+                        ):
+                            failures += 1
 
                     if use_phased:
                         task_shape = progress.add_task(
@@ -1362,8 +1522,13 @@ def batch_cmd(
                                     if t3_opts and t3_opts.materialize:
                                         texture_ok.append(idx)
                                     else:
-                                        append_log(rec)
                                         _finalize_mesh_ok(rec, mesh_final, None, row)
+                                        append_log(rec)
+                                        if (
+                                            not continue_on_error
+                                            and rec["status"] == "error"
+                                        ):
+                                            raise click.Abort()
                             finally:
                                 keep_for_mat = (
                                     t3_opts
@@ -1515,6 +1680,17 @@ def batch_cmd(
                                     rec["mesh_path"] = _path_for_log(
                                         mesh_final, manifest_dir
                                     )
+                                    if _rigging3d_pipeline_failed(
+                                        profile,
+                                        row,
+                                        mesh_final,
+                                        rec,
+                                        manifest_dir,
+                                        child_env,
+                                        rigging3d_bin,
+                                        with_rig,
+                                    ):
+                                        failures += 1
                                 append_log(rec)
                                 if not continue_on_error and rec["status"] == "error":
                                     raise click.Abort()

@@ -26,6 +26,40 @@ def test_from_dict_minimal() -> None:
     assert p.text3d is None
 
 
+def test_from_dict_rigging3d() -> None:
+    p = GameProfile.from_dict(
+        {
+            "title": "A",
+            "genre": "B",
+            "tone": "C",
+            "style_preset": "lowpoly",
+            "rigging3d": {
+                "output_suffix": "_skinned",
+                "root": "/opt/unirig",
+                "python": "/env/bin/python",
+            },
+        }
+    )
+    assert p.rigging3d is not None
+    assert p.rigging3d.output_suffix == "_skinned"
+    assert p.rigging3d.root == "/opt/unirig"
+    assert p.rigging3d.python == "/env/bin/python"
+
+
+def test_from_dict_rigging3d_output_suffix_adds_underscore() -> None:
+    p = GameProfile.from_dict(
+        {
+            "title": "A",
+            "genre": "B",
+            "tone": "C",
+            "style_preset": "lowpoly",
+            "rigging3d": {"output_suffix": "rigged"},
+        }
+    )
+    assert p.rigging3d is not None
+    assert p.rigging3d.output_suffix == "_rigged"
+
+
 def test_from_dict_text3d() -> None:
     p = GameProfile.from_dict(
         {

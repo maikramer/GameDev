@@ -103,6 +103,18 @@ class Texture2DProfile:
 
 
 @dataclass
+class Rigging3DProfile:
+    """Opções para o CLI rigging3d pipeline após Text3D (GLB → GLB rigado)."""
+
+    # hero.glb → hero_rigged.glb (sufixo antes da extensão)
+    output_suffix: str = "_rigged"
+    # Opcional: raiz UniRig empacotada (equivalente a RIGGING3D_ROOT)
+    root: str | None = None
+    # Opcional: intérprete Python com torch/bpy (equivalente a RIGGING3D_PYTHON)
+    python: str | None = None
+
+
+@dataclass
 class Skymap2DProfile:
     """Opções passadas ao CLI skymap2d generate (HF equirectangular 360°)."""
 
@@ -140,6 +152,7 @@ class GameProfile:
     skymap2d: Skymap2DProfile | None = None
     text3d: Text3DProfile | None = None
     text2sound: Text2SoundProfile | None = None
+    rigging3d: Rigging3DProfile | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> GameProfile:
@@ -388,6 +401,22 @@ class GameProfile:
                 full_gpu=full_gpu,
                 model_subfolder=model_sub_s,
             )
+        rg3: Rigging3DProfile | None = None
+        raw_rg = data.get("rigging3d")
+        if isinstance(raw_rg, dict):
+            sfx = raw_rg.get("output_suffix")
+            sfx_s = str(sfx).strip() if sfx not in (None, "") else "_rigged"
+            if not sfx_s.startswith("_"):
+                sfx_s = f"_{sfx_s}" if sfx_s else "_rigged"
+            rg_root = raw_rg.get("root")
+            rg_root_s = str(rg_root).strip() if rg_root not in (None, "") else None
+            rg_py = raw_rg.get("python")
+            rg_py_s = str(rg_py).strip() if rg_py not in (None, "") else None
+            rg3 = Rigging3DProfile(
+                output_suffix=sfx_s,
+                root=rg_root_s,
+                python=rg_py_s,
+            )
         sb = data.get("seed_base")
         if sb is not None:
             try:
@@ -424,6 +453,7 @@ class GameProfile:
             skymap2d=sky2,
             text3d=t3,
             text2sound=ts2,
+            rigging3d=rg3,
         )
 
 

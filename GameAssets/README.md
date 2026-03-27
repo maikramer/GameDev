@@ -99,6 +99,7 @@ gameassets batch --profile game.yaml --manifest manifest.csv --with-3d \
 ```
 
 - Sem `--with-3d`, **nunca** corre `text3d`, mesmo com coluna `generate_3d=true` (apenas aviso).
+- Com **`--with-3d`** e **`--with-rig`**, linhas com **`generate_rig=true`** (e GLB do Text3D gerado com sucesso) chamam o **Rigging3D**; o GLB rigado aparece no log em **`rig_mesh_path`** (sufixo configurável em `rigging3d.output_suffix` no `game.yaml`). Requer **`RIGGING3D_BIN`** ou `rigging3d` no `PATH`.
 - `--dry-run` mostra os comandos sem executar.
 - `--fail-fast` para no primeiro erro (defeito: continua).
 - `--log batch-log.jsonl` acrescenta um JSON por linha processada, incluindo **`timings_sec`** (segundos, tempos de parede por subprocesso quando aplicável), por exemplo: `image_text2d` ou `image_texture2d`, `materialize_diffuse`, `text2sound` (quando `generate_audio`), `text3d` (passo único), ou `text3d_shape` / `text3d_texture` / `text3d_materialize_pbr` (com `phased_batch`). Registos incluem **`audio_path`** / **`audio_error`** quando aplicável. Linhas **Texture2D** incluem **`texture2d_api`: true** (custo da API Hugging Face não é calculado pelo GameAssets).
@@ -164,10 +165,11 @@ Campos principais:
 | `images_subdir` / `meshes_subdir` | Usados em `split`: subpastas para PNG/JPG e GLB |
 | `image_ext` | `png` ou `jpg` |
 | `seed_base` | Opcional; seeds derivados por `id` para reprodutibilidade |
-| `image_source` | `text2d` (defeito) ou `texture2d` — ferramenta de imagem por defeito (sobreponível por coluna no CSV) |
+| `image_source` | `text2d` (defeito), `texture2d` ou `skymap2d` — ferramenta de imagem por defeito (sobreponível por coluna no CSV) |
 | `text2d` | Bloco opcional: `low_vram`, `cpu`, `width`, `height` |
 | `texture2d` | Bloco opcional se usas Texture2D (global ou só com linhas CSV `texture2d`): resolução, `steps`, `guidance_scale`, `preset`, … e **PBR em difusa:** `materialize`, `materialize_maps_subdir`, `materialize_bin`, `materialize_format`, etc. |
 | `text3d` | Bloco opcional: `preset`, `low_vram`, `texture` (omitido = **`true`**), `steps` / `octree_resolution` / `num_chunks` (alternativa mútua a `preset`), `no_mesh_repair`, `mesh_smooth`, `mc_level`, e **PBR:** `materialize`, `materialize_save_maps`, `materialize_export_maps_to_output`, `materialize_maps_subdir`, `materialize_bin`, `materialize_no_invert` |
+| `rigging3d` | Bloco opcional (rig após Text3D): `output_suffix` (ex. `_rigged`), `root` (código do pacote Rigging3D), `python` (interprete). Usado com `batch --with-rig` e linhas `generate_rig=true` |
 
 ### Hunyuan3D e qualidade
 
@@ -182,7 +184,7 @@ Podes criar `presets.local.yaml` ao lado do perfil e passar `--presets-local pre
 
 ## Manifest (`manifest.csv`)
 
-Cabeçalhos: **`id`**, **`idea`** (obrigatórios); opcionais: **`kind`** (`prop`, `character`, `environment`), **`generate_3d`** (`true`/`false`/`sim`/…), **`image_source`** (`text2d` \| `texture2d`) para sobrepor o `image_source` do `game.yaml` nessa linha. Com `path_layout: flat`, usa `id` com barra, por exemplo `Crystals/shard_blue`, para gravar ficheiros dentro de `Crystals/`.
+Cabeçalhos: **`id`**, **`idea`** (obrigatórios); opcionais: **`kind`** (`prop`, `character`, `environment`), **`generate_3d`**, **`generate_audio`**, **`generate_rig`** (`true`/`false`/… — rig do GLB após Text3D, com `batch --with-rig`), **`image_source`** (`text2d` \| `texture2d` \| `skymap2d`) para sobrepor o `image_source` do `game.yaml` nessa linha. Com `path_layout: flat`, usa `id` com barra, por exemplo `Crystals/shard_blue`, para gravar ficheiros dentro de `Crystals/`.
 
 ## Estrutura
 
@@ -215,6 +217,7 @@ GameAssets/
 | `TEXT3D_BIN` | Caminho para o binário `text3d` |
 | `TEXT2SOUND_BIN` | Caminho para o binário `text2sound` |
 | `MATERIALIZE_BIN` | Caminho para o binário `materialize` (para PBR via Text3D ou Texture2D) |
+| `RIGGING3D_BIN` | Caminho para `rigging3d` (ou `python -m rigging3d`) quando usas `batch --with-rig` |
 | `PYTORCH_CUDA_ALLOC_CONF` | Auto-definida como `expandable_segments:True` se vazia (reduz fragmentação CUDA) |
 
 ## Licença

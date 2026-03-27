@@ -20,6 +20,8 @@ class ManifestRow:
     image_source: str | None = None
     # Gera clip de áudio com Text2Sound (requer bloco text2sound no perfil ou defaults)
     generate_audio: bool = False
+    # Auto-rig do GLB (Rigging3D) após Text3D; requer --with-rig e generate_3d=true
+    generate_rig: bool = False
 
 
 def effective_image_source(profile: GameProfile, row: ManifestRow) -> str:
@@ -40,15 +42,16 @@ def _parse_image_source(value: str | None) -> str | None:
     if value is None or str(value).strip() == "":
         return None
     s = str(value).strip().lower()
-    if s not in ("text2d", "texture2d"):
+    if s not in ("text2d", "texture2d", "skymap2d"):
         raise ValueError(
-            "Coluna image_source deve ser text2d ou texture2d (ou vazio para herdar o perfil)"
+            "Coluna image_source deve ser text2d, texture2d ou skymap2d "
+            "(ou vazio para herdar o perfil)"
         )
     return s
 
 
 def load_manifest(path: Path) -> list[ManifestRow]:
-    """Lê CSV com cabeçalhos: id, idea; opcionais: kind, generate_3d, image_source, generate_audio."""
+    """Lê CSV com cabeçalhos: id, idea; opcionais: kind, generate_3d, image_source, generate_audio, generate_rig."""
     rows: list[ManifestRow] = []
     with path.open("r", encoding="utf-8", newline="") as f:
         reader = csv.DictReader(f)
@@ -63,6 +66,7 @@ def load_manifest(path: Path) -> list[ManifestRow]:
         g3_key = fields.get("generate_3d")
         img_src_key = fields.get("image_source")
         ga_key = fields.get("generate_audio")
+        gr_key = fields.get("generate_rig")
         for raw in reader:
             rid = (raw.get(id_key) or "").strip()
             idea = (raw.get(idea_key) or "").strip()
@@ -81,6 +85,9 @@ def load_manifest(path: Path) -> list[ManifestRow]:
             ga = False
             if ga_key:
                 ga = _parse_bool(raw.get(ga_key))
+            gr = False
+            if gr_key:
+                gr = _parse_bool(raw.get(gr_key))
             rows.append(
                 ManifestRow(
                     id=rid,
@@ -89,6 +96,7 @@ def load_manifest(path: Path) -> list[ManifestRow]:
                     generate_3d=g3,
                     image_source=img_src,
                     generate_audio=ga,
+                    generate_rig=gr,
                 )
             )
     if not rows:

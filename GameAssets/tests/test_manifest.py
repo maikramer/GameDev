@@ -45,11 +45,31 @@ def test_quoted_commas() -> None:
         path.unlink(missing_ok=True)
 
 
+def test_generate_rig_column() -> None:
+    content = (
+        "id,idea,kind,generate_3d,generate_rig\n"
+        "a,one,prop,true,true\n"
+        "b,two,,false,false\n"
+    )
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".csv", delete=False, encoding="utf-8"
+    ) as f:
+        f.write(content)
+        path = Path(f.name)
+    try:
+        rows = load_manifest(path)
+        assert rows[0].generate_rig is True
+        assert rows[1].generate_rig is False
+    finally:
+        path.unlink(missing_ok=True)
+
+
 def test_image_source_column() -> None:
     content = (
         "id,idea,kind,generate_3d,image_source\n"
         "a,idea one,prop,false,text2d\n"
         "b,idea two,,false,texture2d\n"
+        "c,idea three,,false,skymap2d\n"
     )
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".csv", delete=False, encoding="utf-8"
@@ -60,6 +80,7 @@ def test_image_source_column() -> None:
         rows = load_manifest(path)
         assert rows[0].image_source == "text2d"
         assert rows[1].image_source == "texture2d"
+        assert rows[2].image_source == "skymap2d"
     finally:
         path.unlink(missing_ok=True)
 
