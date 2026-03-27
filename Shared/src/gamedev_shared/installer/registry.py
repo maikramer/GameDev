@@ -116,6 +116,17 @@ TOOLS: dict[str, ToolSpec] = {
         extra_aliases=("skymap2d-generate",),
         needs_pytorch=False,
     ),
+    "rigging3d": ToolSpec(
+        name="Rigging3D",
+        kind=ToolKind.PYTHON,
+        folder="Rigging3D",
+        cli_name="rigging3d",
+        python_module="rigging3d",
+        description="UniRig empacotado + CLI (auto-rigging 3D; PyTorch/CUDA)",
+        min_python=(3, 10),
+        needs_pytorch=True,
+        needs_cuda=True,
+    ),
     "materialize": ToolSpec(
         name="Materialize CLI",
         kind=ToolKind.RUST,

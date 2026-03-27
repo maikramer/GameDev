@@ -17,6 +17,7 @@ Monorepo com ferramentas de **texto para imagem**, **texto para 3D** e **texto p
 | [**Texture2D**](Texture2D/) | **Texturas 2D seamless** (tileable) via HF Inference API — sem GPU local. |
 | [**Skymap2D**](Skymap2D/) | **Skymaps equirectangular 360°** via HF Inference API — skyboxes para game dev, sem GPU local. |
 | [**Text2Sound**](Text2Sound/) | CLI **text-to-audio** com Stable Audio Open 1.0: áudio estéreo 44.1 kHz, presets para game dev. |
+| [**Rigging3D**](Rigging3D/) | **rigging3d** — auto-rigging 3D com [**UniRig**](https://github.com/VAST-AI-Research/UniRig) (skeleton + skinning + merge); GPU CUDA. |
 | [**Materialize**](Materialize/) | CLI **PBR maps** (Rust/wgpu): gera normal, AO, metallic, smoothness a partir de textura difusa. |
 
 Cada projeto tem o seu próprio `README`, `setup`, requisitos e licença.
@@ -32,6 +33,7 @@ GameDev/
   Texture2D/         ← texture2d (pip) — depende de Shared; inferência HF na cloud
   Skymap2D/          ← skymap2d (pip) — depende de Shared; skymaps equirectangular via HF
   Text2Sound/        ← text2sound (pip) — depende de Shared; Stable Audio Open 1.0
+  Rigging3D/         ← rigging3d (pip) — depende de Shared; auto-rigging 3D
   Materialize/       ← materialize-cli (cargo) — instalador Python usa Shared
 ```
 
@@ -55,6 +57,7 @@ O monorepo inclui um instalador unificado que instala qualquer ferramenta automa
 ./install.sh texture2d                  # Idem (Texture2D/.venv)
 ./install.sh skymap2d                   # Skymap2D (skymaps equirectangular; sem GPU)
 ./install.sh text2sound                 # Text2Sound (requer CUDA; instala PyTorch)
+./install.sh rigging3d                  # Rigging3D (UniRig empacotado + PyTorch/CUDA via instalador)
 ./install.sh all                        # Instalar tudo
 
 # Windows PowerShell (recomendado no Windows: o script detecta `python` e passa-o ao instalador)
@@ -64,6 +67,7 @@ O monorepo inclui um instalador unificado que instala qualquer ferramenta automa
 .\install.ps1 texture2d
 .\install.ps1 skymap2d
 .\install.ps1 text2sound
+.\install.ps1 rigging3d
 .\install.ps1 all
 
 # Windows CMD (idem: `install.bat` passa o interpretador ao instalador)
@@ -110,23 +114,28 @@ cd ../Skymap2D && chmod +x scripts/setup.sh && ./scripts/setup.sh && source .ven
 # 7. Text2Sound (text-to-audio; Stable Audio Open 1.0; requer CUDA)
 cd ../Text2Sound && chmod +x scripts/setup.sh && ./scripts/setup.sh && source .venv/bin/activate && text2sound --help
 
-# 8. Materialize (Rust — requer cargo)
+# 8. Rigging3D (GPU CUDA; dependências pesadas)
+cd ../Rigging3D && pip install -e ".[inference,dev]" && rigging3d --help
+
+# 9. Materialize (Rust — requer cargo)
 cd ../Materialize && ./install.sh
 ```
 
-Instruções completas: [Shared/README.md](Shared/README.md), [Text2D/README.md](Text2D/README.md), [Text3D/README.md](Text3D/README.md), [GameAssets/README.md](GameAssets/README.md), [Texture2D/README.md](Texture2D/README.md), [Skymap2D/README.md](Skymap2D/README.md) e [Text2Sound/README.md](Text2Sound/README.md).
+Instruções completas: [Shared/README.md](Shared/README.md), [Text2D/README.md](Text2D/README.md), [Text3D/README.md](Text3D/README.md), [GameAssets/README.md](GameAssets/README.md), [Texture2D/README.md](Texture2D/README.md), [Skymap2D/README.md](Skymap2D/README.md), [Text2Sound/README.md](Text2Sound/README.md) e [Rigging3D/README.md](Rigging3D/README.md).
 
 ## Licenças
 
 | Componente | Licença | Nota |
 |-----------|---------|------|
-| Código do monorepo (Text2D, Text3D, Texture2D, Skymap2D, GameAssets, Shared) | MIT | Ver `LICENSE` em cada pasta |
+| Código do monorepo (Text2D, Text3D, Texture2D, Skymap2D, Rigging3D, GameAssets, Shared) | MIT | Ver `LICENSE` em cada pasta |
 | Materialize CLI (Rust) | MIT | [Materialize/LICENSE](Materialize/LICENSE) |
 | FLUX.2 Klein (pesos) | Consultar model card | [Disty0/FLUX.2-klein-4B-SDNQ](https://huggingface.co/Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic) |
 | Hunyuan3D-2mini (pesos) | Tencent Community License | [tencent/Hunyuan3D-2mini](https://huggingface.co/tencent/Hunyuan3D-2mini) |
 | Stable Audio Open 1.0 (pesos) | Consultar model card | [stabilityai/stable-audio-open-1.0](https://huggingface.co/stabilityai/stable-audio-open-1.0) |
 | Flux-Seamless-Texture-LoRA (pesos) | Consultar model card | [gokaygokay/Flux-Seamless-Texture-LoRA](https://huggingface.co/gokaygokay/Flux-Seamless-Texture-LoRA) |
 | Flux-LoRA-Equirectangular-v3 (pesos) | Consultar model card | [MultiTrickFox/Flux-LoRA-Equirectangular-v3](https://huggingface.co/MultiTrickFox/Flux-LoRA-Equirectangular-v3) |
+| UniRig (código em `Rigging3D/…/unirig/`) | MIT | [VAST-AI-Research/UniRig](https://github.com/VAST-AI-Research/UniRig) · [THIRD_PARTY.md](Rigging3D/THIRD_PARTY.md) |
+| UniRig (pesos) | Consultar model card | [VAST-AI/UniRig](https://huggingface.co/VAST-AI/UniRig) |
 
 > **Atenção:** os pesos dos modelos pré-treinados têm licenças próprias — consulta os model cards antes de distribuir ou usar em produção.
 
@@ -150,6 +159,8 @@ O monorepo usa variáveis de ambiente para localizar binários e configurar comp
 | `TEXT3D_ALLOW_SHARED_GPU` | Text3D | Permitir GPU partilhada com outros processos |
 | `TEXT3D_GPU_KILL_OTHERS` | Text3D | Controlar terminação de processos GPU concorrentes |
 | `TEXT3D_EXPORT_ROTATION_X_DEG` | Text3D | Rotação X ao exportar mesh (graus) |
+| `RIGGING3D_ROOT` | Rigging3D | Raiz da árvore de inferência (por defeito: pacote incluído) |
+| `RIGGING3D_PYTHON` | Rigging3D | Interpretador Python do ambiente de inferência |
 
 ## Desenvolvimento
 
