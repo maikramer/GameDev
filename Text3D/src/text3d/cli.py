@@ -12,12 +12,9 @@ import time
 from pathlib import Path
 from typing import Literal
 
-from . import cli_rich  # noqa: F401 — configura rich-click antes dos comandos
+from gamedev_shared.hf import hf_home_display_rich
 
-if cli_rich.RICH_CLICK:
-    import rich_click as click
-else:
-    import click
+from .cli_rich import click  # noqa: F401 — rich-click antes dos comandos
 from rich import box
 from rich.console import Console
 from rich.panel import Panel
@@ -725,8 +722,7 @@ def info():
             table.add_row(f"  └ VRAM livre", format_bytes(gpu["free_memory"]))
 
     table.add_row("Saída padrão", str(DEFAULT_OUTPUT_DIR.absolute()))
-    hf = os.environ.get("HF_HOME")
-    table.add_row("HF_HOME (cache Hub)", hf or "[dim]~/.cache/huggingface (defeito)[/dim]")
+    table.add_row("HF_HOME (cache Hub)", hf_home_display_rich())
     console.print(table)
 
     if info_data.get("cuda_available"):

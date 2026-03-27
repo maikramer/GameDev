@@ -10,6 +10,8 @@ from typing import Any, Dict, Generator, List, Optional
 
 from PIL import Image
 
+from gamedev_shared.hf import get_hf_token
+
 from .presets import get_preset_params, get_preset_prompt
 from .utils import generate_seed, validate_params, validate_prompt
 
@@ -86,7 +88,7 @@ class TextureGenerator:
     def _init_client(self):  # noqa: ANN202
         from huggingface_hub import InferenceClient
 
-        token = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACEHUB_API_TOKEN")
+        token = get_hf_token()
         client = InferenceClient(token=token)
         logger.info(f"InferenceClient inicializado — modelo: {self.model_id}")
         return client

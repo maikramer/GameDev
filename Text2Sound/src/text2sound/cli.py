@@ -19,18 +19,15 @@ except Exception:
 
 from click.core import ParameterSource
 
-from . import cli_rich  # noqa: F401 — configura rich-click antes dos comandos
-
-if cli_rich.RICH_CLICK:
-    import rich_click as click
-else:
-    import click
+from .cli_rich import RICH_CLICK, click  # noqa: F401 — rich-click antes dos comandos
 from rich import box
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.rule import Rule
 from rich.table import Table
+
+from gamedev_shared.hf import get_hf_token, hf_home_display_rich
 
 from .audio_processor import SUPPORTED_FORMATS, save_audio
 from .generator import (
@@ -683,11 +680,13 @@ def info_cmd() -> None:
     t.add_row("Sample rate", "44100 Hz")
     t.add_row("Canais", "Estéreo (2)")
 
-    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACEHUB_API_TOKEN")
+    token = get_hf_token()
     t.add_row("HF Token", "[green]configurado[/green]" if token else "[red]não definido[/red]")
     t.add_row(
         "HF_HOME (cache Hub)",
-        os.environ.get("HF_HOME") or "[dim]~/.cache/huggingface (padrão)[/dim]",
+        hf_home_display_rich(
+            default_label="[dim]~/.cache/huggingface (padrão)[/dim]",
+        ),
     )
     t.add_row("Saída padrão", str(DEFAULT_AUDIO_DIR.resolve()))
     t.add_row("Presets disponíveis", str(len(AUDIO_PRESETS)))

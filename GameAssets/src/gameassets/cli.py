@@ -12,12 +12,7 @@ import zlib
 from pathlib import Path
 from typing import Any
 
-from . import cli_rich  # noqa: F401 — configura rich-click antes dos comandos
-
-if cli_rich.RICH_CLICK:
-    import rich_click as click
-else:
-    import click
+from .cli_rich import click  # noqa: F401 — rich-click antes dos comandos
 from rich import box
 from rich.console import Console
 from rich.panel import Panel

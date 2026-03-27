@@ -10,10 +10,10 @@ import tempfile
 from collections.abc import Sequence
 from pathlib import Path
 
-import rich_click as click
 from rich.console import Console
 
 from . import __version__
+from .cli_rich import click  # noqa: F401 — rich-click antes dos comandos
 
 console = Console()
 

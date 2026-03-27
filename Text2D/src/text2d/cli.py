@@ -3,18 +3,14 @@
 Text2D — CLI principal (text-to-2D).
 """
 
-import os
 import sys
 import time
 from pathlib import Path
 from typing import Optional
 
-from . import cli_rich  # noqa: F401 — configura rich-click antes dos comandos
+from gamedev_shared.hf import hf_home_display_rich
 
-if cli_rich.RICH_CLICK:
-    import rich_click as click
-else:
-    import click
+from .cli_rich import click  # noqa: F401 — rich-click antes dos comandos
 from rich import box
 from rich.console import Console
 from rich.panel import Panel
@@ -231,8 +227,7 @@ def info_cmd() -> None:
             t.add_row(f"GPU {i}", str(gpu.get("name", "")))
             t.add_row("  └ VRAM total", format_bytes(gpu.get("total_memory", 0)))
             t.add_row("  └ VRAM livre", format_bytes(gpu.get("free_memory", 0)))
-    hf = os.environ.get("HF_HOME")
-    t.add_row("HF_HOME (cache Hub)", hf or "[dim]~/.cache/huggingface (defeito)[/dim]")
+    t.add_row("HF_HOME (cache Hub)", hf_home_display_rich())
     t.add_row("Saída padrão (pasta)", str(DEFAULT_IMAGE_DIR.resolve()))
     t.add_row("Modelo (default)", default_model_id())
     console.print(t)

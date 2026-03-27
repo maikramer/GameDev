@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from gamedev_shared.cli_rich import setup_rich_click
+from gamedev_shared.cli_rich import setup_rich_click_module
 
-RICH_CLICK = setup_rich_click(
+click, RICH_CLICK = setup_rich_click_module(
     header="[bold cyan]Text3D[/bold cyan] — Text2D + Hunyuan3D · mesh a partir de texto",
     footer="[dim]Primeira execução: downloads HF · text3d doctor · docs/[/dim]",
 )

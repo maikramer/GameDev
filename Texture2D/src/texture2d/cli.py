@@ -9,18 +9,15 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from . import cli_rich  # noqa: F401 — configura rich-click antes dos comandos
-
-if cli_rich.RICH_CLICK:
-    import rich_click as click
-else:
-    import click
+from .cli_rich import RICH_CLICK, click  # noqa: F401 — rich-click antes dos comandos
 from rich import box
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.rule import Rule
 from rich.table import Table
+
+from gamedev_shared.hf import get_hf_token, hf_home_display_rich
 
 from .generator import TextureGenerator, default_model_id
 from .presets import TEXTURE_PRESETS, list_presets
@@ -333,12 +330,9 @@ def info_cmd() -> None:
 
     t.add_row("Modelo (default)", default_model_id())
 
-    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACEHUB_API_TOKEN")
+    token = get_hf_token()
     t.add_row("HF Token", "[green]configurado[/green]" if token else "[red]não definido[/red]")
-    t.add_row(
-        "HF_HOME (cache Hub)",
-        os.environ.get("HF_HOME") or "[dim]~/.cache/huggingface (defeito)[/dim]",
-    )
+    t.add_row("HF_HOME (cache Hub)", hf_home_display_rich())
     t.add_row("Saída padrão", str(DEFAULT_TEXTURE_DIR.resolve()))
     t.add_row("Presets disponíveis", str(len(TEXTURE_PRESETS)))
     t.add_row("Python", sys.version.split()[0])
