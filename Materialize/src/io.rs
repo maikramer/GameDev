@@ -225,4 +225,139 @@ mod tests {
         assert_eq!(luma.get_pixel(1, 0)[0], 127); // 0.5 * 255 truncated
         assert_eq!(luma.get_pixel(0, 1)[0], 255);
     }
+
+    #[test]
+    fn test_normal_to_image_rgba() {
+        let data: Vec<u8> = (0..16).collect();
+        let img = normal_to_image(2, 2, &data);
+        assert_eq!(img.width(), 2);
+        assert_eq!(img.height(), 2);
+    }
+
+    #[test]
+    fn test_metallic_smoothness_edge_ao_images() {
+        let w = 2u32;
+        let h = 2u32;
+        let d = vec![10u8, 20, 30, 40];
+        let m = metallic_to_image(w, h, &d);
+        let s = smoothness_to_image(w, h, &d);
+        let e = edge_to_image(w, h, &d);
+        let a = ao_to_image(w, h, &d);
+        assert_eq!(m.width(), w);
+        assert_eq!(s.height(), h);
+        assert_eq!(e.to_luma8().get_pixel(0, 0)[0], 10);
+        assert_eq!(a.to_luma8().get_pixel(1, 1)[0], 40);
+    }
+
+    #[test]
+    fn test_output_format_to_image_format_maps() {
+        use image::ImageFormat;
+        use crate::cli::OutputFormat;
+        assert_eq!(
+            output_format_to_image_format(&OutputFormat::Png),
+            ImageFormat::Png
+        );
+        assert_eq!(
+            output_format_to_image_format(&OutputFormat::Jpg),
+            ImageFormat::Jpeg
+        );
+        assert_eq!(
+            output_format_to_image_format(&OutputFormat::Tga),
+            ImageFormat::Tga
+        );
+        assert_eq!(
+            output_format_to_image_format(&OutputFormat::Exr),
+            ImageFormat::OpenExr
+        );
+    }
+
+    #[test]
+    fn test_get_output_paths_stem_no_extension() {
+        let p = get_output_paths("folder/name", "./out", "png");
+        assert!(p.height_path.contains("name_height.png"));
+    }
+
+    #[test]
+    fn test_get_output_paths_jpeg_alias() {
+        let p = get_output_paths("a.png", "./o", "jpeg");
+        assert!(p.ao_path.ends_with(".jpg"));
+    }
+
+    #[test]
+    fn test_load_image_reads_png() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("tiny.png");
+        let img = image::RgbImage::from_pixel(1, 1, image::Rgb([128u8, 64, 32]));
+        img.save(&path).expect("save png");
+        let loaded = load_image(path.to_str().unwrap()).expect("load");
+        assert_eq!(loaded.width(), 1);
+    }
+
+    #[test]
+    fn test_save_image_png_roundtrip() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("out.png");
+        let img = image::RgbImage::from_pixel(2, 2, image::Rgb([1, 2, 3]));
+        let dyn_img = image::DynamicImage::ImageRgb8(img);
+        save_image(&dyn_img, path.to_str().unwrap(), image::ImageFormat::Png, 95).expect("save");
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn test_height_to_image_clamps_high() {
+        let data = vec![2.0f32, 2.0, 2.0, 2.0];
+        let img = height_to_image(2, 2, &data);
+        let luma = img.to_luma8();
+        assert_eq!(luma.get_pixel(0, 0)[0], 255);
+    }
+
+    #[test]
+    fn test_get_output_paths_preserves_nested_dir() {
+        let p = get_output_paths("textures/sub/tile.png", "out", "tga");
+        assert!(p.normal_path.contains("tile_normal.tga"));
+        assert!(p.normal_path.starts_with("out/"));
+    }
+
+    #[test]
+    fn test_get_output_paths_unknown_ext_defaults_to_format() {
+        let p = get_output_paths("file.xyz", "o", "exr");
+        assert!(p.height_path.ends_with("_height.exr"));
+    }
+
+    #[test]
+    fn test_normal_to_image_reads_first_three_channels() {
+        let mut data = vec![0u8; 16];
+        data[0] = 10;
+        data[1] = 20;
+        data[2] = 30;
+        data[4] = 255;
+        data[5] = 128;
+        data[6] = 64;
+        let img = normal_to_image(2, 2, &data);
+        let rgb = img.to_rgb8();
+        assert_eq!(rgb.get_pixel(0, 0)[0], 10);
+        assert_eq!(rgb.get_pixel(1, 0)[0], 255);
+    }
+
+    #[test]
+    fn test_load_image_rejects_missing_even_with_parent() {
+        let r = load_image("definitely/missing/path.png");
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn test_save_image_jpeg_creates_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("q.jpg");
+        let img = image::RgbImage::from_pixel(1, 1, image::Rgb([200u8, 100, 50]));
+        let dyn_img = image::DynamicImage::ImageRgb8(img);
+        save_image(&dyn_img, path.to_str().unwrap(), image::ImageFormat::Jpeg, 90).expect("jpeg");
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn test_metallic_single_pixel() {
+        let img = metallic_to_image(1, 1, &[200u8]);
+        assert_eq!(img.to_luma8().get_pixel(0, 0)[0], 200);
+    }
 }
