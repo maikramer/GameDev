@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import os
 import platform
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Optional
 
 from .base import BaseInstaller
 
@@ -62,7 +60,7 @@ class RustProjectInstaller(BaseInstaller):
             self.logger.warn("cargo não encontrado no PATH")
             return False
 
-    def get_existing_binary(self) -> Optional[Path]:
+    def get_existing_binary(self) -> Path | None:
         if self.release_binary.exists():
             return self.release_binary
         if self.debug_binary.exists():

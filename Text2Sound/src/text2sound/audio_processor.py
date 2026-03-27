@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 import soundfile as sf
@@ -34,12 +34,7 @@ def peak_normalize(audio: torch.Tensor) -> torch.Tensor:
 
 def to_int16(audio: torch.Tensor) -> torch.Tensor:
     """Converte tensor float [-1, 1] para int16."""
-    return (
-        audio.to(torch.float32)
-        .clamp(-1, 1)
-        .mul(32767)
-        .to(torch.int16)
-    )
+    return audio.to(torch.float32).clamp(-1, 1).mul(32767).to(torch.int16)
 
 
 def trim_silence(
@@ -81,7 +76,7 @@ def save_audio(
     as_int16: bool = True,
     normalize: bool = True,
     trim: bool = False,
-    metadata: Optional[dict[str, Any]] = None,
+    metadata: dict[str, Any] | None = None,
 ) -> Path:
     """Processa e grava áudio num ficheiro.
 
@@ -100,10 +95,7 @@ def save_audio(
     """
     fmt = fmt.lower()
     if fmt not in SUPPORTED_FORMATS:
-        raise ValueError(
-            f"Formato '{fmt}' não suportado. "
-            f"Opções: {', '.join(SUPPORTED_FORMATS)}"
-        )
+        raise ValueError(f"Formato '{fmt}' não suportado. Opções: {', '.join(SUPPORTED_FORMATS)}")
 
     audio = audio.cpu().to(torch.float32)
 

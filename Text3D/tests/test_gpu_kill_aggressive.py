@@ -19,9 +19,11 @@ def test_kill_skips_protected_and_self() -> None:
         (200, "/usr/bin/python3", 4000),
         (300, "gnome-shell", 80),
     ]
-    with patch("text3d.utils.memory.list_nvidia_compute_apps", return_value=apps):
-        with patch("text3d.utils.memory.os.kill") as mock_kill:
-            logs = kill_gpu_compute_processes_aggressive(exclude_pid=200, term_wait_seconds=0.01)
+    with (
+        patch("text3d.utils.memory.list_nvidia_compute_apps", return_value=apps),
+        patch("text3d.utils.memory.os.kill") as mock_kill,
+    ):
+        logs = kill_gpu_compute_processes_aggressive(exclude_pid=200, term_wait_seconds=0.01)
     # exclude_pid 200: skip killing self
     # 100 Xorg protected, 300 gnome-shell protected
     mock_kill.assert_not_called()
@@ -30,10 +32,10 @@ def test_kill_skips_protected_and_self() -> None:
 
 def test_kill_targets_unprotected() -> None:
     apps = [(999, "python3", 1000)]
-    with patch("text3d.utils.memory.list_nvidia_compute_apps", return_value=apps):
-        with patch("text3d.utils.memory.os.kill") as mock_kill:
-            with patch("text3d.utils.memory.time.sleep", lambda _: None):
-                kill_gpu_compute_processes_aggressive(exclude_pid=1, term_wait_seconds=0.0)
-    assert any(
-        c[0][0] == 999 and c[0][1] == signal.SIGTERM for c in mock_kill.call_args_list
-    )
+    with (
+        patch("text3d.utils.memory.list_nvidia_compute_apps", return_value=apps),
+        patch("text3d.utils.memory.os.kill") as mock_kill,
+        patch("text3d.utils.memory.time.sleep", lambda _: None),
+    ):
+        kill_gpu_compute_processes_aggressive(exclude_pid=1, term_wait_seconds=0.0)
+    assert any(c[0][0] == 999 and c[0][1] == signal.SIGTERM for c in mock_kill.call_args_list)

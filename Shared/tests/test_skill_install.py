@@ -1,12 +1,11 @@
 """Testes para gamedev_shared.skill_install."""
 
 import pytest
-from pathlib import Path
 
 from gamedev_shared.installer.registry import try_find_monorepo_root
 from gamedev_shared.skill_install import (
-    resolve_skill_source,
     install_agent_skill,
+    resolve_skill_source,
 )
 
 

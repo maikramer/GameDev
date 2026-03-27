@@ -5,9 +5,9 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
 
 
 @dataclass
@@ -31,10 +31,7 @@ def merge_subprocess_output(
     """Junta stderr e stdout para diagnóstico (tracebacks podem ir só para stdout)."""
     err = (r.stderr or "").strip()
     out = (r.stdout or "").strip()
-    if err and out:
-        text = f"{err}\n\n--- stdout ---\n{out}"
-    else:
-        text = err or out
+    text = f"{err}\n\n--- stdout ---\n{out}" if err and out else err or out
     if max_chars is not None and len(text) > max_chars:
         return "... (truncado no início)\n" + text[-max_chars:]
     return text
@@ -59,8 +56,7 @@ def resolve_binary(env_name: str, default_name: str) -> str:
     found = shutil.which(default_name)
     if not found:
         raise FileNotFoundError(
-            f"Comando não encontrado: {default_name!r}. "
-            f"Instala o pacote ou define {env_name} com o caminho absoluto."
+            f"Comando não encontrado: {default_name!r}. Instala o pacote ou define {env_name} com o caminho absoluto."
         )
     return found
 

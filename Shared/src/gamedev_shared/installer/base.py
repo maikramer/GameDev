@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-import argparse
 import os
 import platform
 import shutil
 import subprocess
-import sys
 from pathlib import Path
-from typing import Optional
 
 from ..logging import Logger
 
@@ -38,10 +35,7 @@ class BaseInstaller:
         self.project_name = project_name
         self.cli_name = cli_name
         self.project_root = project_root.resolve()
-        self.install_prefix = (
-            install_prefix
-            or Path(os.environ.get("INSTALL_PREFIX", str(Path.home() / ".local")))
-        )
+        self.install_prefix = install_prefix or Path(os.environ.get("INSTALL_PREFIX", str(Path.home() / ".local")))
         self.python_cmd = os.environ.get("PYTHON_CMD", python_cmd)
 
         self.plat = platform.system().lower()
@@ -149,9 +143,7 @@ class BaseInstaller:
 
         if has_cuda:
             try:
-                result = subprocess.run(
-                    ["nvidia-smi"], capture_output=True, text=True
-                )
+                result = subprocess.run(["nvidia-smi"], capture_output=True, text=True)
                 if "CUDA Version" in result.stdout:
                     for line in result.stdout.split("\n"):
                         if "CUDA Version" in line:
@@ -159,9 +151,7 @@ class BaseInstaller:
                             self.logger.info(f"CUDA detectado: {cuda_version}")
                             if py_minor >= 13:
                                 self.logger.info("Python 3.13+ — torch+torchvision (PyPI)...")
-                                subprocess.run(
-                                    pip_cmd + ["torch", "torchvision"], check=True, **_kw
-                                )
+                                subprocess.run([*pip_cmd, "torch", "torchvision"], check=True, **_kw)
                                 return
                             idx = (
                                 "https://download.pytorch.org/whl/cu121"
@@ -170,7 +160,7 @@ class BaseInstaller:
                             )
                             self.logger.info(f"PyTorch ({idx.split('/')[-1]})...")
                             subprocess.run(
-                                pip_cmd + ["torch", "torchvision", "--index-url", idx],
+                                [*pip_cmd, "torch", "torchvision", "--index-url", idx],
                                 check=True,
                                 **_kw,
                             )
@@ -180,8 +170,7 @@ class BaseInstaller:
 
         self.logger.warn("PyTorch CPU...")
         subprocess.run(
-            pip_cmd
-            + ["torch", "torchvision", "--index-url", "https://download.pytorch.org/whl/cpu"],
+            [*pip_cmd, "torch", "torchvision", "--index-url", "https://download.pytorch.org/whl/cpu"],
             check=True,
             **_kw,
         )
@@ -288,9 +277,7 @@ class BaseInstaller:
                 else:
                     lines.append(f"Adicione ao PATH: {self.bin_dir}")
             elif self.logger.rich_available:
-                lines.append(
-                    f'[yellow]Adiciona ao PATH:[/yellow] export PATH="{self.bin_dir}:$PATH"'
-                )
+                lines.append(f'[yellow]Adiciona ao PATH:[/yellow] export PATH="{self.bin_dir}:$PATH"')
             else:
                 lines.append(f'⚠ Adicione ao PATH: export PATH="{self.bin_dir}:$PATH"')
 

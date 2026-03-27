@@ -10,7 +10,7 @@ from setuptools import find_packages, setup
 # Read files from project root
 here = Path(__file__).resolve().parent
 
-with open(here / "README.md", "r", encoding="utf-8") as fh:
+with open(here / "README.md", encoding="utf-8") as fh:
     long_description = fh.read()
 
 # Monorepo: Text2D e Shared ao lado de Text3D (GameDev/Text2D, GameDev/Shared).
@@ -18,7 +18,7 @@ with open(here / "README.md", "r", encoding="utf-8") as fh:
 text2d_local = (here.parent / "Text2D").resolve()
 shared_local = (here.parent / "Shared").resolve()
 requirements = []
-with open(here / "config" / "requirements.txt", "r", encoding="utf-8") as fh:
+with open(here / "config" / "requirements.txt", encoding="utf-8") as fh:
     for line in fh:
         line = line.strip()
         if not line or line.startswith("#"):

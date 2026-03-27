@@ -11,6 +11,7 @@ na faixa inferior), no mesmo espaço Y-up que o export GLB.
 
 from __future__ import annotations
 
+import contextlib
 from typing import Literal
 
 import numpy as np
@@ -90,10 +91,7 @@ def _remove_flat_bottom_islands(
     def touches_bottom(p: trimesh.Trimesh) -> bool:
         return float(p.bounds[0, 1]) <= y_min_global + bottom_eps
 
-    has_non_plaque = any(
-        not _is_thin_plaque(p, thin_ratio=thin_ratio) or not touches_bottom(p)
-        for p in parts
-    )
+    has_non_plaque = any(not _is_thin_plaque(p, thin_ratio=thin_ratio) or not touches_bottom(p) for p in parts)
     if not has_non_plaque:
         return mesh_yup
 
@@ -107,11 +105,7 @@ def _remove_flat_bottom_islands(
 
     kept: list[trimesh.Trimesh] = []
     for p in parts:
-        if (
-            touches_bottom(p)
-            and _is_thin_plaque(p, thin_ratio=thin_ratio)
-            and bbox_volume(p) < vol_ratio_max * max_vol
-        ):
+        if touches_bottom(p) and _is_thin_plaque(p, thin_ratio=thin_ratio) and bbox_volume(p) < vol_ratio_max * max_vol:
             continue
         kept.append(p)
 
@@ -135,7 +129,7 @@ def _peel_bottom_upward_faces(
     """
     Remove faces **quase horizontais** (|ny| alto) na faixa mais baixa do bbox.
 
-    Sombras modeladas como placa têm normais para +Y ou −Y (face de cima/baixo);
+    Sombras modeladas como placa têm normais para +Y ou -Y (face de cima/baixo);
     só aceitar +Y falhava em muitos GLB (ex.: Godot / pintura).
 
     Conservador: aborta se a remoção afectar demasiadas faces (p.ex. sola inteira).
@@ -301,10 +295,8 @@ def _fill_small_boundary_holes_inplace(mesh: trimesh.Trimesh, max_boundary_edges
         return
     if nx is None:
         return
-    try:
+    with contextlib.suppress(Exception):
         trimesh_repair.fill_holes(mesh)
-    except Exception:
-        pass
     if mesh.is_watertight:
         return
     boundary_groups = group_rows(mesh.edges_sorted, require_count=1)
@@ -371,10 +363,7 @@ def remove_ground_shadow_artifacts(
     m = mesh.copy()
     if mesh_space == "y_up" and y_up_flip_x_rad != 0.0:
         m = _rotate_mesh_x(m, float(y_up_flip_x_rad))
-    if mesh_space == "hunyuan":
-        yup = _to_export_y_up(m)
-    else:
-        yup = m
+    yup = _to_export_y_up(m) if mesh_space == "hunyuan" else m
     yup = _remove_flat_bottom_islands(yup, aggressive=aggressive)
     if aggressive:
         # Cilindro mais estreito e normais mais horizontais — menos risco nas laterais.
@@ -393,10 +382,8 @@ def remove_ground_shadow_artifacts(
         )
     else:
         yup = _peel_bottom_upward_faces(yup)
-    try:
+    with contextlib.suppress(Exception):
         yup.remove_unreferenced_vertices()
-    except Exception:
-        pass
     if len(yup.faces) == 0:
         return mesh
     if mesh_space == "hunyuan":
@@ -462,15 +449,13 @@ def repair_mesh(
     m = mesh.copy()
 
     if remove_ground_shadow:
-        try:
+        with contextlib.suppress(Exception):
             m = remove_ground_shadow_artifacts(
                 m,
                 mesh_space=ground_artifact_mesh_space,
                 y_up_flip_x_rad=ground_artifact_y_up_flip_x_rad,
                 aggressive=ground_shadow_aggressive,
             )
-        except Exception:
-            pass
 
     if remove_small_island_fragments:
         try:
@@ -488,16 +473,12 @@ def repair_mesh(
             pass
 
     if merge_vertices:
-        try:
+        with contextlib.suppress(Exception):
             m.merge_vertices()
-        except Exception:
-            pass
 
     if fill_small_holes_max_edges > 0:
-        try:
+        with contextlib.suppress(Exception):
             _fill_small_boundary_holes_inplace(m, fill_small_holes_max_edges)
-        except Exception:
-            pass
 
     if keep_largest:
         m = keep_largest_component(m)
@@ -505,9 +486,7 @@ def repair_mesh(
     if smooth_iterations > 0:
         m = laplacian_smooth(m, iterations=smooth_iterations, lamb=smooth_lamb)
 
-    try:
+    with contextlib.suppress(Exception):
         m.remove_unreferenced_vertices()
-    except Exception:
-        pass
 
     return m

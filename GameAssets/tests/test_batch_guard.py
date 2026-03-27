@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+
 import pytest
 
 from gameassets.batch_guard import query_gpu_free_mib, subprocess_gpu_env
@@ -31,6 +32,5 @@ def test_batch_lock_skip_no_block(tmp_path: Path) -> None:
 
     manifest = tmp_path / "manifest.csv"
     manifest.write_text("id,idea\na,b\n", encoding="utf-8")
-    with batch_directory_lock(manifest, skip=True):
-        with batch_directory_lock(manifest, skip=True):
-            pass
+    with batch_directory_lock(manifest, skip=True), batch_directory_lock(manifest, skip=True):
+        pass

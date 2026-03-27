@@ -6,11 +6,7 @@ from typing import Final
 
 from gamedev_shared.cli_rich import setup_rich_click_module
 
-_HEADER: Final = (
-    "[bold cyan]Skymap2D[/bold cyan] — skymaps equirectangular 360° · HF Inference API"
-)
-_FOOTER: Final = (
-    "[dim]Documentação: README · Token: HF_TOKEN ou HUGGINGFACEHUB_API_TOKEN[/dim]"
-)
+_HEADER: Final = "[bold cyan]Skymap2D[/bold cyan] — skymaps equirectangular 360° · HF Inference API"
+_FOOTER: Final = "[dim]Documentação: README · Token: HF_TOKEN ou HUGGINGFACEHUB_API_TOKEN[/dim]"
 
 click, RICH_CLICK = setup_rich_click_module(header=_HEADER, footer=_FOOTER)

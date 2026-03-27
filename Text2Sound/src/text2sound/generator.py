@@ -7,14 +7,13 @@ Suporta ``stabilityai/stable-audio-open-1.0`` (música, até ~47s) e
 
 from __future__ import annotations
 
-import os
 import threading
+from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Generator, Optional
+from typing import Any
 
 import torch
-import torchaudio
 from einops import rearrange
 from stable_audio_tools import get_pretrained_model
 from stable_audio_tools.inference.generation import generate_diffusion_cond
@@ -40,7 +39,7 @@ class GenerationResult:
     duration: float
     steps: int
     cfg_scale: float
-    seed: Optional[int]
+    seed: int | None
     sampler: str
     sigma_min: float
     sigma_max: float
@@ -55,15 +54,15 @@ class AudioGenerator:
     A VRAM é limpa automaticamente após cada geração quando ``auto_clear=True``.
     """
 
-    _instance: Optional["AudioGenerator"] = None
+    _instance: AudioGenerator | None = None
     _lock = threading.Lock()
 
     def __init__(
         self,
         model_id: str = DEFAULT_MODEL_ID,
-        device: Optional[str] = None,
+        device: str | None = None,
         auto_clear: bool = True,
-        half_precision: Optional[bool] = None,
+        half_precision: bool | None = None,
     ) -> None:
         self._model_id = model_id
         self._device = device or ("cuda" if torch.cuda.is_available() else "cpu")
@@ -83,7 +82,7 @@ class AudioGenerator:
             return False
         try:
             vram = torch.cuda.get_device_properties(0).total_mem
-            return vram < 8.5 * (1024 ** 3)
+            return vram < 8.5 * (1024**3)
         except Exception:
             return True
 
@@ -91,9 +90,9 @@ class AudioGenerator:
     def get_instance(
         cls,
         model_id: str = DEFAULT_MODEL_ID,
-        device: Optional[str] = None,
-        half_precision: Optional[bool] = None,
-    ) -> "AudioGenerator":
+        device: str | None = None,
+        half_precision: bool | None = None,
+    ) -> AudioGenerator:
         """Singleton thread-safe — reutiliza modelo já carregado."""
         with cls._lock:
             if cls._instance is None or cls._instance._model_id != model_id:
@@ -147,6 +146,7 @@ class AudioGenerator:
 
         try:
             from gamedev_shared.env import ensure_pytorch_cuda_alloc_conf
+
             ensure_pytorch_cuda_alloc_conf()
         except ImportError:
             pass
@@ -171,6 +171,7 @@ class AudioGenerator:
         if self._device == "cuda" and torch.cuda.is_available():
             try:
                 from gamedev_shared.gpu import clear_cuda_memory
+
                 clear_cuda_memory()
             except ImportError:
                 torch.cuda.empty_cache()
@@ -190,7 +191,7 @@ class AudioGenerator:
         duration: float = DEFAULT_DURATION,
         steps: int = DEFAULT_STEPS,
         cfg_scale: float = DEFAULT_CFG_SCALE,
-        seed: Optional[int] = None,
+        seed: int | None = None,
         sigma_min: float = DEFAULT_SIGMA_MIN,
         sigma_max: float = DEFAULT_SIGMA_MAX,
         sampler_type: str = DEFAULT_SAMPLER,
@@ -217,11 +218,13 @@ class AudioGenerator:
             if torch.cuda.is_available():
                 torch.cuda.manual_seed_all(seed)
 
-        conditioning = [{
-            "prompt": prompt,
-            "seconds_start": 0,
-            "seconds_total": duration,
-        }]
+        conditioning = [
+            {
+                "prompt": prompt,
+                "seconds_start": 0,
+                "seconds_total": duration,
+            }
+        ]
 
         with self._generation_context():
             output = generate_diffusion_cond(

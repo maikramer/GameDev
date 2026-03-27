@@ -83,9 +83,7 @@ def test_prompts_jsonl_output(runner: CliRunner, tmp_path: Path) -> None:
     assert "id" in first and "prompt" in first
 
 
-def test_batch_dry_run(
-    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_batch_dry_run(runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Integração: batch --dry-run sem executar text2d (binário inócuo via env)."""
     true_bin = shutil.which("true")
     if not true_bin:

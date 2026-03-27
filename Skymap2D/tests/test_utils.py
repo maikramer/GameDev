@@ -1,7 +1,5 @@
 """Testes para skymap2d.utils."""
 
-import pytest
-
 from skymap2d.utils import (
     format_bytes,
     generate_seed,
@@ -34,7 +32,7 @@ class TestValidatePrompt:
         assert err is not None
 
     def test_whitespace_prompt(self):
-        ok, err = validate_prompt("   ")
+        ok, _err = validate_prompt("   ")
         assert ok is False
 
     def test_exceeds_max_length(self):
@@ -45,47 +43,47 @@ class TestValidatePrompt:
 
 class TestValidateDimensions:
     def test_valid_2_1_ratio(self):
-        ok, err = validate_dimensions(2048, 1024)
+        ok, _err = validate_dimensions(2048, 1024)
         assert ok is True
 
     def test_valid_other_2_1(self):
-        ok, err = validate_dimensions(1024, 512)
+        ok, _err = validate_dimensions(1024, 512)
         assert ok is True
 
     def test_too_small(self):
-        ok, err = validate_dimensions(128, 64)
+        ok, _err = validate_dimensions(128, 64)
         assert ok is False
 
     def test_too_large_width(self):
-        ok, err = validate_dimensions(8192, 1024)
+        ok, _err = validate_dimensions(8192, 1024)
         assert ok is False
 
     def test_too_large_height(self):
-        ok, err = validate_dimensions(2048, 4096)
+        ok, _err = validate_dimensions(2048, 4096)
         assert ok is False
 
     def test_not_multiple_of_8(self):
-        ok, err = validate_dimensions(2047, 1024)
+        ok, _err = validate_dimensions(2047, 1024)
         assert ok is False
 
 
 class TestValidateParams:
     def test_valid_defaults(self):
-        ok, err = validate_params({"guidance_scale": 6.0, "num_inference_steps": 40})
+        ok, _err = validate_params({"guidance_scale": 6.0, "num_inference_steps": 40})
         assert ok is True
 
     def test_guidance_too_high(self):
-        ok, err = validate_params({"guidance_scale": 25.0})
+        ok, _err = validate_params({"guidance_scale": 25.0})
         assert ok is False
 
     def test_steps_too_low(self):
-        ok, err = validate_params({"num_inference_steps": 5})
+        ok, _err = validate_params({"num_inference_steps": 5})
         assert ok is False
 
 
 class TestFormatBytes:
     def test_bytes(self):
-        assert "500.0 B" == format_bytes(500)
+        assert format_bytes(500) == "500.0 B"
 
     def test_kilobytes(self):
         result = format_bytes(2048)

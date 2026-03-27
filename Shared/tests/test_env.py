@@ -6,8 +6,8 @@ from unittest.mock import patch
 from gamedev_shared.env import (
     TOOL_BINS,
     ensure_pytorch_cuda_alloc_conf,
-    subprocess_gpu_env,
     get_tool_bin,
+    subprocess_gpu_env,
 )
 
 

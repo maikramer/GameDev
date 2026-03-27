@@ -11,13 +11,13 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Optional, Tuple, Union
 
 import numpy as np
 import trimesh
 from PIL import Image
 
-def resolve_materialize_binary(explicit: Optional[Union[str, Path]] = None) -> str:
+
+def resolve_materialize_binary(explicit: str | Path | None = None) -> str:
     """Caminho para o executável Materialize CLI."""
     if explicit is not None:
         p = Path(explicit)
@@ -39,7 +39,7 @@ def resolve_materialize_binary(explicit: Optional[Union[str, Path]] = None) -> s
     return found
 
 
-def extract_base_color_and_uv(mesh: trimesh.Trimesh) -> Tuple[np.ndarray, Image.Image]:
+def extract_base_color_and_uv(mesh: trimesh.Trimesh) -> tuple[np.ndarray, Image.Image]:
     """
     Extrai UVs e imagem base (albedo) de uma mesh com ``TextureVisuals``.
     Aceita ``SimpleMaterial`` ou ``PBRMaterial`` (usa ``baseColorTexture``).
@@ -54,7 +54,7 @@ def extract_base_color_and_uv(mesh: trimesh.Trimesh) -> Tuple[np.ndarray, Image.
     uv = np.asarray(vis.uv, dtype=np.float64)
     mat = vis.material
 
-    img: Optional[Image.Image] = None
+    img: Image.Image | None = None
     if isinstance(mat, trimesh.visual.material.PBRMaterial):
         img = mat.baseColorTexture
     elif isinstance(mat, trimesh.visual.material.SimpleMaterial):
@@ -78,7 +78,7 @@ def extract_base_color_and_uv(mesh: trimesh.Trimesh) -> Tuple[np.ndarray, Image.
 
 
 def _luma01(img: Image.Image) -> np.ndarray:
-    """Escala 0–1 a partir de L ou RGB (média dos canais)."""
+    """Escala 0-1 a partir de L ou RGB (média dos canais)."""
     g = np.asarray(img.convert("L"), dtype=np.float64) / 255.0
     return g
 
@@ -97,10 +97,7 @@ def pack_metallic_roughness_gltf(
         smoothness = smoothness.resize(metallic.size, Image.Resampling.BILINEAR)
     m = _luma01(metallic)
     s = _luma01(smoothness)
-    if roughness_from_one_minus_smoothness:
-        r = 1.0 - s
-    else:
-        r = s
+    r = 1.0 - s if roughness_from_one_minus_smoothness else s
     r = np.clip(r, 0.0, 1.0)
     m = np.clip(m, 0.0, 1.0)
     h, w = m.shape
@@ -129,7 +126,7 @@ def run_materialize_cli(
     albedo_path: Path,
     output_dir: Path,
     *,
-    materialize_bin: Optional[Union[str, Path]] = None,
+    materialize_bin: str | Path | None = None,
     image_format: str = "png",
     verbose: bool = False,
 ) -> dict:
@@ -156,7 +153,7 @@ def run_materialize_cli(
 
     stem = albedo_path.stem
     paths = _expected_materialize_paths(stem, output_dir, image_format)
-    for key, p in paths.items():
+    for _key, p in paths.items():
         if not p.is_file():
             raise FileNotFoundError(f"Mapa em falta após materialize: {p}")
     return paths
@@ -165,9 +162,9 @@ def run_materialize_cli(
 def apply_materialize_pbr(
     mesh: trimesh.Trimesh,
     *,
-    materialize_bin: Optional[Union[str, Path]] = None,
-    work_dir: Optional[Union[str, Path]] = None,
-    save_sidecar_maps_dir: Optional[Union[str, Path]] = None,
+    materialize_bin: str | Path | None = None,
+    work_dir: str | Path | None = None,
+    save_sidecar_maps_dir: str | Path | None = None,
     roughness_from_one_minus_smoothness: bool = True,
     verbose: bool = False,
 ) -> trimesh.Trimesh:

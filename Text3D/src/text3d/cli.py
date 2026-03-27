@@ -12,9 +12,6 @@ import time
 from pathlib import Path
 from typing import Literal
 
-from gamedev_shared.hf import hf_home_display_rich
-
-from .cli_rich import click  # noqa: F401 — rich-click antes dos comandos
 from rich import box
 from rich.console import Console
 from rich.panel import Panel
@@ -22,7 +19,11 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.rule import Rule
 from rich.table import Table
 
+from gamedev_shared.hf import hf_home_display_rich
+
 from . import defaults as _defaults
+from .cli_rich import click
+from .cursor_skill_install import install_agent_skill
 from .generator import HunyuanTextTo3DGenerator
 from .utils.env import ensure_pytorch_cuda_alloc_conf
 from .utils.memory import (
@@ -31,7 +32,6 @@ from .utils.memory import (
     format_bytes,
     kill_gpu_compute_processes_aggressive,
 )
-from .cursor_skill_install import install_agent_skill
 
 console = Console()
 
@@ -212,20 +212,14 @@ def skill_install_cmd(target: Path, force: bool) -> None:
     default=_defaults.DEFAULT_OCTREE_RESOLUTION,
     show_default=True,
     type=int,
-    help=(
-        "Octree Hunyuan (VRAM no decode). "
-        f"HQ em GPU grande: {_defaults.HUNYUAN_HQ_OCTREE}"
-    ),
+    help=(f"Octree Hunyuan (VRAM no decode). HQ em GPU grande: {_defaults.HUNYUAN_HQ_OCTREE}"),
 )
 @click.option(
     "--num-chunks",
     default=_defaults.DEFAULT_NUM_CHUNKS,
     show_default=True,
     type=int,
-    help=(
-        "Chunks extração de superfície. "
-        f"HQ: {_defaults.HUNYUAN_HQ_NUM_CHUNKS}"
-    ),
+    help=(f"Chunks extração de superfície. HQ: {_defaults.HUNYUAN_HQ_NUM_CHUNKS}"),
 )
 @click.option(
     "--preset",
@@ -270,7 +264,7 @@ def skill_install_cmd(target: Path, force: bool) -> None:
     default=_defaults.DEFAULT_MESH_SMOOTH,
     show_default=True,
     type=int,
-    help="Suavização Laplaciana (1–2 reduz aspereza; pode arredondar detalhes finos).",
+    help="Suavização Laplaciana (1-2 reduz aspereza; pode arredondar detalhes finos).",
 )
 @click.option(
     "--texture",
@@ -324,7 +318,7 @@ def skill_install_cmd(target: Path, force: bool) -> None:
 @click.option(
     "--materialize-no-invert",
     is_flag=True,
-    help="Roughness = smoothness (sem 1−smoothness).",
+    help="Roughness = smoothness (sem 1-smoothness).",
 )
 @click.option(
     "-v",
@@ -350,7 +344,9 @@ def skill_install_cmd(target: Path, force: bool) -> None:
     "export_rotation_x_deg",
     type=float,
     default=None,
-    help="Rotação X ao gravar mesh (graus). Defeito interno: +90 (Hunyuan→Y-up). Sobrescreve TEXT3D_EXPORT_ROTATION_X_*.",
+    help=(
+        "Rotação X ao gravar mesh (graus). Defeito interno: +90 (Hunyuan→Y-up). Sobrescreve TEXT3D_EXPORT_ROTATION_X_*."
+    ),
 )
 @click.pass_context
 def generate(
@@ -449,7 +445,7 @@ def generate(
     info_table.add_row("[bold]Octree / chunks[/bold]", f"{octree_resolution} / {num_chunks}")
     if mc_level != 0.0:
         info_table.add_row("[bold]mc_level[/bold]", str(mc_level))
-    rep = "desligado" if no_mesh_repair else f"maior componente + merge"
+    rep = "desligado" if no_mesh_repair else "maior componente + merge"
     if not no_mesh_repair and not no_ground_shadow_removal:
         rep += ", anti-sombra base"
         if ground_shadow_aggressive:
@@ -462,23 +458,19 @@ def generate(
     if texture:
         info_table.add_row(
             "[bold]Textura[/bold]",
-            f"Hunyuan3D-Paint ({paint_subfolder}) "
-            f"{'GPU' if paint_full_gpu else 'CPU offload'}",
+            f"Hunyuan3D-Paint ({paint_subfolder}) {'GPU' if paint_full_gpu else 'CPU offload'}",
         )
         if materialize:
             info_table.add_row(
                 "[bold]Materialize PBR[/bold]",
-                "sim"
-                + (f" → [cyan]{materialize_output_dir}[/cyan]" if materialize_output_dir else ""),
+                "sim" + (f" → [cyan]{materialize_output_dir}[/cyan]" if materialize_output_dir else ""),
             )
 
     console.print(Panel(info_table, title="[bold green]Configuração", border_style="green"))
 
     try:
         if export_rotation_x_deg is not None:
-            _defaults.set_export_rotation_x_rad_override(
-                math.radians(float(export_rotation_x_deg))
-            )
+            _defaults.set_export_rotation_x_rad_override(math.radians(float(export_rotation_x_deg)))
         try:
             with console.status("[bold yellow]A preparar gerador...", spinner="dots"):
                 generator = HunyuanTextTo3DGenerator(
@@ -613,18 +605,16 @@ def generate(
             except OSError:
                 sz = "?"
             console.print(Rule("[bold green]Resultado", style="green"))
-            console.print(
-                f"[bold green]✓[/bold green] Mesh: [cyan]{mp}[/cyan] [dim]({sz})[/dim]"
-            )
+            console.print(f"[bold green]✓[/bold green] Mesh: [cyan]{mp}[/cyan] [dim]({sz})[/dim]")
 
             elapsed = time.time() - start_time
             console.print(f"\n[dim]Tempo total: {elapsed:.1f}s[/dim]")
-            console.print(f"[bold green]Sucesso.[/bold green]")
+            console.print("[bold green]Sucesso.[/bold green]")
 
         finally:
             _defaults.set_export_rotation_x_rad_override(None)
     except Exception as e:
-        console.print(f"\n[bold red]✗ Erro:[/bold red] {str(e)}")
+        console.print(f"\n[bold red]✗ Erro:[/bold red] {e!s}")
         if verbose:
             console.print_exception()
         sys.exit(1)
@@ -663,8 +653,7 @@ def doctor():
         for i, gpu in enumerate(info_data.get("gpus", [])):
             table.add_row(
                 f"GPU {i}",
-                f"{gpu['name']} — {format_bytes(gpu['total_memory'])} total, "
-                f"{format_bytes(gpu['free_memory'])} livre",
+                f"{gpu['name']} — {format_bytes(gpu['total_memory'])} total, {format_bytes(gpu['free_memory'])} livre",
             )
         used = gpu_bytes_in_use(0)
         if used is not None:
@@ -718,8 +707,8 @@ def info():
         table.add_row("CUDA (versão)", info_data.get("cuda_version", "N/A"))
         for i, gpu in enumerate(info_data.get("gpus", [])):
             table.add_row(f"GPU {i}", f"{gpu['name']}")
-            table.add_row(f"  └ VRAM total", format_bytes(gpu["total_memory"]))
-            table.add_row(f"  └ VRAM livre", format_bytes(gpu["free_memory"]))
+            table.add_row("  └ VRAM total", format_bytes(gpu["total_memory"]))
+            table.add_row("  └ VRAM livre", format_bytes(gpu["free_memory"]))
 
     table.add_row("Saída padrão", str(DEFAULT_OUTPUT_DIR.absolute()))
     table.add_row("HF_HOME (cache Hub)", hf_home_display_rich())
@@ -790,7 +779,7 @@ def info():
 @click.option(
     "--materialize-no-invert",
     is_flag=True,
-    help="Roughness = smoothness (sem 1−smoothness).",
+    help="Roughness = smoothness (sem 1-smoothness).",
 )
 @click.option(
     "-v",
@@ -838,9 +827,7 @@ def texture(
 
     console.print(
         Panel(
-            f"Mesh: [cyan]{mesh_path}[/cyan]\n"
-            f"Imagem: [cyan]{image_file}[/cyan]\n"
-            f"Saída: [cyan]{output}[/cyan]",
+            f"Mesh: [cyan]{mesh_path}[/cyan]\nImagem: [cyan]{image_file}[/cyan]\nSaída: [cyan]{output}[/cyan]",
             title="[bold green]Hunyuan3D-Paint",
             border_style="green",
         )
@@ -886,12 +873,10 @@ def texture(
         except OSError:
             sz = "?"
         console.print(Rule("[bold green]Resultado", style="green"))
-        console.print(
-            f"[bold green]✓[/bold green] GLB texturizado: [cyan]{out_p}[/cyan] [dim]({sz})[/dim]"
-        )
+        console.print(f"[bold green]✓[/bold green] GLB texturizado: [cyan]{out_p}[/cyan] [dim]({sz})[/dim]")
         console.print(f"\n[dim]Tempo: {time.time() - start:.1f}s[/dim]")
     except Exception as e:
-        console.print(f"\n[bold red]✗ Erro:[/bold red] {str(e)}")
+        console.print(f"\n[bold red]✗ Erro:[/bold red] {e!s}")
         if verbose:
             console.print_exception()
         sys.exit(1)
@@ -923,7 +908,7 @@ def texture(
 @click.option(
     "--materialize-no-invert",
     is_flag=True,
-    help="Roughness = smoothness (sem 1−smoothness).",
+    help="Roughness = smoothness (sem 1-smoothness).",
 )
 @click.option(
     "-v",
@@ -966,8 +951,7 @@ def materialize_pbr_cmd(
 
     console.print(
         Panel(
-            f"Entrada: [cyan]{mesh_path}[/cyan]\n"
-            f"Saída: [cyan]{out_path}[/cyan]",
+            f"Entrada: [cyan]{mesh_path}[/cyan]\nSaída: [cyan]{out_path}[/cyan]",
             title="[bold green]Materialize PBR",
             border_style="green",
         )
@@ -1009,12 +993,10 @@ def materialize_pbr_cmd(
         except OSError:
             sz = "?"
         console.print(Rule("[bold green]Resultado", style="green"))
-        console.print(
-            f"[bold green]✓[/bold green] GLB PBR: [cyan]{out_p}[/cyan] [dim]({sz})[/dim]"
-        )
+        console.print(f"[bold green]✓[/bold green] GLB PBR: [cyan]{out_p}[/cyan] [dim]({sz})[/dim]")
         console.print(f"\n[dim]Tempo: {time.time() - start:.1f}s[/dim]")
     except Exception as e:
-        console.print(f"\n[bold red]✗ Erro:[/bold red] {str(e)}")
+        console.print(f"\n[bold red]✗ Erro:[/bold red] {e!s}")
         if verbose:
             console.print_exception()
         sys.exit(1)

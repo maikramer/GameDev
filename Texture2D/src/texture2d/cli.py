@@ -3,13 +3,10 @@
 Texture2D — CLI principal (texturas 2D seamless).
 """
 
-import os
 import sys
 import time
 from pathlib import Path
-from typing import Optional
 
-from .cli_rich import RICH_CLICK, click  # noqa: F401 — rich-click antes dos comandos
 from rich import box
 from rich.console import Console
 from rich.panel import Panel
@@ -19,6 +16,7 @@ from rich.table import Table
 
 from gamedev_shared.hf import get_hf_token, hf_home_display_rich
 
+from .cli_rich import RICH_CLICK, click  # noqa: F401 — rich-click antes dos comandos
 from .generator import TextureGenerator, default_model_id
 from .presets import TEXTURE_PRESETS, list_presets
 from .utils import format_bytes
@@ -102,7 +100,7 @@ def skill_install_cmd(target: Path, force: bool) -> None:
     "--preset",
     "-p",
     default=None,
-    type=click.Choice(["None"] + list_presets(), case_sensitive=False),
+    type=click.Choice(["None", *list_presets()], case_sensitive=False),
     help="Preset de material",
 )
 @click.option("--cfg-scale", default=None, type=float, help="CFG scale (default = guidance)")
@@ -125,17 +123,17 @@ def skill_install_cmd(target: Path, force: bool) -> None:
 def generate_cmd(
     ctx: click.Context,
     prompt: str,
-    output: Optional[str],
+    output: str | None,
     width: int,
     height: int,
     steps: int,
     guidance_scale: float,
-    seed: Optional[int],
+    seed: int | None,
     negative_prompt: str,
-    preset: Optional[str],
-    cfg_scale: Optional[float],
+    preset: str | None,
+    cfg_scale: float | None,
     lora_strength: float,
-    model_id: Optional[str],
+    model_id: str | None,
     verbose_flag: bool,
 ) -> None:
     """Gera uma textura seamless a partir do PROMPT."""
@@ -149,9 +147,7 @@ def generate_cmd(
     if preset and preset != "None":
         table.add_row("[bold]Preset[/bold]", preset)
     table.add_row("[bold]Modelo[/bold]", model_id or default_model_id())
-    console.print(
-        Panel(table, title="[bold green]Configuração", border_style="green")
-    )
+    console.print(Panel(table, title="[bold green]Configuração", border_style="green"))
 
     try:
         gen = TextureGenerator(model_id=model_id)
@@ -201,10 +197,7 @@ def generate_cmd(
             sz = "?"
 
         console.print(Rule("[bold green]Resultado", style="green"))
-        console.print(
-            f"[bold green]\u2713[/bold green] Textura: [cyan]{saved.resolve()}[/cyan] "
-            f"[dim]({sz})[/dim]"
-        )
+        console.print(f"[bold green]\u2713[/bold green] Textura: [cyan]{saved.resolve()}[/cyan] [dim]({sz})[/dim]")
         console.print(f"[dim]Seed: {metadata.get('seed', '?')}[/dim]")
         console.print(f"[dim]Tempo: {elapsed:.1f}s[/dim]")
 
@@ -247,13 +240,13 @@ def presets_cmd() -> None:
 def batch_cmd(
     ctx: click.Context,
     file: Path,
-    output_dir: Optional[Path],
-    preset: Optional[str],
+    output_dir: Path | None,
+    preset: str | None,
     width: int,
     height: int,
     steps: int,
     guidance_scale: float,
-    model_id: Optional[str],
+    model_id: str | None,
 ) -> None:
     """Gera texturas em batch a partir de um ficheiro de prompts (um por linha)."""
     prompts = [
@@ -285,9 +278,7 @@ def batch_cmd(
     ok_count = 0
     for image, metadata, idx in gen.generate_batch(prompts, base_params):
         if image is None:
-            console.print(
-                f"  [red]\u2717[/red] {idx + 1}/{len(prompts)}: {metadata.get('error', '?')}"
-            )
+            console.print(f"  [red]\u2717[/red] {idx + 1}/{len(prompts)}: {metadata.get('error', '?')}")
             continue
 
         ts = int(time.time())
@@ -301,9 +292,7 @@ def batch_cmd(
             filename=fname,
         )
         ok_count += 1
-        console.print(
-            f"  [green]\u2713[/green] {idx + 1}/{len(prompts)}: [cyan]{saved.name}[/cyan]"
-        )
+        console.print(f"  [green]\u2713[/green] {idx + 1}/{len(prompts)}: [cyan]{saved.name}[/cyan]")
 
     console.print(
         Panel(

@@ -7,10 +7,11 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Generator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
 
 import click
+
 from gamedev_shared.env import PYTORCH_CUDA_ALLOC_CONF
 
 
@@ -79,7 +80,7 @@ def batch_directory_lock(
         yield
         return
     try:
-        import fcntl  # noqa: PLC0415 — só Unix
+        import fcntl
     except ImportError:
         yield
         return
@@ -100,10 +101,8 @@ def batch_directory_lock(
             fd = None
             old = _read_lock_pid(lock_path)
             if old is not None and not _pid_alive(old):
-                try:
+                with suppress(OSError):
                     lock_path.unlink(missing_ok=True)
-                except OSError:
-                    pass
                 continue
             hint = f" PID {old}" if old is not None else ""
             raise click.ClickException(
@@ -117,14 +116,10 @@ def batch_directory_lock(
         yield
     finally:
         if fd is not None:
-            try:
+            with suppress(OSError):
                 fcntl.flock(fd, fcntl.LOCK_UN)
-            except OSError:
-                pass
-            try:
+            with suppress(OSError):
                 os.close(fd)
-            except OSError:
-                pass
         try:
             if lock_path.is_file():
                 lp = _read_lock_pid(lock_path)

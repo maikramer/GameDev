@@ -1,8 +1,5 @@
 """Testes para gamedev_shared.logging."""
 
-from io import StringIO
-from unittest.mock import patch
-
 from gamedev_shared.logging import Logger
 
 

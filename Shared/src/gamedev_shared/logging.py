@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
 import sys
-from typing import Optional
 
 
 def _configure_stdio_utf8() -> None:
@@ -12,10 +12,8 @@ def _configure_stdio_utf8() -> None:
         return
     for stream in (sys.stdout, sys.stderr):
         if stream is not None and hasattr(stream, "reconfigure"):
-            try:
+            with contextlib.suppress(OSError, ValueError):
                 stream.reconfigure(encoding="utf-8")
-            except (OSError, ValueError):
-                pass
 
 
 _configure_stdio_utf8()
@@ -38,9 +36,9 @@ class Logger:
     Pode receber um ``Console`` Rich existente ou criar um internamente.
     """
 
-    def __init__(self, console: Optional["Console"] = None) -> None:
+    def __init__(self, console: Console | None = None) -> None:
         if _RICH:
-            self._console: Optional[Console] = console or Console()
+            self._console: Console | None = console or Console()
         else:
             self._console = None
 
@@ -49,7 +47,7 @@ class Logger:
         return _RICH and self._console is not None
 
     @property
-    def console(self) -> Optional["Console"]:
+    def console(self) -> Console | None:
         return self._console
 
     def info(self, msg: str) -> None:

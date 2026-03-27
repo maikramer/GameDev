@@ -279,24 +279,32 @@ def pipeline_cmd(ctx: click.Context, mesh: Path, out: Path, work_dir: Path | Non
     skin = wd / "_skin.fbx"
     try:
         rc = _run_bash(
-            root, "launch/inference/generate_skeleton.sh",
+            root,
+            "launch/inference/generate_skeleton.sh",
             ["--input", _shell_path(mesh), "--output", _shell_path(skel), "--seed", str(seed)],
         )
         if rc != 0:
             raise click.ClickException(f"skeleton falhou ({rc})")
 
         rc = _run_bash(
-            root, "launch/inference/generate_skin.sh",
+            root,
+            "launch/inference/generate_skin.sh",
             ["--input", _shell_path(skel), "--output", _shell_path(skin), "--seed", str(seed)],
         )
         if rc != 0:
             raise click.ClickException(f"skin falhou ({rc})")
 
         rc = _run_module(
-            root, py, "src.inference.merge",
+            root,
+            py,
+            "src.inference.merge",
             [
-                "--require_suffix=obj,fbx,FBX,dae,glb,gltf,vrm", "--num_runs=1", "--id=0",
-                f"--source={_shell_path(skin)}", f"--target={_shell_path(mesh)}", f"--output={_shell_path(out)}",
+                "--require_suffix=obj,fbx,FBX,dae,glb,gltf,vrm",
+                "--num_runs=1",
+                "--id=0",
+                f"--source={_shell_path(skin)}",
+                f"--target={_shell_path(mesh)}",
+                f"--output={_shell_path(out)}",
             ],
         )
         if rc != 0:
@@ -314,7 +322,10 @@ def pipeline_cmd(ctx: click.Context, mesh: Path, out: Path, work_dir: Path | Non
 
 
 def _validate_io(
-    input_path: Path | None, output_path: Path | None, input_dir: Path | None, output_dir: Path | None,
+    input_path: Path | None,
+    output_path: Path | None,
+    input_dir: Path | None,
+    output_dir: Path | None,
 ) -> None:
     if input_dir is not None:
         if output_dir is None:
@@ -324,7 +335,10 @@ def _validate_io(
 
 
 def _io_args(
-    input_path: Path | None, output_path: Path | None, input_dir: Path | None, output_dir: Path | None,
+    input_path: Path | None,
+    output_path: Path | None,
+    input_dir: Path | None,
+    output_dir: Path | None,
 ) -> list[str]:
     args: list[str] = []
     if input_dir is not None:

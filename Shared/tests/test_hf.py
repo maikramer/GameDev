@@ -5,8 +5,8 @@ from unittest.mock import patch
 
 from gamedev_shared.env import HF_HOME
 from gamedev_shared.hf import (
-    HUGGINGFACEHUB_API_TOKEN,
     HF_TOKEN,
+    HUGGINGFACEHUB_API_TOKEN,
     get_hf_token,
     hf_home_display_rich,
 )

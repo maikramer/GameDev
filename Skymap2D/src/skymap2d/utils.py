@@ -4,7 +4,7 @@ import logging
 import random
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 logging.basicConfig(
     level=logging.INFO,
@@ -18,7 +18,7 @@ def generate_seed() -> int:
     return random.randint(0, 2**32 - 1)
 
 
-def validate_prompt(prompt: str, max_length: int = 500) -> tuple[bool, Optional[str]]:
+def validate_prompt(prompt: str, max_length: int = 500) -> tuple[bool, str | None]:
     """Valida um prompt.
 
     Returns:
@@ -33,7 +33,7 @@ def validate_prompt(prompt: str, max_length: int = 500) -> tuple[bool, Optional[
     return True, None
 
 
-def validate_dimensions(width: int, height: int) -> tuple[bool, Optional[str]]:
+def validate_dimensions(width: int, height: int) -> tuple[bool, str | None]:
     """Valida dimensões de imagem para skymap equirectangular.
 
     Recomenda ratio 2:1 com tolerância de 5%.
@@ -57,14 +57,13 @@ def validate_dimensions(width: int, height: int) -> tuple[bool, Optional[str]]:
     ratio = width / height
     if abs(ratio - 2.0) > 0.1:
         logger.warning(
-            f"Ratio {ratio:.2f}:1 não é 2:1. "
-            "Skymaps equirectangular funcionam melhor com ratio 2:1 (ex: 2048x1024)."
+            f"Ratio {ratio:.2f}:1 não é 2:1. Skymaps equirectangular funcionam melhor com ratio 2:1 (ex: 2048x1024)."
         )
 
     return True, None
 
 
-def validate_params(params: Dict[str, Any]) -> tuple[bool, Optional[str]]:
+def validate_params(params: dict[str, Any]) -> tuple[bool, str | None]:
     """Valida parâmetros de geração de skymap.
 
     Returns:

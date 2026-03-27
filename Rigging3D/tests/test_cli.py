@@ -63,7 +63,9 @@ class TestSkeleton:
         monkeypatch.setenv("RIGGING3D_ROOT", str(ur))
         with patch("rigging3d.cli._find_bash", return_value=None):
             result = CliRunner().invoke(
-                cli, ["skeleton", "-i", "mesh.glb", "-o", "skel.fbx"], catch_exceptions=False,
+                cli,
+                ["skeleton", "-i", "mesh.glb", "-o", "skel.fbx"],
+                catch_exceptions=False,
             )
         assert result.exit_code != 0
         assert "bash" in result.output.lower()
@@ -86,7 +88,9 @@ class TestSkeleton:
             patch("rigging3d.cli._run_bash", return_value=0),
         ):
             result = CliRunner().invoke(
-                cli, ["skeleton", "-i", "mesh.glb", "-o", "skel.fbx"], catch_exceptions=False,
+                cli,
+                ["skeleton", "-i", "mesh.glb", "-o", "skel.fbx"],
+                catch_exceptions=False,
             )
         assert result.exit_code == 0
         assert "concluído" in result.output.lower()
@@ -100,7 +104,9 @@ class TestSkeleton:
             patch("rigging3d.cli._run_bash", return_value=1),
         ):
             result = CliRunner().invoke(
-                cli, ["skeleton", "-i", "mesh.glb", "-o", "skel.fbx"], catch_exceptions=False,
+                cli,
+                ["skeleton", "-i", "mesh.glb", "-o", "skel.fbx"],
+                catch_exceptions=False,
             )
         assert result.exit_code != 0
         assert "código 1" in result.output
@@ -119,7 +125,9 @@ class TestSkin:
             patch("rigging3d.cli._run_bash", return_value=0),
         ):
             result = CliRunner().invoke(
-                cli, ["skin", "-i", "skel.fbx", "-o", "skin.fbx"], catch_exceptions=False,
+                cli,
+                ["skin", "-i", "skel.fbx", "-o", "skin.fbx"],
+                catch_exceptions=False,
             )
         assert result.exit_code == 0
         assert "skinning concluído" in result.output.lower()
@@ -133,7 +141,9 @@ class TestSkin:
             patch("rigging3d.cli._run_bash", return_value=2),
         ):
             result = CliRunner().invoke(
-                cli, ["skin", "-i", "skel.fbx", "-o", "skin.fbx"], catch_exceptions=False,
+                cli,
+                ["skin", "-i", "skel.fbx", "-o", "skin.fbx"],
+                catch_exceptions=False,
             )
         assert result.exit_code != 0
 
@@ -169,7 +179,9 @@ class TestMerge:
         monkeypatch.setenv("RIGGING3D_ROOT", str(ur))
         with patch("rigging3d.cli._run_module", return_value=0):
             result = CliRunner().invoke(
-                cli, ["merge", "-s", "skin.fbx", "-t", "mesh.glb", "-o", "out.glb"], catch_exceptions=False,
+                cli,
+                ["merge", "-s", "skin.fbx", "-t", "mesh.glb", "-o", "out.glb"],
+                catch_exceptions=False,
             )
         assert result.exit_code == 0
         assert "merge concluído" in result.output.lower()
@@ -180,7 +192,9 @@ class TestMerge:
         monkeypatch.setenv("RIGGING3D_ROOT", str(ur))
         with patch("rigging3d.cli._run_module", return_value=3):
             result = CliRunner().invoke(
-                cli, ["merge", "-s", "skin.fbx", "-t", "mesh.glb", "-o", "out.glb"], catch_exceptions=False,
+                cli,
+                ["merge", "-s", "skin.fbx", "-t", "mesh.glb", "-o", "out.glb"],
+                catch_exceptions=False,
             )
         assert result.exit_code != 0
 
@@ -196,7 +210,9 @@ class TestMerge:
 
         with patch("rigging3d.cli._run_module", side_effect=fake_run_module):
             CliRunner().invoke(
-                cli, ["merge", "-s", "skin.fbx", "-t", "mesh.glb", "-o", "out.glb"], catch_exceptions=False,
+                cli,
+                ["merge", "-s", "skin.fbx", "-t", "mesh.glb", "-o", "out.glb"],
+                catch_exceptions=False,
             )
         assert captured == ["src.inference.merge"]
 
@@ -221,7 +237,9 @@ class TestPipeline:
         _ur, mesh = self._setup(tmp_path, monkeypatch)
         with patch("rigging3d.cli._find_bash", return_value=None):
             result = CliRunner().invoke(
-                cli, ["pipeline", "-i", str(mesh), "-o", str(tmp_path / "o.glb")], catch_exceptions=False,
+                cli,
+                ["pipeline", "-i", str(mesh), "-o", str(tmp_path / "o.glb")],
+                catch_exceptions=False,
             )
         assert result.exit_code != 0
         assert "bash" in result.output.lower()
@@ -235,7 +253,9 @@ class TestPipeline:
             patch("rigging3d.cli._run_module", return_value=0),
         ):
             result = CliRunner().invoke(
-                cli, ["pipeline", "-i", str(mesh), "-o", str(out)], catch_exceptions=False,
+                cli,
+                ["pipeline", "-i", str(mesh), "-o", str(out)],
+                catch_exceptions=False,
             )
         assert result.exit_code == 0
         assert "concluído" in result.output.lower()
@@ -247,7 +267,9 @@ class TestPipeline:
             patch("rigging3d.cli._run_bash", return_value=1),
         ):
             result = CliRunner().invoke(
-                cli, ["pipeline", "-i", str(mesh), "-o", str(tmp_path / "o.glb")], catch_exceptions=False,
+                cli,
+                ["pipeline", "-i", str(mesh), "-o", str(tmp_path / "o.glb")],
+                catch_exceptions=False,
             )
         assert result.exit_code != 0
         assert "skeleton falhou" in result.output.lower()
@@ -266,7 +288,9 @@ class TestPipeline:
             patch("rigging3d.cli._run_bash", side_effect=bash_side_effect),
         ):
             result = CliRunner().invoke(
-                cli, ["pipeline", "-i", str(mesh), "-o", str(tmp_path / "o.glb")], catch_exceptions=False,
+                cli,
+                ["pipeline", "-i", str(mesh), "-o", str(tmp_path / "o.glb")],
+                catch_exceptions=False,
             )
         assert result.exit_code != 0
         assert "skin falhou" in result.output.lower()
@@ -279,7 +303,9 @@ class TestPipeline:
             patch("rigging3d.cli._run_module", return_value=1),
         ):
             result = CliRunner().invoke(
-                cli, ["pipeline", "-i", str(mesh), "-o", str(tmp_path / "o.glb")], catch_exceptions=False,
+                cli,
+                ["pipeline", "-i", str(mesh), "-o", str(tmp_path / "o.glb")],
+                catch_exceptions=False,
             )
         assert result.exit_code != 0
         assert "merge falhou" in result.output.lower()
@@ -302,6 +328,7 @@ class TestPipeline:
     def test_keep_temp(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _ur, mesh = self._setup(tmp_path, monkeypatch)
         import tempfile
+
         created_dirs: list[Path] = []
         orig_mkdtemp = tempfile.mkdtemp
 
@@ -327,6 +354,7 @@ class TestPipeline:
     def test_temp_cleaned_by_default(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _ur, mesh = self._setup(tmp_path, monkeypatch)
         import tempfile
+
         created_dirs: list[Path] = []
         orig_mkdtemp = tempfile.mkdtemp
 
@@ -358,7 +386,9 @@ class TestRootOption:
         bad = tmp_path / "nope"
         bad.mkdir()
         result = CliRunner().invoke(
-            cli, ["--root", str(bad), "skeleton", "--help"], catch_exceptions=False,
+            cli,
+            ["--root", str(bad), "skeleton", "--help"],
+            catch_exceptions=False,
         )
         assert result.exit_code == 0
 

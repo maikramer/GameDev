@@ -1,7 +1,7 @@
 """
 Valores por defeito do Text3D.
 
-**Perfil padrão (validado):** combinação estável em ~6 GB VRAM (CUDA) com boa qualidade
+**Perfil padrão (validado):** combinação estável em ~6 GB VRAM (CUDA) com boa qualidade
 na prática (text-to-3D: robô, veículo, planta, etc.). O pico de VRAM costuma ser no
 *volume decoding* do Hunyuan; estes valores evitam OOM nessa fase.
 
@@ -16,7 +16,7 @@ import os
 
 # --- Orientação ao gravar mesh (Hunyuan3D → motor Y-up) ---
 # Rotação em torno do eixo X (radianos). O pipeline hy3dgen devolve malha numa convenção
-# onde −90° em X fazia o modelo sair de cabeça para baixo no Godot; +90° alinha com Y+.
+# onde -90° em X fazia o modelo sair de cabeça para baixo no Godot; +90° alinha com Y+.
 # Sobrescrever: TEXT3D_EXPORT_ROTATION_X_RAD ou TEXT3D_EXPORT_ROTATION_X_DEG, ou
 # ``text3d generate --export-rotation-x-deg``.
 _rotation_x_rad_override: float | None = None
@@ -49,7 +49,7 @@ DEFAULT_T2D_HEIGHT = 768
 DEFAULT_T2D_STEPS = 4
 DEFAULT_T2D_GUIDANCE = 1.0
 
-# FLUX.2 Klein 4B não cabe em ~5–6GB com pipe.to(cuda); usar enable_model_cpu_offload.
+# FLUX.2 Klein 4B não cabe em ~5-6GB com pipe.to(cuda); usar enable_model_cpu_offload.
 # Desliga com t2d_full_gpu=True (CLI --t2d-full-gpu) em GPUs grandes.
 DEFAULT_T2D_CPU_OFFLOAD = True
 
@@ -61,7 +61,7 @@ DEFAULT_HY_GUIDANCE = 5.0
 DEFAULT_OCTREE_RESOLUTION = 128
 DEFAULT_NUM_CHUNKS = 4096
 
-# Pós-processo ao gravar mesh (CLI): 0 = só maior componente + merge; 1–2 suaviza superfície.
+# Pós-processo ao gravar mesh (CLI): 0 = só maior componente + merge; 1-2 suaviza superfície.
 DEFAULT_MESH_SMOOTH = 0
 
 # --- Hunyuan3D-Paint (textura multivista, hy3dgen.texgen) ---

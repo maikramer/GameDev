@@ -65,3 +65,7 @@ exclude = ["src/rigging3d/unirig"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "W"]
+
+[tool.ruff.lint.per-file-ignores]
+# Import após sys.path.insert (execução directa sem pip install do Shared)
+"scripts/installer.py" = ["E402"]

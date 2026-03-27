@@ -41,18 +41,14 @@ AUDIO_PRESETS: dict[str, dict[str, Any]] = {
         "cfg_scale": 7.0,
     },
     "footsteps-stone": {
-        "prompt": (
-            "Footsteps walking on stone floor, clear and rhythmic steps "
-            "on hard surface, indoor stone corridor"
-        ),
+        "prompt": ("Footsteps walking on stone floor, clear and rhythmic steps on hard surface, indoor stone corridor"),
         "duration": 5,
         "steps": 80,
         "cfg_scale": 9.0,
     },
     "footsteps-grass": {
         "prompt": (
-            "Footsteps walking on grass and soft ground, quiet rustling "
-            "of vegetation underfoot, outdoor nature path"
+            "Footsteps walking on grass and soft ground, quiet rustling of vegetation underfoot, outdoor nature path"
         ),
         "duration": 5,
         "steps": 80,
@@ -68,37 +64,27 @@ AUDIO_PRESETS: dict[str, dict[str, Any]] = {
         "cfg_scale": 7.5,
     },
     "wind": {
-        "prompt": (
-            "Strong wind blowing through open landscape, gusty howling wind, "
-            "atmospheric outdoor wind ambience"
-        ),
+        "prompt": ("Strong wind blowing through open landscape, gusty howling wind, atmospheric outdoor wind ambience"),
         "duration": 30,
         "steps": 100,
         "cfg_scale": 7.0,
     },
     "thunder": {
         "prompt": (
-            "Dramatic thunder crack and rolling rumble, powerful storm thunder, "
-            "single thunderclap with reverb tail"
+            "Dramatic thunder crack and rolling rumble, powerful storm thunder, single thunderclap with reverb tail"
         ),
         "duration": 8,
         "steps": 100,
         "cfg_scale": 9.0,
     },
     "ui-click": {
-        "prompt": (
-            "Short UI click sound, clean digital button press, "
-            "crisp interface interaction sound effect"
-        ),
+        "prompt": ("Short UI click sound, clean digital button press, crisp interface interaction sound effect"),
         "duration": 2,
         "steps": 60,
         "cfg_scale": 10.0,
     },
     "ui-confirm": {
-        "prompt": (
-            "Positive confirmation chime, bright ascending tone, "
-            "success notification sound for game interface"
-        ),
+        "prompt": ("Positive confirmation chime, bright ascending tone, success notification sound for game interface"),
         "duration": 3,
         "steps": 60,
         "cfg_scale": 10.0,
@@ -113,10 +99,7 @@ AUDIO_PRESETS: dict[str, dict[str, Any]] = {
         "cfg_scale": 7.0,
     },
     "ocean": {
-        "prompt": (
-            "Ocean waves crashing on shore, rhythmic sea surf, "
-            "coastal seascape with seagulls in distance"
-        ),
+        "prompt": ("Ocean waves crashing on shore, rhythmic sea surf, coastal seascape with seagulls in distance"),
         "duration": 45,
         "steps": 100,
         "cfg_scale": 7.0,
@@ -140,18 +123,14 @@ AUDIO_PRESETS: dict[str, dict[str, Any]] = {
         "cfg_scale": 7.5,
     },
     "explosion": {
-        "prompt": (
-            "Powerful explosion blast with deep bass impact, "
-            "debris scattering, cinematic boom sound effect"
-        ),
+        "prompt": ("Powerful explosion blast with deep bass impact, debris scattering, cinematic boom sound effect"),
         "duration": 5,
         "steps": 80,
         "cfg_scale": 10.0,
     },
     "sword-clash": {
         "prompt": (
-            "Metal sword clash and parry, sharp metallic impact of blades, "
-            "weapon combat sound effect with ring"
+            "Metal sword clash and parry, sharp metallic impact of blades, weapon combat sound effect with ring"
         ),
         "duration": 3,
         "steps": 80,
@@ -168,8 +147,7 @@ AUDIO_PRESETS: dict[str, dict[str, Any]] = {
     },
     "victory-fanfare": {
         "prompt": (
-            "Triumphant victory fanfare with brass and strings, "
-            "uplifting celebratory short jingle, game level complete"
+            "Triumphant victory fanfare with brass and strings, uplifting celebratory short jingle, game level complete"
         ),
         "duration": 8,
         "steps": 100,
@@ -192,7 +170,4 @@ def get_preset(name: str) -> dict[str, Any]:
     key = name.lower().replace(" ", "-").replace("_", "-")
     if key in AUDIO_PRESETS:
         return AUDIO_PRESETS[key]
-    raise KeyError(
-        f"Preset desconhecido: {name!r}. "
-        f"Disponíveis: {', '.join(list_presets())}"
-    )
+    raise KeyError(f"Preset desconhecido: {name!r}. Disponíveis: {', '.join(list_presets())}")

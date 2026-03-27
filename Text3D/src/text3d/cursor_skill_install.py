@@ -6,6 +6,8 @@ from pathlib import Path
 
 from gamedev_shared.skill_install import (
     install_agent_skill as _install,
+)
+from gamedev_shared.skill_install import (
     resolve_skill_source as _resolve,
 )
 

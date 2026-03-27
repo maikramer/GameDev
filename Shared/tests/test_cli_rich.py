@@ -14,6 +14,7 @@ class TestSetupRichClick:
     def test_returns_true_if_rich_click_available(self):
         try:
             import rich_click  # noqa: F401
+
             has_rc = True
         except ImportError:
             has_rc = False

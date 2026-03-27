@@ -5,7 +5,7 @@ import logging
 import zipfile
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from PIL import Image
 
@@ -17,10 +17,10 @@ DEFAULT_OUTPUT_DIR = Path("outputs") / "skymaps"
 def save_image(
     image: Image.Image,
     prompt: str,
-    params: Dict[str, Any],
-    output_dir: Optional[Path] = None,
-    filename: Optional[str] = None,
-    metadata: Optional[Dict[str, Any]] = None,
+    params: dict[str, Any],
+    output_dir: Path | None = None,
+    filename: str | None = None,
+    metadata: dict[str, Any] | None = None,
     *,
     image_format: str = "png",
     exr_scale: float = 1.0,
@@ -57,7 +57,7 @@ def save_image(
         logger.info(f"Imagem gravada em {filepath}")
 
     metadata_path = filepath.with_suffix(".json")
-    metadata_dict: Dict[str, Any] = {
+    metadata_dict: dict[str, Any] = {
         "timestamp": datetime.now().timestamp(),
         "prompt": prompt,
         "params": params,
@@ -75,16 +75,14 @@ def save_image(
     return filepath
 
 
-def create_thumbnail(
-    image: Image.Image, size: tuple[int, int] = (512, 256)
-) -> Image.Image:
+def create_thumbnail(image: Image.Image, size: tuple[int, int] = (512, 256)) -> Image.Image:
     """Cria um thumbnail da imagem (2:1 por defeito para skymaps)."""
     thumb = image.copy()
     thumb.thumbnail(size, Image.Resampling.LANCZOS)
     return thumb
 
 
-def create_zip(files: List[Path], output_path: Path) -> Path:
+def create_zip(files: list[Path], output_path: Path) -> Path:
     """Cria um arquivo ZIP a partir de uma lista de ficheiros."""
     with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zipf:
         for file in files:
@@ -94,13 +92,13 @@ def create_zip(files: List[Path], output_path: Path) -> Path:
     return output_path
 
 
-def load_metadata(image_path: Path) -> Optional[Dict[str, Any]]:
+def load_metadata(image_path: Path) -> dict[str, Any] | None:
     """Carrega metadata JSON de uma imagem."""
     metadata_path = image_path.with_suffix(".json")
     if not metadata_path.exists():
         return None
     try:
-        with open(metadata_path, "r", encoding="utf-8") as f:
+        with open(metadata_path, encoding="utf-8") as f:
             return json.load(f)
     except Exception as e:
         logger.error(f"Erro a carregar metadata: {e}")

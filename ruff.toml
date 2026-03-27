@@ -25,6 +25,11 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
 
 [lint.per-file-ignores]
 "**/tests/**" = ["S101", "PLR2004"]
+# Import após sys.path.insert ou importorskip (instaladores / testes com deps opcionais)
+"**/scripts/installer.py" = ["E402"]
+"Materialize/installer/installer.py" = ["E402"]
+"Text2Sound/tests/test_audio_processor.py" = ["E402"]
+"Text2Sound/tests/test_generator.py" = ["E402"]
 
 [format]
 quote-style = "double"

@@ -4,7 +4,6 @@ import tempfile
 from pathlib import Path
 
 import pytest
-
 import yaml
 
 from gameassets.manifest import ManifestRow, effective_image_source, load_manifest
@@ -13,9 +12,7 @@ from gameassets.profile import load_profile
 
 def test_load_basic() -> None:
     content = "id,idea,kind,generate_3d\na,idea one,prop,true\nb,idea two,,false\n"
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".csv", delete=False, encoding="utf-8"
-    ) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, encoding="utf-8") as f:
         f.write(content)
         path = Path(f.name)
     try:
@@ -29,13 +26,8 @@ def test_load_basic() -> None:
 
 
 def test_quoted_commas() -> None:
-    content = (
-        'id,idea,kind,generate_3d\n'
-        'x,"hello, world",prop,sim\n'
-    )
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".csv", delete=False, encoding="utf-8"
-    ) as f:
+    content = 'id,idea,kind,generate_3d\nx,"hello, world",prop,sim\n'
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, encoding="utf-8") as f:
         f.write(content)
         path = Path(f.name)
     try:
@@ -46,14 +38,8 @@ def test_quoted_commas() -> None:
 
 
 def test_generate_rig_column() -> None:
-    content = (
-        "id,idea,kind,generate_3d,generate_rig\n"
-        "a,one,prop,true,true\n"
-        "b,two,,false,false\n"
-    )
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".csv", delete=False, encoding="utf-8"
-    ) as f:
+    content = "id,idea,kind,generate_3d,generate_rig\na,one,prop,true,true\nb,two,,false,false\n"
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, encoding="utf-8") as f:
         f.write(content)
         path = Path(f.name)
     try:
@@ -71,9 +57,7 @@ def test_image_source_column() -> None:
         "b,idea two,,false,texture2d\n"
         "c,idea three,,false,skymap2d\n"
     )
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".csv", delete=False, encoding="utf-8"
-    ) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, encoding="utf-8") as f:
         f.write(content)
         path = Path(f.name)
     try:
@@ -93,16 +77,12 @@ def test_effective_image_source_row_override() -> None:
         "style_preset": "lowpoly",
         "image_source": "text2d",
     }
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".yaml", delete=False, encoding="utf-8"
-    ) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False, encoding="utf-8") as f:
         yaml.safe_dump(data, f)
         path = Path(f.name)
     try:
         p = load_profile(path)
-        row_default = ManifestRow(
-            id="x", idea="y", kind=None, generate_3d=False, image_source=None
-        )
+        row_default = ManifestRow(id="x", idea="y", kind=None, generate_3d=False, image_source=None)
         assert effective_image_source(p, row_default) == "text2d"
         row_tex = ManifestRow(
             id="x",
@@ -118,9 +98,7 @@ def test_effective_image_source_row_override() -> None:
 
 def test_image_source_invalid_raises() -> None:
     content = "id,idea,image_source\na,idea one,blender\n"
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".csv", delete=False, encoding="utf-8"
-    ) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, encoding="utf-8") as f:
         f.write(content)
         path = Path(f.name)
     try:
@@ -132,9 +110,7 @@ def test_image_source_invalid_raises() -> None:
 
 def test_missing_columns_raises() -> None:
     content = "a,b\n1,2\n"
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".csv", delete=False, encoding="utf-8"
-    ) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, encoding="utf-8") as f:
         f.write(content)
         path = Path(f.name)
     try:

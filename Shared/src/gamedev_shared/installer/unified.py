@@ -10,11 +10,10 @@ import argparse
 import platform
 import sys
 from pathlib import Path
-from typing import Optional
 
 from ..logging import Logger
-from .registry import ToolKind, ToolSpec, TOOLS, find_monorepo_root, list_available_tools, get_tool
 from .python_installer import PythonProjectInstaller
+from .registry import TOOLS, ToolKind, ToolSpec, find_monorepo_root, get_tool, list_available_tools
 from .rust_installer import RustProjectInstaller
 
 
@@ -226,8 +225,7 @@ def main(argv: list[str] | None = None) -> int:
         "tool",
         nargs="?",
         default=None,
-        help="Ferramenta a instalar (ou 'all' para todas). Opções: "
-        + ", ".join(tool_names + ["all"]),
+        help="Ferramenta a instalar (ou 'all' para todas). Opções: " + ", ".join([*tool_names, "all"]),
     )
     parser.add_argument(
         "--action",
@@ -302,16 +300,18 @@ def _build_epilog(available: list[ToolSpec]) -> str:
     for spec in available:
         kind = "Python" if spec.kind == ToolKind.PYTHON else "Rust"
         lines.append(f"  {spec.cli_name:<14s}  [{kind}]  {spec.description}")
-    lines.extend([
-        "",
-        "Exemplos:",
-        "  gamedev-install materialize               # Instalar Materialize (Rust)",
-        "  gamedev-install text2d                    # Com Text2D/.venv, instala no venv do projecto",
-        "  gamedev-install gameassets --skip-deps      # Instalar GameAssets (sem deps sistema)",
-        "  gamedev-install materialize --action uninstall",
-        "  gamedev-install all                        # Instalar tudo",
-        "  gamedev-install --list                     # Listar ferramentas",
-    ])
+    lines.extend(
+        [
+            "",
+            "Exemplos:",
+            "  gamedev-install materialize               # Instalar Materialize (Rust)",
+            "  gamedev-install text2d                    # Com Text2D/.venv, instala no venv do projecto",
+            "  gamedev-install gameassets --skip-deps      # Instalar GameAssets (sem deps sistema)",
+            "  gamedev-install materialize --action uninstall",
+            "  gamedev-install all                        # Instalar tudo",
+            "  gamedev-install --list                     # Listar ferramentas",
+        ]
+    )
     return "\n".join(lines)
 
 

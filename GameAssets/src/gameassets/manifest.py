@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import csv
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
 
 from .profile import GameProfile
 
@@ -43,10 +43,7 @@ def _parse_image_source(value: str | None) -> str | None:
         return None
     s = str(value).strip().lower()
     if s not in ("text2d", "texture2d", "skymap2d"):
-        raise ValueError(
-            "Coluna image_source deve ser text2d, texture2d ou skymap2d "
-            "(ou vazio para herdar o perfil)"
-        )
+        raise ValueError("Coluna image_source deve ser text2d, texture2d ou skymap2d (ou vazio para herdar o perfil)")
     return s
 
 

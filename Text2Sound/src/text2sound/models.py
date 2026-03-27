@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, Optional
+from typing import Literal
 
 MODEL_MUSIC_ID = "stabilityai/stable-audio-open-1.0"
 MODEL_EFFECTS_ID = "stabilityai/stable-audio-open-small"
@@ -65,7 +65,7 @@ MODEL_ALIASES: dict[str, str] = {
 }
 
 
-def resolve_model_id(user: Optional[str]) -> str:
+def resolve_model_id(user: str | None) -> str:
     """Resolve alias ou ID HF. ``None`` ou vazio → modelo música (Open 1.0)."""
     if user is None or not str(user).strip():
         return MODEL_MUSIC_ID
@@ -84,7 +84,7 @@ def resolve_model_id(user: Optional[str]) -> str:
 
 def resolve_model_from_profile(
     profile: ProfileName,
-    model_override: Optional[str],
+    model_override: str | None,
 ) -> str:
     """Define o ID HF: ``--model`` tem prioridade; senão depende do perfil."""
     if model_override is not None and str(model_override).strip():

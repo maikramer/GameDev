@@ -6,11 +6,7 @@ Text2D — CLI principal (text-to-2D).
 import sys
 import time
 from pathlib import Path
-from typing import Optional
 
-from gamedev_shared.hf import hf_home_display_rich
-
-from .cli_rich import click  # noqa: F401 — rich-click antes dos comandos
 from rich import box
 from rich.console import Console
 from rich.panel import Panel
@@ -18,9 +14,12 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.rule import Rule
 from rich.table import Table
 
+from gamedev_shared.hf import hf_home_display_rich
+
+from .cli_rich import click
+from .cursor_skill_install import install_agent_skill
 from .generator import KleinFluxGenerator, default_model_id
 from .utils.memory import format_bytes, get_system_info
-from .cursor_skill_install import install_agent_skill
 
 console = Console()
 
@@ -109,15 +108,15 @@ def skill_install_cmd(target: Path, force: bool) -> None:
 def generate_cmd(
     ctx: click.Context,
     prompt: str,
-    output: Optional[str],
+    output: str | None,
     width: int,
     height: int,
     steps: int,
     guidance_scale: float,
-    seed: Optional[int],
+    seed: int | None,
     cpu: bool,
     low_vram: bool,
-    model_id: Optional[str],
+    model_id: str | None,
     verbose_flag: bool,
 ) -> None:
     """Gera uma imagem a partir do PROMPT."""
@@ -129,9 +128,7 @@ def generate_cmd(
     table.add_row("[bold]Passos[/bold]", str(steps))
     table.add_row("[bold]Guidance[/bold]", str(guidance_scale))
     table.add_row("[bold]Modelo[/bold]", model_id or default_model_id())
-    console.print(
-        Panel(table, title="[bold green]Configuração", border_style="green")
-    )
+    console.print(Panel(table, title="[bold green]Configuração", border_style="green"))
 
     device = "cpu" if cpu else None
     low = low_vram or cpu
@@ -190,10 +187,7 @@ def generate_cmd(
         except OSError:
             sz = "?"
         console.print(Rule("[bold green]Resultado", style="green"))
-        console.print(
-            f"[bold green]✓[/bold green] Imagem: [cyan]{out_path.resolve()}[/cyan] "
-            f"[dim]({sz})[/dim]"
-        )
+        console.print(f"[bold green]✓[/bold green] Imagem: [cyan]{out_path.resolve()}[/cyan] [dim]({sz})[/dim]")
         console.print(f"[dim]Tempo de inferência + gravação: {elapsed:.1f}s[/dim]")
     except ImportError as e:
         console.print(f"\n[bold red]✗[/bold red] {e}")

@@ -1,7 +1,6 @@
 """Testes para gamedev_shared.subprocess_utils."""
 
 import sys
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -60,9 +59,11 @@ class TestResolveBinary:
         assert result
 
     def test_not_found(self):
-        with patch.dict("os.environ", {}, clear=False):
-            with pytest.raises(FileNotFoundError, match="Comando não encontrado"):
-                resolve_binary("NADA_ENV", "comando_inexistente_xyz_123")
+        with (
+            patch.dict("os.environ", {}, clear=False),
+            pytest.raises(FileNotFoundError, match="Comando não encontrado"),
+        ):
+            resolve_binary("NADA_ENV", "comando_inexistente_xyz_123")
 
 
 class TestRunCmd:

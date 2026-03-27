@@ -210,11 +210,7 @@ class GameProfile:
                     "lora_strength e materialize_quality devem ser números válidos"
                 ) from e
             neg_prompt = raw_tex2.get("negative_prompt")
-            neg_s = (
-                str(neg_prompt).strip()
-                if neg_prompt not in (None, "")
-                else None
-            )
+            neg_s = str(neg_prompt).strip() if neg_prompt not in (None, "") else None
             pr = raw_tex2.get("preset")
             pr_s = str(pr).strip() if pr not in (None, "") else None
             mid = raw_tex2.get("model_id")
@@ -265,15 +261,10 @@ class GameProfile:
                 lr_s = float(lr) if lr is not None else None
             except (TypeError, ValueError) as e:
                 raise ValueError(
-                    "skymap2d.width, height, steps, guidance_scale, cfg_scale "
-                    "e lora_strength devem ser números válidos"
+                    "skymap2d.width, height, steps, guidance_scale, cfg_scale e lora_strength devem ser números válidos"
                 ) from e
             neg_prompt_s = raw_sky2.get("negative_prompt")
-            neg_ss = (
-                str(neg_prompt_s).strip()
-                if neg_prompt_s not in (None, "")
-                else None
-            )
+            neg_ss = str(neg_prompt_s).strip() if neg_prompt_s not in (None, "") else None
             pr_s2 = raw_sky2.get("preset")
             pr_ss = str(pr_s2).strip() if pr_s2 not in (None, "") else None
             mid_s2 = raw_sky2.get("model_id")
@@ -305,8 +296,7 @@ class GameProfile:
                 smax_f = float(smax) if smax is not None else None
             except (TypeError, ValueError) as e:
                 raise ValueError(
-                    "text2sound.duration, steps, cfg_scale, sigma_min e sigma_max "
-                    "devem ser números válidos"
+                    "text2sound.duration, steps, cfg_scale, sigma_min e sigma_max devem ser números válidos"
                 ) from e
             af_raw = raw_ts2.get("audio_format") or raw_ts2.get("format")
             af = str(af_raw or "wav").lower().strip().lstrip(".")
@@ -342,10 +332,7 @@ class GameProfile:
             if pr is not None and pr not in ("fast", "balanced", "hq"):
                 raise ValueError("text3d.preset deve ser fast, balanced ou hq")
             tx = raw_t3.get("texture")
-            if tx is None:
-                tx = True
-            else:
-                tx = bool(tx)
+            tx = True if tx is None else bool(tx)
             st = raw_t3.get("steps")
             oc = raw_t3.get("octree_resolution")
             nc = raw_t3.get("num_chunks")
@@ -359,8 +346,7 @@ class GameProfile:
                 mcl_f = float(mcl) if mcl is not None else None
             except (TypeError, ValueError) as e:
                 raise ValueError(
-                    "text3d.steps, octree_resolution, num_chunks, mesh_smooth e mc_level "
-                    "devem ser números válidos"
+                    "text3d.steps, octree_resolution, num_chunks, mesh_smooth e mc_level devem ser números válidos"
                 ) from e
             mat = bool(raw_t3.get("materialize", False))
             if mat:

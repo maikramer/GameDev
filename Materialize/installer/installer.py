@@ -18,7 +18,6 @@ if _shared_src.is_dir() and str(_shared_src) not in sys.path:
 
 from gamedev_shared.installer import RustProjectInstaller
 
-
 CARGO_BIN_NAME = "materialize-cli"
 CLI_NAME = "materialize"
 

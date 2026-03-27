@@ -3,22 +3,18 @@
 Skymap2D — CLI principal (skymaps equirectangular 360°).
 """
 
-import os
+import contextlib
 import sys
 import time
 from pathlib import Path
-from typing import Optional
 
 # Windows (cp1252): Rich spinners/símbolos exigem UTF-8 no stdout/stderr.
 if sys.platform == "win32":
     for _stream in (sys.stdout, sys.stderr):
         if _stream is not None and hasattr(_stream, "reconfigure"):
-            try:
+            with contextlib.suppress(OSError, ValueError):
                 _stream.reconfigure(encoding="utf-8")
-            except (OSError, ValueError):
-                pass
 
-from .cli_rich import RICH_CLICK, click  # noqa: F401 — rich-click antes dos comandos
 from rich import box
 from rich.console import Console
 from rich.panel import Panel
@@ -28,6 +24,7 @@ from rich.table import Table
 
 from gamedev_shared.hf import get_hf_token, hf_home_display_rich
 
+from .cli_rich import RICH_CLICK, click  # noqa: F401 — rich-click antes dos comandos
 from .generator import SkymapGenerator, default_model_id
 from .presets import SKYMAP_PRESETS, list_presets
 from .utils import format_bytes
@@ -111,7 +108,7 @@ def skill_install_cmd(target: Path, force: bool) -> None:
     "--preset",
     "-p",
     default=None,
-    type=click.Choice(["None"] + list_presets(), case_sensitive=False),
+    type=click.Choice(["None", *list_presets()], case_sensitive=False),
     help="Preset de ambiente",
 )
 @click.option("--cfg-scale", default=None, type=float, help="CFG scale (default = guidance)")
@@ -148,17 +145,17 @@ def skill_install_cmd(target: Path, force: bool) -> None:
 def generate_cmd(
     ctx: click.Context,
     prompt: str,
-    output: Optional[str],
+    output: str | None,
     width: int,
     height: int,
     steps: int,
     guidance_scale: float,
-    seed: Optional[int],
+    seed: int | None,
     negative_prompt: str,
-    preset: Optional[str],
-    cfg_scale: Optional[float],
+    preset: str | None,
+    cfg_scale: float | None,
     lora_strength: float,
-    model_id: Optional[str],
+    model_id: str | None,
     verbose_flag: bool,
     image_format: str,
     exr_scale: float,
@@ -177,9 +174,7 @@ def generate_cmd(
     table.add_row("[bold]Formato[/bold]", image_format.lower())
     if image_format.lower() == "exr" and exr_scale != 1.0:
         table.add_row("[bold]EXR scale[/bold]", str(exr_scale))
-    console.print(
-        Panel(table, title="[bold green]Configuração", border_style="green")
-    )
+    console.print(Panel(table, title="[bold green]Configuração", border_style="green"))
 
     try:
         gen = SkymapGenerator(model_id=model_id)
@@ -200,9 +195,7 @@ def generate_cmd(
         elif suf == ".png":
             fmt = "png"
         else:
-            raise click.BadParameter(
-                "Extensão de saída deve ser .png ou .exr (ou omite a extensão e usa --format)."
-            )
+            raise click.BadParameter("Extensão de saída deve ser .png ou .exr (ou omite a extensão e usa --format).")
 
         start = time.time()
         with Progress(
@@ -244,10 +237,7 @@ def generate_cmd(
             sz = "?"
 
         console.print(Rule("[bold green]Resultado", style="green"))
-        console.print(
-            f"[bold green]\u2713[/bold green] Skymap: [cyan]{saved.resolve()}[/cyan] "
-            f"[dim]({sz})[/dim]"
-        )
+        console.print(f"[bold green]\u2713[/bold green] Skymap: [cyan]{saved.resolve()}[/cyan] [dim]({sz})[/dim]")
         console.print(f"[dim]Seed: {metadata.get('seed', '?')}[/dim]")
         console.print(f"[dim]Tempo: {elapsed:.1f}s[/dim]")
 
@@ -304,13 +294,13 @@ def presets_cmd() -> None:
 def batch_cmd(
     ctx: click.Context,
     file: Path,
-    output_dir: Optional[Path],
-    preset: Optional[str],
+    output_dir: Path | None,
+    preset: str | None,
     width: int,
     height: int,
     steps: int,
     guidance_scale: float,
-    model_id: Optional[str],
+    model_id: str | None,
     image_format: str,
     exr_scale: float,
 ) -> None:
@@ -344,9 +334,7 @@ def batch_cmd(
     ok_count = 0
     for image, metadata, idx in gen.generate_batch(prompts, base_params):
         if image is None:
-            console.print(
-                f"  [red]\u2717[/red] {idx + 1}/{len(prompts)}: {metadata.get('error', '?')}"
-            )
+            console.print(f"  [red]\u2717[/red] {idx + 1}/{len(prompts)}: {metadata.get('error', '?')}")
             continue
 
         ts = int(time.time())
@@ -363,9 +351,7 @@ def batch_cmd(
             exr_scale=exr_scale,
         )
         ok_count += 1
-        console.print(
-            f"  [green]\u2713[/green] {idx + 1}/{len(prompts)}: [cyan]{saved.name}[/cyan]"
-        )
+        console.print(f"  [green]\u2713[/green] {idx + 1}/{len(prompts)}: [cyan]{saved.name}[/cyan]")
 
     console.print(
         Panel(

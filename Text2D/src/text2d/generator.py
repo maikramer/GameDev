@@ -9,8 +9,9 @@ from __future__ import annotations
 import gc
 import os
 import sys
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any
 
 import torch
 from PIL import Image
@@ -46,10 +47,7 @@ def _register_sdnq() -> tuple[Any, Any]:
         from sdnq.common import use_torch_compile as triton_is_available
         from sdnq.loader import apply_sdnq_options_to_model
     except ImportError as e:
-        raise ImportError(
-            "O pacote 'sdnq' é necessário para o modelo SDNQ. "
-            "Instale com: pip install sdnq"
-        ) from e
+        raise ImportError("O pacote 'sdnq' é necessário para o modelo SDNQ. Instale com: pip install sdnq") from e
     return triton_is_available, apply_sdnq_options_to_model
 
 
@@ -71,11 +69,11 @@ class KleinFluxGenerator:
 
     def __init__(
         self,
-        device: Optional[str] = None,
+        device: str | None = None,
         low_vram: bool = False,
         verbose: bool = False,
-        model_id: Optional[str] = None,
-        cache_dir: Optional[str] = None,
+        model_id: str | None = None,
+        cache_dir: str | None = None,
     ):
         self.verbose = verbose
         self.low_vram = low_vram
@@ -89,12 +87,12 @@ class KleinFluxGenerator:
 
         self.torch_dtype = _torch_dtype_for(self.device)
         self._pipe: Any = None
-        self._on_status: Optional[Callable[[str], None]] = None
+        self._on_status: Callable[[str], None] | None = None
 
         if self.verbose:
             print(f"[Text2D] device={self.device} dtype={self.torch_dtype} model={self.model_id}")
 
-    def set_status_callback(self, fn: Optional[Callable[[str], None]]) -> None:
+    def set_status_callback(self, fn: Callable[[str], None] | None) -> None:
         """Callback opcional (ex. Rich) para mensagens de fase durante o load."""
         self._on_status = fn
 
@@ -133,9 +131,7 @@ class KleinFluxGenerator:
         if self.cache_dir:
             kwargs["cache_dir"] = self.cache_dir
 
-        self._status(
-            "Passo 1/3 — from_pretrained (rede/disco na 1ª vez: vários GB; GPU pode ficar em ~0% — normal)"
-        )
+        self._status("Passo 1/3 — from_pretrained (rede/disco na 1ª vez: vários GB; GPU pode ficar em ~0% — normal)")
         self._log(f"Carregando {self.model_id}...")
         pipe = Flux2KleinPipeline.from_pretrained(self.model_id, **kwargs)
 
@@ -185,7 +181,7 @@ class KleinFluxGenerator:
         width: int = 1024,
         guidance_scale: float = 1.0,
         num_inference_steps: int = 4,
-        seed: Optional[int] = None,
+        seed: int | None = None,
     ) -> Image.Image:
         pipe = self._load_pipeline()
 
@@ -208,7 +204,7 @@ class KleinFluxGenerator:
         return out.images[0]
 
     @staticmethod
-    def save_image(image: Image.Image, path: Path, image_format: Optional[str] = None) -> Path:
+    def save_image(image: Image.Image, path: Path, image_format: str | None = None) -> Path:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         image.save(path, format=image_format)

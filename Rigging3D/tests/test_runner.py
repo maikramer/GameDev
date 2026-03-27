@@ -69,7 +69,9 @@ class TestResolveRoot:
         assert _resolve_root(None) == _package_root()
 
     def test_explicit_takes_precedence_over_env(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         env_root = tmp_path / "env"
         _tree(env_root)

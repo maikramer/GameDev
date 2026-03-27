@@ -7,31 +7,32 @@ funções GPU sem o extra ``[gpu]``).
 
 from __future__ import annotations
 
+import contextlib
 import gc
 import os
-import signal
 import shutil
+import signal
 import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 def _torch():
     """Import lazy de torch — falha clara se não instalado."""
     try:
         import torch
+
         return torch
     except ImportError:
-        raise ImportError(
-            "torch não está instalado. Instale com: pip install gamedev-shared[gpu]"
-        ) from None
+        raise ImportError("torch não está instalado. Instale com: pip install gamedev-shared[gpu]") from None
 
 
 # ---------------------------------------------------------------------------
 # Formatação
 # ---------------------------------------------------------------------------
+
 
 def format_bytes(bytes_val: int | float) -> str:
     """Formata bytes para representação legível (ex: ``4.5 GB``)."""
@@ -47,21 +48,18 @@ def format_bytes(bytes_val: int | float) -> str:
 # Informações do sistema / GPU
 # ---------------------------------------------------------------------------
 
-def get_gpu_info() -> List[Dict[str, Any]]:
+
+def get_gpu_info() -> list[dict[str, Any]]:
     """Lista GPUs disponíveis com VRAM, nome e capacidade de compute."""
     torch = _torch()
-    gpus: List[Dict[str, Any]] = []
+    gpus: list[dict[str, Any]] = []
     if not torch.cuda.is_available():
         return gpus
 
     for i in range(torch.cuda.device_count()):
         props = torch.cuda.get_device_properties(i)
         try:
-            free_memory = (
-                torch.cuda.mem_get_info(i)[0]
-                if hasattr(torch.cuda, "mem_get_info")
-                else 0
-            )
+            free_memory = torch.cuda.mem_get_info(i)[0] if hasattr(torch.cuda, "mem_get_info") else 0
             total_memory = props.total_memory
         except Exception:
             free_memory = 0
@@ -81,13 +79,11 @@ def get_gpu_info() -> List[Dict[str, Any]]:
     return gpus
 
 
-def get_system_info() -> Dict[str, Any]:
+def get_system_info() -> dict[str, Any]:
     """Python, PyTorch, CUDA e GPUs."""
     torch = _torch()
-    info: Dict[str, Any] = {
-        "python_version": (
-            f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
-        ),
+    info: dict[str, Any] = {
+        "python_version": (f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"),
         "torch_version": torch.__version__,
         "cuda_available": torch.cuda.is_available(),
     }
@@ -137,6 +133,7 @@ def estimate_vram_requirement(
 # Gestão de memória CUDA
 # ---------------------------------------------------------------------------
 
+
 def clear_cuda_memory() -> None:
     """Força GC e esvazia cache CUDA — útil entre fases pesadas."""
     torch = _torch()
@@ -149,7 +146,7 @@ DEFAULT_EXCLUSIVE_GPU_MAX_USED_MIB = 300
 
 
 def gpu_bytes_in_use(device: int = 0) -> int | None:
-    """Bytes de VRAM em uso (total − livre).
+    """Bytes de VRAM em uso (total - livre).
 
     Devolve ``None`` se ``mem_get_info`` não existir (PyTorch antigo).
     """
@@ -193,11 +190,29 @@ def enforce_exclusive_gpu(
 
 _GPU_KILL_PROTECTED_NAMES = frozenset(
     {
-        "xorg", "x", "gnome-shell", "plasmashell", "kwin", "kwin_x11",
-        "kwin_wayland", "sddm", "gdm", "gdm-wayland", "dbus-daemon",
-        "pipewire", "wireplumber", "nvidia-egl", "nvidia-persistenced",
-        "nvidia-gridd", "nvidia-modeset", "gsd-xsettings", "mutter",
-        "cinnamon", "xfwm4", "budgie-wm", "muffin",
+        "xorg",
+        "x",
+        "gnome-shell",
+        "plasmashell",
+        "kwin",
+        "kwin_x11",
+        "kwin_wayland",
+        "sddm",
+        "gdm",
+        "gdm-wayland",
+        "dbus-daemon",
+        "pipewire",
+        "wireplumber",
+        "nvidia-egl",
+        "nvidia-persistenced",
+        "nvidia-gridd",
+        "nvidia-modeset",
+        "gsd-xsettings",
+        "mutter",
+        "cinnamon",
+        "xfwm4",
+        "budgie-wm",
+        "muffin",
     }
 )
 
@@ -216,7 +231,7 @@ def _is_protected_gpu_process(proc_name: str) -> bool:
     return "xwayland" in proc_name.lower()
 
 
-def list_nvidia_compute_apps() -> list[tuple[int, str, Optional[int]]]:
+def list_nvidia_compute_apps() -> list[tuple[int, str, int | None]]:
     """Lista processos compute (nvidia-smi): ``(pid, name, used_mib|None)``."""
     if not shutil.which("nvidia-smi"):
         return []
@@ -232,7 +247,7 @@ def list_nvidia_compute_apps() -> list[tuple[int, str, Optional[int]]]:
     )
     if r.returncode != 0 or not (r.stdout or "").strip():
         return []
-    out: list[tuple[int, str, Optional[int]]] = []
+    out: list[tuple[int, str, int | None]] = []
     for line in r.stdout.strip().splitlines():
         parts = [p.strip() for p in line.split(",")]
         if len(parts) < 2:
@@ -242,12 +257,10 @@ def list_nvidia_compute_apps() -> list[tuple[int, str, Optional[int]]]:
         except ValueError:
             continue
         name = parts[1]
-        mib: Optional[int] = None
+        mib: int | None = None
         if len(parts) >= 3 and parts[2] and parts[2].upper() not in ("N/A", "[N/A]"):
-            try:
+            with contextlib.suppress(ValueError):
                 mib = int(float(parts[2].replace(" MiB", "").strip()))
-            except ValueError:
-                pass
         out.append((pid, name, mib))
     return out
 

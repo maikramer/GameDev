@@ -1,22 +1,21 @@
 """Testes para gamedev_shared.installer.unified."""
 
-import pytest
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
-from gamedev_shared.installer.unified import (
-    install_tool,
-    install_all,
-    main,
-    _ToolPythonInstaller,
-    _ToolRustInstaller,
-)
+import pytest
+
 from gamedev_shared.installer.registry import (
     ToolKind,
     ToolSpec,
-    TOOLS,
     find_monorepo_root,
     get_tool,
+)
+from gamedev_shared.installer.unified import (
+    _ToolPythonInstaller,
+    _ToolRustInstaller,
+    install_tool,
+    main,
 )
 
 

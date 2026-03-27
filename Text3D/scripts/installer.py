@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import shutil
 import sys
 from pathlib import Path
 
@@ -60,9 +59,7 @@ class Text3DInstaller(PythonProjectInstaller):
     def _warn_monorepo_layout(self) -> None:
         text2d = self.project_root.parent / "Text2D"
         if not text2d.is_dir():
-            self.logger.warn(
-                "Monorepo: espera-se Text2D ao lado de Text3D (ex.: GameDev/Text2D + GameDev/Text3D)."
-            )
+            self.logger.warn("Monorepo: espera-se Text2D ao lado de Text3D (ex.: GameDev/Text2D + GameDev/Text3D).")
 
     def install_in_venv(self) -> None:
         self._warn_monorepo_layout()
@@ -79,9 +76,7 @@ class Text3DInstaller(PythonProjectInstaller):
         models_dir = self.project_root / "models"
 
         if not self.skip_models:
-            self.logger.info(
-                "Text2D (FLUX/SDNQ) e Hunyuan3D-2mini vêm do Hugging Face na primeira execução."
-            )
+            self.logger.info("Text2D (FLUX/SDNQ) e Hunyuan3D-2mini vêm do Hugging Face na primeira execução.")
             self.logger.info(f"Cache típico: {hf_cache}")
             self.logger.info("Opcional: huggingface-cli login (modelos gated / quotas)")
 
@@ -118,9 +113,7 @@ class Text3DInstaller(PythonProjectInstaller):
         self.logger.info(f"Ambiente opcional: {env_sh}")
 
     def create_text3d_wrappers(self) -> None:
-        python_path = (
-            str(self.venv_python) if (self.venv_exists and self.use_venv) else self.python_cmd
-        )
+        python_path = str(self.venv_python) if (self.venv_exists and self.use_venv) else self.python_cmd
         env_sh = Path.home() / ".config" / "text3d" / "env.sh"
 
         self.bin_dir.mkdir(parents=True, exist_ok=True)
@@ -130,7 +123,7 @@ class Text3DInstaller(PythonProjectInstaller):
             f.write("#!/bin/bash\n")
             f.write("# Text3D wrapper — gerado por installer\n")
             f.write(f'if [[ -f "{env_sh}" ]]; then\n')
-            f.write('  # shellcheck source=/dev/null\n')
+            f.write("  # shellcheck source=/dev/null\n")
             f.write(f'  . "{env_sh}"\n')
             f.write("fi\n")
             f.write(f'exec "{python_path}" -m text3d "$@"\n')

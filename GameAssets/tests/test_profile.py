@@ -232,9 +232,7 @@ def test_load_profile_roundtrip() -> None:
         "tone": "light",
         "style_preset": "lowpoly",
     }
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".yaml", delete=False, encoding="utf-8"
-    ) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False, encoding="utf-8") as f:
         yaml.safe_dump(data, f)
         path = Path(f.name)
     try:

@@ -69,9 +69,7 @@ def test_paths_for_row_flat() -> None:
         meshes_subdir="ignored",
         image_ext="png",
     )
-    row = ManifestRow(
-        id="Collectibles/core_01", idea="i", kind=None, generate_3d=True
-    )
+    row = ManifestRow(id="Collectibles/core_01", idea="i", kind=None, generate_3d=True)
     img, mesh = _paths_for_row(p, row)
     assert img == Path("out") / "Collectibles" / "core_01.png"
     assert mesh == Path("out") / "Collectibles" / "core_01.glb"
@@ -136,9 +134,7 @@ def test_text3d_argv_shape_only_skips_texture() -> None:
         style_preset="lowpoly",
         text3d=Text3DProfile(preset="fast", texture=True, materialize=True),
     )
-    argv = _text3d_argv(
-        "text3d", p, Path("i.png"), Path("o.glb"), shape_only=True
-    )
+    argv = _text3d_argv("text3d", p, Path("i.png"), Path("o.glb"), shape_only=True)
     assert "--texture" not in argv
     assert "--materialize" not in argv
 

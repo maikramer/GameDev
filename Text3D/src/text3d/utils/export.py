@@ -2,22 +2,20 @@
 Utilitários para exportação e conversão de arquivos 3D.
 """
 
-from pathlib import Path
-from typing import Union, Optional
 import warnings
+from pathlib import Path
 
 import numpy as np
 import trimesh
-from PIL import Image
-from diffusers.utils import export_to_ply, export_to_obj, export_to_gif
+from diffusers.utils import export_to_gif, export_to_obj, export_to_ply
 
 from ..defaults import get_export_rotation_x_rad
 
 
 def save_mesh(
-    mesh_input: Union[np.ndarray, trimesh.Trimesh],
-    output_path: Union[str, Path],
-    format: Optional[str] = None,
+    mesh_input: np.ndarray | trimesh.Trimesh,
+    output_path: str | Path,
+    format: str | None = None,
     rotate: bool = True,
 ) -> Path:
     """
@@ -92,76 +90,76 @@ def save_mesh(
 
 def save_gif(
     frames: list,
-    output_path: Union[str, Path],
+    output_path: str | Path,
 ) -> Path:
     """
     Salva frames como GIF animado.
-    
+
     Args:
         frames: Lista de frames PIL.Image
         output_path: Caminho de saída
-        
+
     Returns:
         Caminho do arquivo salvo
     """
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    
+
     export_to_gif(frames, str(output_path))
-    
+
     return output_path
 
 
 def convert_mesh(
-    input_path: Union[str, Path],
-    output_path: Union[str, Path],
+    input_path: str | Path,
+    output_path: str | Path,
     rotate: bool = False,
 ) -> Path:
     """
     Converte mesh entre formatos usando trimesh.
-    
+
     Args:
         input_path: Arquivo de entrada
         output_path: Arquivo de saída
         rotate: Aplicar rotação
-        
+
     Returns:
         Caminho do arquivo convertido
     """
     input_path = Path(input_path)
     output_path = Path(output_path)
-    
+
     if not input_path.exists():
         raise FileNotFoundError(f"Arquivo não encontrado: {input_path}")
-    
+
     # Carregar mesh
     mesh = trimesh.load(input_path)
-    
+
     if rotate:
         mesh = _apply_rotation_trimesh(mesh)
-    
+
     # Determinar formato de saída
-    output_format = output_path.suffix.lstrip('.').lower()
-    
+    output_format = output_path.suffix.lstrip(".").lower()
+
     # Exportar
     mesh.export(str(output_path), file_type=output_format)
-    
+
     return output_path
 
 
 def _apply_rotation(ply_path: Path):
     """
     Aplica rotação para orientar mesh corretamente (eixo Y para cima).
-    
+
     Args:
         ply_path: Caminho do arquivo PLY
     """
     try:
         mesh = trimesh.load(ply_path)
         mesh = _apply_rotation_trimesh(mesh)
-        mesh.export(str(ply_path), file_type='ply')
+        mesh.export(str(ply_path), file_type="ply")
     except Exception as e:
-        warnings.warn(f"Não foi possível aplicar rotação: {e}")
+        warnings.warn(f"Não foi possível aplicar rotação: {e}", stacklevel=2)
 
 
 def _apply_rotation_trimesh(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
@@ -175,31 +173,31 @@ def _apply_rotation_trimesh(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
     return mesh
 
 
-def get_mesh_info(mesh_path: Union[str, Path]) -> dict:
+def get_mesh_info(mesh_path: str | Path) -> dict:
     """
     Obtém informações sobre um arquivo mesh.
-    
+
     Args:
         mesh_path: Caminho do arquivo mesh
-        
+
     Returns:
         Dicionário com informações
     """
     mesh_path = Path(mesh_path)
-    
+
     if not mesh_path.exists():
         raise FileNotFoundError(f"Arquivo não encontrado: {mesh_path}")
-    
+
     mesh = trimesh.load(mesh_path)
-    
+
     info = {
-        'path': str(mesh_path),
-        'format': mesh_path.suffix.lstrip('.').lower(),
-        'vertices': len(mesh.vertices),
-        'faces': len(mesh.faces) if hasattr(mesh, 'faces') else 0,
-        'bounds': mesh.bounds.tolist(),
-        'is_watertight': mesh.is_watertight if hasattr(mesh, 'is_watertight') else None,
-        'volume': mesh.volume if hasattr(mesh, 'volume') and mesh.is_watertight else None,
+        "path": str(mesh_path),
+        "format": mesh_path.suffix.lstrip(".").lower(),
+        "vertices": len(mesh.vertices),
+        "faces": len(mesh.faces) if hasattr(mesh, "faces") else 0,
+        "bounds": mesh.bounds.tolist(),
+        "is_watertight": mesh.is_watertight if hasattr(mesh, "is_watertight") else None,
+        "volume": mesh.volume if hasattr(mesh, "volume") and mesh.is_watertight else None,
     }
-    
+
     return info

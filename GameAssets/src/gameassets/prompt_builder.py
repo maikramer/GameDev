@@ -76,10 +76,7 @@ def build_prompt(
     """Monta o prompt positivo (negativos concatenados ao final como restrições)."""
     prefix = str(preset.get("prompt_prefix") or "").strip()
     label_hint = ""
-    if for_3d:
-        label_hint = str(preset.get("hint_3d") or "").strip()
-    else:
-        label_hint = str(preset.get("hint_2d") or "").strip()
+    label_hint = str(preset.get("hint_3d") or "").strip() if for_3d else str(preset.get("hint_2d") or "").strip()
 
     kind = (row.kind or "").strip().lower()
     kind_extra = _KIND_HINTS.get(kind, "")

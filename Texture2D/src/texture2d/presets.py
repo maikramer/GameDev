@@ -1,8 +1,8 @@
 """Presets de materiais para geração de texturas seamless."""
 
-from typing import Any, Dict, Optional
+from typing import Any
 
-TEXTURE_PRESETS: Dict[str, Dict[str, Any]] = {
+TEXTURE_PRESETS: dict[str, dict[str, Any]] = {
     "Wood": {
         "prompt": "seamless wood texture, natural grain, high detail, tiling pattern",
         "negative_prompt": "blurry, low quality, distorted",
@@ -111,7 +111,7 @@ TEXTURE_PRESETS: Dict[str, Dict[str, Any]] = {
 }
 
 
-def get_preset(name: str) -> Optional[Dict[str, Any]]:
+def get_preset(name: str) -> dict[str, Any] | None:
     """Obtém um preset pelo nome."""
     return TEXTURE_PRESETS.get(name)
 
@@ -121,13 +121,13 @@ def list_presets() -> list[str]:
     return list(TEXTURE_PRESETS.keys())
 
 
-def get_preset_prompt(name: str) -> Optional[str]:
+def get_preset_prompt(name: str) -> str | None:
     """Obtém o prompt de um preset."""
     preset = get_preset(name)
     return preset.get("prompt") if preset else None
 
 
-def get_preset_params(name: str) -> Optional[Dict[str, Any]]:
+def get_preset_params(name: str) -> dict[str, Any] | None:
     """Obtém os parâmetros de um preset (excluindo prompt)."""
     preset = get_preset(name)
     if not preset:

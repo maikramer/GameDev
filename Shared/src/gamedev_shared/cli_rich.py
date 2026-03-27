@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Tuple
+from typing import Any
 
 
 def setup_rich_click(
@@ -60,7 +60,7 @@ def setup_rich_click_module(
     use_rich_markup: bool = True,
     group_arguments_options: bool = True,
     show_metavars_column: bool = True,
-) -> Tuple[Any, bool]:
+) -> tuple[Any, bool]:
     """Configura rich-click se existir e devolve ``(módulo click, usou_rich_click)``."""
     ok = setup_rich_click(
         header,

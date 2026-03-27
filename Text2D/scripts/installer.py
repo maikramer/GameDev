@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import shutil
 import sys
 from pathlib import Path
 
@@ -79,10 +78,7 @@ class Text2DInstaller(PythonProjectInstaller):
             self.logger.info(f"Config: {config_file}")
         else:
             self.logger.info("Os pesos SDNQ serão descarregados na primeira execução de `text2d generate`")
-            self.logger.info(
-                "Pré-download opcional: huggingface-cli download "
-                "Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic"
-            )
+            self.logger.info("Pré-download opcional: huggingface-cli download Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic")
 
     def setup_directories(self) -> None:
         out = Path.home() / ".text2d" / "outputs"

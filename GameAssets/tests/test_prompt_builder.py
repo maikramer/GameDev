@@ -1,7 +1,5 @@
 """Testes do prompt_builder."""
 
-from pathlib import Path
-
 import pytest
 
 from gameassets.manifest import ManifestRow

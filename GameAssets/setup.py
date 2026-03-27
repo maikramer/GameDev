@@ -1,18 +1,14 @@
 """GameAssets — setup."""
 
-import os
 from pathlib import Path
 
 from setuptools import find_packages, setup
 
 here = Path(__file__).resolve().parent
 
-with open(here / "README.md", "r", encoding="utf-8") as fh:
-    long_description = fh.read()
-
 shared_local = (here.parent / "Shared").resolve()
 requirements = []
-with open(here / "config" / "requirements.txt", "r", encoding="utf-8") as fh:
+with open(here / "config" / "requirements.txt", encoding="utf-8") as fh:
     for line in fh:
         line = line.strip()
         if not line or line.startswith("#"):
@@ -22,20 +18,19 @@ with open(here / "config" / "requirements.txt", "r", encoding="utf-8") as fh:
         else:
             requirements.append(line)
 
-with open(here / "config" / "requirements-dev.txt", "r", encoding="utf-8") as fh:
-    dev_requirements = [
-        line.strip()
-        for line in fh
-        if line.strip() and not line.startswith("#")
-    ]
+with open(here / "config" / "requirements-dev.txt", encoding="utf-8") as fh:
+    dev_requirements = []
+    for line in fh:
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        # pip -r include; not valid in setuptools extras (PEP 508)
+        if line.startswith("-r ") or line.startswith("--requirement "):
+            continue
+        dev_requirements.append(line)
 
 setup(
-    name="gameassets",
-    version="0.2.2",
-    author="GameDev",
-    description="CLI para batches de prompts e assets 2D/3D alinhados ao estilo do jogo",
-    long_description=long_description,
-    long_description_content_type="text/markdown",
+    # name/version/description/readme: declarados em pyproject.toml ([project])
     package_dir={"": "src"},
     packages=find_packages(where="src"),
     package_data={"gameassets": ["data/*.yaml", "cursor_skill/*.md"]},

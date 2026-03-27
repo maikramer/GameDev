@@ -4,7 +4,7 @@ import logging
 import random
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 logging.basicConfig(
     level=logging.INFO,
@@ -18,7 +18,7 @@ def generate_seed() -> int:
     return random.randint(0, 2**32 - 1)
 
 
-def validate_prompt(prompt: str, max_length: int = 500) -> tuple[bool, Optional[str]]:
+def validate_prompt(prompt: str, max_length: int = 500) -> tuple[bool, str | None]:
     """Valida um prompt.
 
     Returns:
@@ -33,7 +33,7 @@ def validate_prompt(prompt: str, max_length: int = 500) -> tuple[bool, Optional[
     return True, None
 
 
-def validate_dimensions(width: int, height: int) -> tuple[bool, Optional[str]]:
+def validate_dimensions(width: int, height: int) -> tuple[bool, str | None]:
     """Valida dimensões de imagem.
 
     Returns:
@@ -54,7 +54,7 @@ def validate_dimensions(width: int, height: int) -> tuple[bool, Optional[str]]:
     return True, None
 
 
-def validate_params(params: Dict[str, Any]) -> tuple[bool, Optional[str]]:
+def validate_params(params: dict[str, Any]) -> tuple[bool, str | None]:
     """Valida parâmetros de geração.
 
     Returns:

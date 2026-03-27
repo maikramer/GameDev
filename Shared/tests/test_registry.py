@@ -1,12 +1,13 @@
 """Testes para gamedev_shared.installer.registry."""
 
-import pytest
 from pathlib import Path
 
+import pytest
+
 from gamedev_shared.installer.registry import (
+    TOOLS,
     ToolKind,
     ToolSpec,
-    TOOLS,
     find_monorepo_root,
     get_tool,
     list_available_tools,

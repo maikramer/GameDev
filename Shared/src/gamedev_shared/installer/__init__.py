@@ -2,35 +2,36 @@
 
 from .base import BaseInstaller
 from .python_installer import PythonProjectInstaller
-from .rust_installer import RustProjectInstaller
 from .registry import (
+    TOOLS,
     ToolKind,
     ToolSpec,
-    TOOLS,
     find_monorepo_root,
     get_tool,
     list_available_tools,
     try_find_monorepo_root,
 )
+from .rust_installer import RustProjectInstaller
 
 __all__ = [
+    "TOOLS",
     "BaseInstaller",
     "PythonProjectInstaller",
     "RustProjectInstaller",
     "ToolKind",
     "ToolSpec",
-    "TOOLS",
     "find_monorepo_root",
-    "try_find_monorepo_root",
-    "list_available_tools",
     "get_tool",
-    "install_tool",
     "install_all",
+    "install_tool",
+    "list_available_tools",
+    "try_find_monorepo_root",
 ]
 
 
 def __getattr__(name: str):
     if name in ("install_tool", "install_all"):
-        from .unified import install_tool, install_all  # noqa: F811
+        from .unified import install_all, install_tool
+
         return install_tool if name == "install_tool" else install_all
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

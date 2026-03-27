@@ -7,7 +7,7 @@ Fluxo: KleinFluxGenerator → unload explícito → Hunyuan3DDiTFlowMatchingPipe
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Optional, Tuple, Union
+from typing import Any
 
 import torch
 import trimesh
@@ -45,10 +45,10 @@ class HunyuanTextTo3DGenerator:
 
     def __init__(
         self,
-        device: Optional[str] = None,
+        device: str | None = None,
         low_vram_mode: bool = False,
         verbose: bool = False,
-        cache_dir: Optional[str] = None,
+        cache_dir: str | None = None,
         hunyuan_model_id: str = DEFAULT_HF_ID,
         hunyuan_subfolder: str = DEFAULT_SUBFOLDER,
     ):
@@ -130,17 +130,17 @@ class HunyuanTextTo3DGenerator:
         t2d_height: int = _defaults.DEFAULT_T2D_HEIGHT,
         t2d_steps: int = _defaults.DEFAULT_T2D_STEPS,
         t2d_guidance: float = _defaults.DEFAULT_T2D_GUIDANCE,
-        text2d_model_id: Optional[str] = None,
-        t2d_seed: Optional[int] = None,
+        text2d_model_id: str | None = None,
+        t2d_seed: int | None = None,
         num_inference_steps: int = _defaults.DEFAULT_HY_STEPS,
         guidance_scale: float = _defaults.DEFAULT_HY_GUIDANCE,
         octree_resolution: int = _defaults.DEFAULT_OCTREE_RESOLUTION,
         num_chunks: int = _defaults.DEFAULT_NUM_CHUNKS,
-        hy_seed: Optional[int] = None,
+        hy_seed: int | None = None,
         mc_level: float = 0.0,
         t2d_full_gpu: bool = False,
         return_reference_image: bool = False,
-    ) -> Union[trimesh.Trimesh, Tuple[trimesh.Trimesh, Image.Image]]:
+    ) -> trimesh.Trimesh | tuple[trimesh.Trimesh, Image.Image]:
         """
         Text-to-3D: gera imagem com Text2D, descarrega Text2D, gera mesh com Hunyuan3D-2mini.
 
@@ -196,12 +196,12 @@ class HunyuanTextTo3DGenerator:
 
     def generate_from_image(
         self,
-        image: Union[str, Path, Image.Image],
+        image: str | Path | Image.Image,
         num_inference_steps: int = _defaults.DEFAULT_HY_STEPS,
         guidance_scale: float = _defaults.DEFAULT_HY_GUIDANCE,
         octree_resolution: int = _defaults.DEFAULT_OCTREE_RESOLUTION,
         num_chunks: int = _defaults.DEFAULT_NUM_CHUNKS,
-        hy_seed: Optional[int] = None,
+        hy_seed: int | None = None,
         mc_level: float = 0.0,
     ) -> trimesh.Trimesh:
         """Image-to-3D apenas com Hunyuan (sem Text2D)."""
@@ -238,7 +238,7 @@ class HunyuanTextTo3DGenerator:
 
         mesh = _as_trimesh(raw)
 
-        # Libertar sempre o pipeline de shape antes de repair/Paint: em GPUs ~6 GB
+        # Libertar sempre o pipeline de shape antes de repair/Paint: em GPUs ~6 GB
         # manter o Hunyuan residente até ao unload do CLI causava picos de VRAM no Paint.
         self._unload_hunyuan()
 

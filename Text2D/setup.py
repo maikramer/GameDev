@@ -1,18 +1,17 @@
 """Text2D - Setup Script — Text-to-2D com FLUX.2 Klein (SDNQ)."""
 
-import os
 from pathlib import Path
 
 from setuptools import find_packages, setup
 
 here = Path(__file__).resolve().parent
 
-with open(here / "README.md", "r", encoding="utf-8") as fh:
+with open(here / "README.md", encoding="utf-8") as fh:
     long_description = fh.read()
 
 shared_local = (here.parent / "Shared").resolve()
 requirements = []
-with open(here / "config" / "requirements.txt", "r", encoding="utf-8") as fh:
+with open(here / "config" / "requirements.txt", encoding="utf-8") as fh:
     for line in fh:
         line = line.strip()
         if not line or line.startswith("#"):

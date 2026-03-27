@@ -6,9 +6,9 @@ Text2Sound — CLI principal (text-to-audio).
 import os
 import sys
 import time
+from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Generator, Optional
 
 try:
     from importlib.metadata import version as _pkg_version
@@ -18,8 +18,6 @@ except Exception:
     from text2sound import __version__ as _CLI_VERSION
 
 from click.core import ParameterSource
-
-from .cli_rich import RICH_CLICK, click  # noqa: F401 — rich-click antes dos comandos
 from rich import box
 from rich.console import Console
 from rich.panel import Panel
@@ -30,6 +28,7 @@ from rich.table import Table
 from gamedev_shared.hf import get_hf_token, hf_home_display_rich
 
 from .audio_processor import SUPPORTED_FORMATS, save_audio
+from .cli_rich import RICH_CLICK, click  # noqa: F401 — rich-click antes dos comandos
 from .generator import (
     DEFAULT_CFG_SCALE,
     DEFAULT_DURATION,
@@ -138,9 +137,7 @@ def skill_install_cmd(target: Path, force: bool) -> None:
             force=force,
         )
     except ImportError:
-        raise click.ClickException(
-            "gamedev-shared não encontrado — instale com pip install -e ../Shared"
-        ) from None
+        raise click.ClickException("gamedev-shared não encontrado — instale com pip install -e ../Shared") from None
     except FileNotFoundError as e:
         raise click.ClickException(str(e)) from e
     except FileExistsError as e:
@@ -202,7 +199,7 @@ def skill_install_cmd(target: Path, force: bool) -> None:
     "--preset",
     "-p",
     default=None,
-    type=click.Choice(["None"] + list_presets(), case_sensitive=False),
+    type=click.Choice(["None", *list_presets()], case_sensitive=False),
     help="Preset de áudio",
 )
 @click.option(
@@ -236,10 +233,7 @@ def skill_install_cmd(target: Path, force: bool) -> None:
     "-m",
     "model_id",
     default=None,
-    help=(
-        "Modelo: ID HF ou alias (music, full, effects, small, sfx). "
-        "Tem prioridade sobre --profile."
-    ),
+    help=("Modelo: ID HF ou alias (music, full, effects, small, sfx). Tem prioridade sobre --profile."),
 )
 @click.option(
     "--half/--no-half",
@@ -259,19 +253,19 @@ def generate_cmd(
     ctx: click.Context,
     prompt: str,
     profile: ProfileName,
-    output: Optional[str],
+    output: str | None,
     duration: float,
     steps: int,
     cfg_scale: float,
-    seed: Optional[int],
+    seed: int | None,
     fmt: str,
-    preset: Optional[str],
+    preset: str | None,
     sigma_min: float,
     sigma_max: float,
     sampler: str,
     trim: bool,
-    model_id: Optional[str],
-    half_precision: Optional[bool],
+    model_id: str | None,
+    half_precision: bool | None,
     verbose_flag: bool,
 ) -> None:
     """Gera áudio a partir do PROMPT de texto."""
@@ -294,28 +288,23 @@ def generate_cmd(
     spec = get_spec(resolved_model_id)
 
     if not preset or preset == "None":
-        duration, steps, cfg_scale, sigma_min, sigma_max, sampler = (
-            _apply_spec_inference_defaults(
-                ctx,
-                spec,
-                duration,
-                steps,
-                cfg_scale,
-                sigma_min,
-                sigma_max,
-                sampler,
-            )
+        duration, steps, cfg_scale, sigma_min, sigma_max, sampler = _apply_spec_inference_defaults(
+            ctx,
+            spec,
+            duration,
+            steps,
+            cfg_scale,
+            sigma_min,
+            sigma_max,
+            sampler,
         )
     elif duration > spec.max_seconds:
         raise click.ClickException(
-            f"Duração {duration}s excede o máximo deste modelo ({spec.max_seconds}s). "
-            f"Use --profile music ou reduza -d."
+            f"Duração {duration}s excede o máximo deste modelo ({spec.max_seconds}s). Use --profile music ou reduza -d."
         )
 
     if duration < 0.5 or duration > spec.max_seconds:
-        raise click.ClickException(
-            f"Duração deve estar entre 0.5 e {spec.max_seconds}s para {spec.hf_id}."
-        )
+        raise click.ClickException(f"Duração deve estar entre 0.5 e {spec.max_seconds}s para {spec.hf_id}.")
 
     effective_seed = resolve_effective_seed(seed)
 
@@ -334,9 +323,7 @@ def generate_cmd(
         table.add_row("[bold]Seed[/bold]", f"[dim]aleatório → {effective_seed}[/dim]")
     if preset and preset != "None":
         table.add_row("[bold]Preset[/bold]", preset)
-    console.print(
-        Panel(table, title="[bold green]Configuração", border_style="green")
-    )
+    console.print(Panel(table, title="[bold green]Configuração", border_style="green"))
 
     try:
         gen = AudioGenerator.get_instance(
@@ -416,10 +403,7 @@ def generate_cmd(
             sz = "?"
 
         console.print(Rule("[bold green]Resultado", style="green"))
-        console.print(
-            f"[bold green]\u2713[/bold green] Áudio: [cyan]{saved.resolve()}[/cyan] "
-            f"[dim]({sz})[/dim]"
-        )
+        console.print(f"[bold green]\u2713[/bold green] Áudio: [cyan]{saved.resolve()}[/cyan] [dim]({sz})[/dim]")
         console.print(
             f"[dim]Sample rate: {result.sample_rate} Hz · "
             f"Duração: {format_duration(duration)} · "
@@ -484,8 +468,8 @@ def batch_cmd(
     ctx: click.Context,
     file: Path,
     profile: ProfileName,
-    output_dir: Optional[Path],
-    preset: Optional[str],
+    output_dir: Path | None,
+    preset: str | None,
     duration: float,
     steps: int,
     cfg_scale: float,
@@ -494,9 +478,9 @@ def batch_cmd(
     sampler: str,
     fmt: str,
     trim: bool,
-    model_id: Optional[str],
-    half_precision: Optional[bool],
-    seed: Optional[int],
+    model_id: str | None,
+    half_precision: bool | None,
+    seed: int | None,
 ) -> None:
     """Gera áudios em batch a partir de um ficheiro de prompts (um por linha)."""
     verbose = bool(ctx.obj.get("VERBOSE"))
@@ -525,27 +509,21 @@ def batch_cmd(
     spec = get_spec(resolved_model_id)
 
     if not preset or preset == "None":
-        duration, steps, cfg_scale, sigma_min, sigma_max, sampler = (
-            _apply_spec_inference_defaults(
-                ctx,
-                spec,
-                duration,
-                steps,
-                cfg_scale,
-                sigma_min,
-                sigma_max,
-                sampler,
-            )
+        duration, steps, cfg_scale, sigma_min, sigma_max, sampler = _apply_spec_inference_defaults(
+            ctx,
+            spec,
+            duration,
+            steps,
+            cfg_scale,
+            sigma_min,
+            sigma_max,
+            sampler,
         )
     elif duration > spec.max_seconds:
-        raise click.ClickException(
-            f"Duração {duration}s excede o máximo deste modelo ({spec.max_seconds}s)."
-        )
+        raise click.ClickException(f"Duração {duration}s excede o máximo deste modelo ({spec.max_seconds}s).")
 
     if duration < 0.5 or duration > spec.max_seconds:
-        raise click.ClickException(
-            f"Duração deve estar entre 0.5 e {spec.max_seconds}s para {spec.hf_id}."
-        )
+        raise click.ClickException(f"Duração deve estar entre 0.5 e {spec.max_seconds}s para {spec.hf_id}.")
 
     console.print(f"[bold]Batch:[/bold] {len(prompts)} prompts de [cyan]{file}[/cyan]")
     console.print(f"[dim]Modelo: {resolved_model_id} · perfil: {profile}[/dim]")
@@ -562,15 +540,9 @@ def batch_cmd(
 
     ok_count = 0
     for idx, prompt_text in enumerate(prompts):
-        if preset and preset != "None":
-            full_prompt = f"{prompt_text}, {preset_data['prompt']}"
-        else:
-            full_prompt = prompt_text
+        full_prompt = f"{prompt_text}, {preset_data['prompt']}" if preset and preset != "None" else prompt_text
 
-        if seed is not None:
-            line_seed = int(seed) + idx
-        else:
-            line_seed = resolve_effective_seed(None)
+        line_seed = int(seed) + idx if seed is not None else resolve_effective_seed(None)
 
         try:
             with _quiet_third_party_tqdm(verbose):
@@ -619,13 +591,9 @@ def batch_cmd(
                 metadata=metadata,
             )
             ok_count += 1
-            console.print(
-                f"  [green]\u2713[/green] {idx + 1}/{len(prompts)}: [cyan]{saved.name}[/cyan]"
-            )
+            console.print(f"  [green]\u2713[/green] {idx + 1}/{len(prompts)}: [cyan]{saved.name}[/cyan]")
         except Exception as e:
-            console.print(
-                f"  [red]\u2717[/red] {idx + 1}/{len(prompts)}: {e}"
-            )
+            console.print(f"  [red]\u2717[/red] {idx + 1}/{len(prompts)}: {e}")
 
     console.print(
         Panel(
@@ -694,6 +662,7 @@ def info_cmd() -> None:
 
     try:
         import torch
+
         t.add_row("PyTorch", torch.__version__)
         t.add_row(
             "CUDA",
@@ -705,6 +674,7 @@ def info_cmd() -> None:
         if torch.cuda.is_available():
             try:
                 from gamedev_shared.gpu import get_gpu_info
+
                 gpus = get_gpu_info()
                 for gpu in gpus:
                     t.add_row(

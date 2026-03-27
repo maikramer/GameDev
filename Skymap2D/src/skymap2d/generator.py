@@ -6,7 +6,8 @@ import io
 import logging
 import os
 import re
-from typing import Any, Dict, Generator, List, Optional
+from collections.abc import Generator
+from typing import Any
 
 from PIL import Image
 
@@ -25,7 +26,7 @@ BASE_EQUIRECTANGULAR_INSTRUCTIONS = (
     "no borders, no frame, no text, no watermark"
 )
 
-DEFAULT_PARAMS: Dict[str, Any] = {
+DEFAULT_PARAMS: dict[str, Any] = {
     "guidance_scale": 6.0,
     "num_inference_steps": 40,
     "seed": None,
@@ -76,17 +77,17 @@ def merge_negative_prompt(preset_neg: str, user_neg: str) -> str:
 class SkymapGenerator:
     """Gerador de skymaps equirectangular 360° via HF Inference API."""
 
-    def __init__(self, model_id: Optional[str] = None) -> None:
+    def __init__(self, model_id: str | None = None) -> None:
         self.model_id = self._normalize_model_id(model_id or default_model_id())
         self.client = self._init_client()
 
     @staticmethod
     def _normalize_model_id(model_id: str) -> str:
         if model_id.startswith("models/"):
-            return model_id[len("models/"):]
+            return model_id[len("models/") :]
         return model_id
 
-    def _init_client(self):  # noqa: ANN202
+    def _init_client(self):
         from huggingface_hub import InferenceClient
 
         token = get_hf_token()
@@ -100,13 +101,13 @@ class SkymapGenerator:
         negative_prompt: str = "",
         guidance_scale: float = 6.0,
         num_inference_steps: int = 40,
-        seed: Optional[int] = None,
+        seed: int | None = None,
         width: int = 2048,
         height: int = 1024,
-        cfg_scale: Optional[float] = None,
+        cfg_scale: float | None = None,
         lora_strength: float = 1.0,
-        preset: Optional[str] = None,
-    ) -> tuple[Image.Image, Dict[str, Any]]:
+        preset: str | None = None,
+    ) -> tuple[Image.Image, dict[str, Any]]:
         """Gera um skymap equirectangular 360°.
 
         Returns:
@@ -122,9 +123,7 @@ class SkymapGenerator:
                 prompt = f"{preset_prompt}, {prompt}" if prompt else preset_prompt
             if preset_params:
                 guidance_scale = float(preset_params.get("guidance_scale", guidance_scale))
-                num_inference_steps = int(
-                    preset_params.get("num_inference_steps", num_inference_steps)
-                )
+                num_inference_steps = int(preset_params.get("num_inference_steps", num_inference_steps))
                 width = int(preset_params.get("width", width))
                 height = int(preset_params.get("height", height))
                 if "negative_prompt" in preset_params:
@@ -169,7 +168,7 @@ class SkymapGenerator:
         if not is_valid:
             raise ValueError(f"Parâmetros inválidos: {error}")
 
-        hf_params: Dict[str, Any] = {
+        hf_params: dict[str, Any] = {
             "negative_prompt": negative_prompt,
             "guidance_scale": float(guidance_scale),
             "num_inference_steps": int(num_inference_steps),
@@ -180,7 +179,7 @@ class SkymapGenerator:
             "lora_scale": float(lora_strength),
         }
 
-        image: Optional[Image.Image] = None
+        image: Image.Image | None = None
 
         try:
             image = self.client.text_to_image(
@@ -214,9 +213,9 @@ class SkymapGenerator:
 
     def generate_batch(
         self,
-        prompts: List[str],
-        base_params: Optional[Dict[str, Any]] = None,
-    ) -> Generator[tuple[Optional[Image.Image], Dict[str, Any], int], None, None]:
+        prompts: list[str],
+        base_params: dict[str, Any] | None = None,
+    ) -> Generator[tuple[Image.Image | None, dict[str, Any], int], None, None]:
         """Gera múltiplos skymaps em batch.
 
         Yields:

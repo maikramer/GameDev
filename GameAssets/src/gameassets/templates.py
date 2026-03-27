@@ -1,6 +1,7 @@
 """Templates YAML/CSV para gameassets init."""
 
-GAME_YAML = """# Perfil do jogo — edita os campos e escolhe style_preset (ver GameAssets/src/gameassets/data/presets.yaml)
+GAME_YAML = """# Perfil do jogo — edita os campos e escolhe style_preset
+# (ver GameAssets/src/gameassets/data/presets.yaml)
 
 title: "Meu Jogo"
 genre: "roguelike de ação"

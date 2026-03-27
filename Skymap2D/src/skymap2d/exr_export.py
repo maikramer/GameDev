@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 from PIL import Image
 
 
-def pil_rgb_to_linear_f32(image: Image.Image) -> "np.ndarray":
+def pil_rgb_to_linear_f32(image: Image.Image) -> np.ndarray:
     """Converte PIL RGB 8-bit sRGB para array float32 RGB linear [0, 1] (por canal)."""
     import numpy as np
 
@@ -32,10 +32,10 @@ def pil_rgb_to_linear_f32(image: Image.Image) -> "np.ndarray":
     return np.clip(out, 0.0, 1.0)
 
 
-def write_exr_rgb_linear(path: Path, rgb_linear: "np.ndarray", *, scale: float = 1.0) -> None:
+def write_exr_rgb_linear(path: Path, rgb_linear: np.ndarray, *, scale: float = 1.0) -> None:
     """Grava um EXR scanline com canal intercalado ``RGB`` (float32, linear)."""
-    import OpenEXR
     import numpy as np
+    import OpenEXR
 
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)

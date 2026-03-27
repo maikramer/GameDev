@@ -6,11 +6,9 @@ permitindo que um CLI unificado descubra e instale qualquer uma delas.
 
 from __future__ import annotations
 
-import platform
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Optional
 
 
 class ToolKind(Enum):
@@ -168,10 +166,7 @@ def find_monorepo_root(start: Path | None = None) -> Path:
     found = _walk_monorepo_root(start)
     if found is not None:
         return found
-    raise FileNotFoundError(
-        "Raiz do monorepo GameDev não encontrada. "
-        "Execute a partir de dentro do repositório."
-    )
+    raise FileNotFoundError("Raiz do monorepo GameDev não encontrada. Execute a partir de dentro do repositório.")
 
 
 def list_available_tools(monorepo: Path | None = None) -> list[ToolSpec]:
@@ -191,7 +186,4 @@ def get_tool(name: str) -> ToolSpec:
     for k, spec in TOOLS.items():
         if k == key or spec.cli_name == key or spec.name.lower().replace(" ", "") == key:
             return spec
-    raise KeyError(
-        f"Ferramenta desconhecida: {name!r}. "
-        f"Disponíveis: {', '.join(TOOLS.keys())}"
-    )
+    raise KeyError(f"Ferramenta desconhecida: {name!r}. Disponíveis: {', '.join(TOOLS.keys())}")

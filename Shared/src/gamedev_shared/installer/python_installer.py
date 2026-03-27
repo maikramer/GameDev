@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
-from typing import Optional
 
 from .base import BaseInstaller
 
@@ -151,7 +150,7 @@ class PythonProjectInstaller(BaseInstaller):
         if self.requirements_file.is_file():
             self.logger.info(f"Instalando dependências: {self.requirements_file}")
             subprocess.run(
-                pip_cmd + ["-r", str(self.requirements_file)],
+                [*pip_cmd, "-r", str(self.requirements_file)],
                 check=True,
                 cwd=_root,
             )
@@ -160,7 +159,7 @@ class PythonProjectInstaller(BaseInstaller):
 
         self.logger.info("Instalando pacote em modo editável...")
         subprocess.run(
-            pip_cmd + ["-e", str(self.project_root)],
+            [*pip_cmd, "-e", str(self.project_root)],
             check=True,
             cwd=_root,
         )
@@ -187,7 +186,7 @@ class PythonProjectInstaller(BaseInstaller):
         if self.requirements_file.is_file():
             self.logger.info(f"Instalando dependências: {self.requirements_file}")
             subprocess.run(
-                pip_cmd + ["-r", str(self.requirements_file)],
+                [*pip_cmd, "-r", str(self.requirements_file)],
                 check=True,
                 cwd=_root,
             )
@@ -196,7 +195,7 @@ class PythonProjectInstaller(BaseInstaller):
 
         self.logger.info(f"Instalando pacote {self.cli_name} em modo editável...")
         subprocess.run(
-            pip_cmd + ["-e", str(self.project_root)],
+            [*pip_cmd, "-e", str(self.project_root)],
             check=True,
             cwd=_root,
         )
@@ -234,7 +233,7 @@ class PythonProjectInstaller(BaseInstaller):
                 wrapper.chmod(0o755)
                 self.logger.success(str(wrapper))
 
-    def create_activate_wrapper(self) -> Optional[Path]:
+    def create_activate_wrapper(self) -> Path | None:
         """Cria wrapper que activa o venv (para desenvolvimento)."""
         if self.is_windows:
             return None

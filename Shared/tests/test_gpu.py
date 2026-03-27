@@ -2,7 +2,7 @@
 
 import pytest
 
-from gamedev_shared.gpu import format_bytes, estimate_vram_requirement
+from gamedev_shared.gpu import estimate_vram_requirement, format_bytes
 
 
 class TestFormatBytes:

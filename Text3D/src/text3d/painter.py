@@ -6,9 +6,9 @@ Requer pesos em ``tencent/Hunyuan3D-2`` (subpastas delight + paint), descarregad
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator, Optional, Union
 
 import torch
 import trimesh
@@ -62,7 +62,6 @@ def _patch_delight_steps(pipe, steps: int) -> None:
     delight = pipe.models.get("delight_model")
     if delight is None:
         return
-    orig_call = delight.__class__.__call__
 
     def patched_call(self, image):
         image = image.resize((512, 512))
@@ -101,9 +100,7 @@ def _patch_delight_steps(pipe, steps: int) -> None:
         image_tensor = torch.tensor(np.array(image) / 255.0).to(self.device)
         rgb_src = image_tensor[:, :, :3]
         image = self.recorrect_rgb(rgb_src, rgb_target, alpha)
-        image = image[:, :, :3] * image[:, :, 3:] + torch.ones_like(image[:, :, :3]) * (
-            1.0 - image[:, :, 3:]
-        )
+        image = image[:, :, :3] * image[:, :, 3:] + torch.ones_like(image[:, :, :3]) * (1.0 - image[:, :, 3:])
         image = Image.fromarray((image.cpu().numpy() * 255).astype(np.uint8))
         return image
 
@@ -117,12 +114,8 @@ def _patch_multiview_steps(pipe, steps: int) -> None:
     mv = pipe.models.get("multiview_model")
     if mv is None:
         return
-    orig_call = mv.__class__.__call__
 
     def patched_call(self, input_images, control_images, camera_info):
-        import random, os, numpy as np
-        from typing import List
-
         self.seed_everything(0)
         if not isinstance(input_images, list):
             input_images = [input_images]
@@ -152,13 +145,13 @@ def _patch_multiview_steps(pipe, steps: int) -> None:
 def check_paint_rasterizer_available() -> None:
     """Falha cedo com mensagem clara se o rasterizador CUDA do texgen não estiver instalado."""
     try:
-        import torch  # noqa: F401
         import custom_rasterizer  # noqa: F401
+        import torch  # noqa: F401
     except (ImportError, ModuleNotFoundError, OSError) as e:
         raise RuntimeError(_PAINT_RASTERIZER_HINT) from e
 
 
-def load_mesh_trimesh(path: Union[str, Path]) -> trimesh.Trimesh:
+def load_mesh_trimesh(path: str | Path) -> trimesh.Trimesh:
     """Carrega GLB/OBJ/PLY e devolve um único Trimesh (fundir cenas)."""
     path = Path(path)
     loaded = trimesh.load(str(path), force=None)
@@ -176,7 +169,7 @@ def load_mesh_trimesh(path: Union[str, Path]) -> trimesh.Trimesh:
 
 def apply_hunyuan_paint(
     mesh: trimesh.Trimesh,
-    image: Union[str, Path, Image.Image],
+    image: str | Path | Image.Image,
     *,
     model_repo: str = _defaults.DEFAULT_PAINT_HF_REPO,
     subfolder: str = _defaults.DEFAULT_PAINT_SUBFOLDER,
@@ -212,7 +205,7 @@ def apply_hunyuan_paint(
         pipe.enable_model_cpu_offload()
 
     if isinstance(image, (str, Path)):
-        img_arg: Union[str, Image.Image] = str(image)
+        img_arg: str | Image.Image = str(image)
     else:
         img_arg = image.convert("RGB") if image.mode != "RGB" else image
 
@@ -230,25 +223,23 @@ def apply_hunyuan_paint(
 
 
 def paint_file_to_file(
-    mesh_path: Union[str, Path],
-    image_path: Union[str, Path],
-    output_path: Union[str, Path],
+    mesh_path: str | Path,
+    image_path: str | Path,
+    output_path: str | Path,
     *,
-    model_repo: Optional[str] = None,
-    subfolder: Optional[str] = None,
-    paint_cpu_offload: Optional[bool] = None,
+    model_repo: str | None = None,
+    subfolder: str | None = None,
+    paint_cpu_offload: bool | None = None,
     verbose: bool = False,
     materialize: bool = False,
-    materialize_output_dir: Optional[Union[str, Path]] = None,
-    materialize_bin: Optional[Union[str, Path]] = None,
+    materialize_output_dir: str | Path | None = None,
+    materialize_bin: str | Path | None = None,
     materialize_no_invert: bool = False,
 ) -> Path:
     """Atalho: carrega mesh, pinta, exporta GLB. Com ``materialize=True``, embute PBR (Materialize CLI)."""
     repo = model_repo or _defaults.DEFAULT_PAINT_HF_REPO
     sub = subfolder or _defaults.DEFAULT_PAINT_SUBFOLDER
-    offload = (
-        _defaults.DEFAULT_PAINT_CPU_OFFLOAD if paint_cpu_offload is None else paint_cpu_offload
-    )
+    offload = _defaults.DEFAULT_PAINT_CPU_OFFLOAD if paint_cpu_offload is None else paint_cpu_offload
 
     mesh = load_mesh_trimesh(mesh_path)
     out = apply_hunyuan_paint(

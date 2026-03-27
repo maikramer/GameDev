@@ -6,6 +6,8 @@ build-backend = "setuptools.build_meta"
 name = "gameassets"
 version = "0.2.2"
 description = "CLI para batches de prompts e assets 2D/3D alinhados ao estilo do jogo"
+readme = "README.md"
+authors = [{ name = "GameDev" }]
 requires-python = ">=3.10"
 dependencies = [
     "click>=8.0",
