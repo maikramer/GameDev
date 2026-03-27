@@ -6,6 +6,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 from PIL import Image
+
 from skymap2d.exr_export import pil_rgb_to_linear_f32, write_exr_rgb_linear
 
 

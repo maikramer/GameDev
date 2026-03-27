@@ -3,6 +3,7 @@
 from unittest.mock import MagicMock, patch
 
 from PIL import Image
+
 from skymap2d.generator import (
     DEFAULT_MODEL_ID,
     augment_prompt_for_equirectangular,

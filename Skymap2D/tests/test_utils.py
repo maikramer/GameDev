@@ -1,7 +1,12 @@
 """Testes para skymap2d.utils."""
 
+import time
+from pathlib import Path
+
 from skymap2d.utils import (
+    ensure_directory,
     format_bytes,
+    format_timestamp,
     generate_seed,
     validate_dimensions,
     validate_params,
@@ -92,3 +97,40 @@ class TestFormatBytes:
     def test_megabytes(self):
         result = format_bytes(5 * 1024 * 1024)
         assert "MB" in result
+
+    def test_gigabytes(self):
+        result = format_bytes(3 * 1024**3)
+        assert "GB" in result
+
+    def test_terabytes(self):
+        result = format_bytes(1024**5)
+        assert "TB" in result
+
+
+class TestFormatTimestamp:
+    def test_output_shape(self):
+        """fromtimestamp usa TZ local; validamos apenas formato estável."""
+        s = format_timestamp(1_700_000_000.0)
+        assert len(s) == 19
+        date_part, time_part = s.split()
+        assert len(date_part.split("-")) == 3
+        assert len(time_part.split(":")) == 3
+
+    def test_live_clock(self):
+        s = format_timestamp(time.time())
+        assert len(s) == 19
+
+
+class TestEnsureDirectory:
+    def test_creates_nested(self, tmp_path: Path):
+        d = tmp_path / "a" / "b"
+        assert not d.is_dir()
+        got = ensure_directory(d)
+        assert got == d
+        assert d.is_dir()
+
+    def test_idempotent(self, tmp_path: Path):
+        d = tmp_path / "x"
+        d.mkdir()
+        ensure_directory(d)
+        assert d.is_dir()
