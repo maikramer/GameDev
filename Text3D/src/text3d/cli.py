@@ -385,6 +385,17 @@ def skill_install_cmd(target: Path, force: bool) -> None:
         "Rotação X ao gravar mesh (graus). Defeito interno: +90 (Hunyuan→Y-up). Sobrescreve TEXT3D_EXPORT_ROTATION_X_*."
     ),
 )
+@click.option(
+    "--export-origin",
+    "export_origin",
+    type=click.Choice(["feet", "center", "none"]),
+    default=_defaults.DEFAULT_EXPORT_ORIGIN,
+    show_default=True,
+    help=(
+        "Origem após rotação Y-up: feet=pés no chão (Y=0) e centro em XZ (Godot/Blender); "
+        "center=centro da caixa em (0,0,0); none=não mover. Sobrescreve TEXT3D_EXPORT_ORIGIN."
+    ),
+)
 @click.pass_context
 def generate(
     ctx,
@@ -428,6 +439,7 @@ def generate(
     allow_shared_gpu,
     gpu_kill_others,
     model_subfolder,
+    export_origin,
     export_rotation_x_deg,
 ):
     """Gera 3D: PROMPT (Text2D → Hunyuan) ou --from-image (só Hunyuan)."""
@@ -498,6 +510,15 @@ def generate(
         rep += f", smooth={mesh_smooth}"
     info_table.add_row("[bold]Pós-mesh[/bold]", rep)
     info_table.add_row("[bold]Formato[/bold]", output_format.upper())
+    info_table.add_row(
+        "[bold]Export[/bold]",
+        f"origem={export_origin}"
+        + (
+            f", rotação X={export_rotation_x_deg}°"
+            if export_rotation_x_deg is not None
+            else ""
+        ),
+    )
     info_table.add_row("[bold]Modo[/bold]", "economia VRAM" if low_vram else "normal")
     if texture:
         info_table.add_row(
@@ -664,7 +685,7 @@ def generate(
 
             from .utils.export import save_mesh
 
-            mesh_path = save_mesh(result, output, format=output_format)
+            mesh_path = save_mesh(result, output, format=output_format, origin_mode=export_origin)
             mp = Path(mesh_path).resolve()
             try:
                 sz = format_bytes(mp.stat().st_size)
@@ -986,6 +1007,14 @@ def texture(
     help="Preset Materialize: ajusta parâmetros PBR ao tipo de superfície.",
 )
 @click.option(
+    "--export-origin",
+    "mat_export_origin",
+    type=click.Choice(["feet", "center", "none"]),
+    default=_defaults.DEFAULT_EXPORT_ORIGIN,
+    show_default=True,
+    help="Origem ao gravar GLB (após qualquer rotação de export).",
+)
+@click.option(
     "-v",
     "--verbose",
     "mat_verbose",
@@ -1010,6 +1039,7 @@ def materialize_pbr_cmd(
     materialize_bin,
     materialize_no_invert,
     mat_preset,
+    mat_export_origin,
     mat_verbose,
     allow_shared_gpu,
     gpu_kill_others,
@@ -1065,7 +1095,13 @@ def materialize_pbr_cmd(
                 preset=mat_preset,
                 verbose=verbose,
             )
-            mp = save_mesh(result, out_path, format="glb")
+            mp = save_mesh(
+                result,
+                out_path,
+                format="glb",
+                rotate=False,
+                origin_mode=mat_export_origin,
+            )
         out_p = Path(mp).resolve()
         try:
             sz = format_bytes(out_p.stat().st_size)

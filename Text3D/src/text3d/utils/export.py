@@ -9,7 +9,22 @@ import numpy as np
 import trimesh
 from diffusers.utils import export_to_gif, export_to_obj, export_to_ply
 
-from ..defaults import get_export_rotation_x_rad
+from ..defaults import get_export_origin, get_export_rotation_x_rad
+
+
+def _load_as_trimesh(path: str | Path) -> trimesh.Trimesh:
+    """Carrega ficheiro 3D como um único ``Trimesh`` (fundir cena se necessário)."""
+    path = Path(path)
+    loaded = trimesh.load(str(path), force=None)
+    if isinstance(loaded, trimesh.Scene):
+        if not loaded.geometry:
+            raise ValueError(f"Mesh vazia: {path}")
+        if len(loaded.geometry) == 1:
+            return next(iter(loaded.geometry.values()))
+        return trimesh.util.concatenate(list(loaded.geometry.values()))
+    if isinstance(loaded, trimesh.Trimesh):
+        return loaded
+    raise TypeError(f"Formato não suportado: {type(loaded)}")
 
 
 def _export_glb_with_normals(mesh: trimesh.Trimesh, output_path: Path) -> None:
@@ -28,12 +43,16 @@ def save_mesh(
     output_path: str | Path,
     format: str | None = None,
     rotate: bool = True,
+    origin_mode: str | None = None,
 ) -> Path:
     """
     Salva mesh em formato PLY, OBJ ou GLB.
 
     Aceita array numpy (legado / diffusers) ou ``trimesh.Trimesh`` (Hunyuan3D).
+    ``origin_mode``: ``feet`` | ``center`` | ``none`` (defeito: env / ``get_export_origin()``).
     """
+    if origin_mode is None:
+        origin_mode = get_export_origin()
     output_path = Path(output_path)
 
     if format is None:
@@ -46,6 +65,9 @@ def save_mesh(
         mesh = mesh_input
         if rotate:
             mesh = _apply_rotation_trimesh(mesh.copy())
+        else:
+            mesh = mesh.copy()
+        _apply_origin_trimesh(mesh, origin_mode)
         if format == "glb":
             _export_glb_with_normals(mesh, output_path)
             return output_path
@@ -64,19 +86,24 @@ def save_mesh(
         export_to_ply(mesh_array, str(temp_ply))
 
         if rotate:
-            _apply_rotation(temp_ply)
+            _apply_rotation(temp_ply, origin_mode=origin_mode)
+        else:
+            _apply_origin_only_path(temp_ply, origin_mode=origin_mode)
 
         if output_path.suffix.lower() == ".ply":
             return temp_ply
 
         if format != "ply":
-            return convert_mesh(temp_ply, output_path, rotate=False)
+            # temp_ply já tem rotação + origem aplicadas em ``_apply_rotation``
+            return convert_mesh(temp_ply, output_path, rotate=False, origin_mode="none")
 
     elif format == "obj":
         export_to_obj(mesh_array, str(output_path))
 
         if rotate:
-            _apply_rotation(output_path)
+            _apply_rotation(output_path, origin_mode=origin_mode)
+        else:
+            _apply_origin_only_path(output_path, origin_mode=origin_mode)
 
     elif format == "glb":
         temp_ply = output_path.with_suffix(".temp.ply")
@@ -84,11 +111,10 @@ def save_mesh(
 
         try:
             mesh = trimesh.load(temp_ply)
-
             if rotate:
                 mesh = _apply_rotation_trimesh(mesh)
-
-            mesh.export(str(output_path), file_type="glb")
+            _apply_origin_trimesh(mesh, origin_mode)
+            _export_glb_with_normals(mesh, output_path)
         finally:
             if temp_ply.exists():
                 temp_ply.unlink()
@@ -125,6 +151,7 @@ def convert_mesh(
     input_path: str | Path,
     output_path: str | Path,
     rotate: bool = False,
+    origin_mode: str | None = None,
 ) -> Path:
     """
     Converte mesh entre formatos usando trimesh.
@@ -133,44 +160,67 @@ def convert_mesh(
         input_path: Arquivo de entrada
         output_path: Arquivo de saída
         rotate: Aplicar rotação
+        origin_mode: ``feet`` | ``center`` | ``none`` (defeito: ``get_export_origin()``)
 
     Returns:
         Caminho do arquivo convertido
     """
+    if origin_mode is None:
+        origin_mode = get_export_origin()
+
     input_path = Path(input_path)
     output_path = Path(output_path)
 
     if not input_path.exists():
         raise FileNotFoundError(f"Arquivo não encontrado: {input_path}")
 
-    # Carregar mesh
-    mesh = trimesh.load(input_path)
+    mesh = _load_as_trimesh(input_path)
 
     if rotate:
         mesh = _apply_rotation_trimesh(mesh)
+
+    _apply_origin_trimesh(mesh, origin_mode)
 
     # Determinar formato de saída
     output_format = output_path.suffix.lstrip(".").lower()
 
     # Exportar
-    mesh.export(str(output_path), file_type=output_format)
+    if output_format == "glb":
+        _export_glb_with_normals(mesh, output_path)
+    else:
+        mesh.export(str(output_path), file_type=output_format)
 
     return output_path
 
 
-def _apply_rotation(ply_path: Path):
+def _apply_rotation(ply_path: Path, *, origin_mode: str | None = None) -> None:
     """
-    Aplica rotação para orientar mesh corretamente (eixo Y para cima).
-
-    Args:
-        ply_path: Caminho do arquivo PLY
+    Aplica rotação Hunyuan→Y-up e reposiciona a origem (PLY in-place).
     """
+    if origin_mode is None:
+        origin_mode = get_export_origin()
     try:
-        mesh = trimesh.load(ply_path)
+        mesh = _load_as_trimesh(ply_path)
         mesh = _apply_rotation_trimesh(mesh)
+        _apply_origin_trimesh(mesh, origin_mode)
         mesh.export(str(ply_path), file_type="ply")
     except Exception as e:
-        warnings.warn(f"Não foi possível aplicar rotação: {e}", stacklevel=2)
+        warnings.warn(f"Não foi possível aplicar rotação/origem: {e}", stacklevel=2)
+
+
+def _apply_origin_only_path(path: Path, *, origin_mode: str | None = None) -> None:
+    """Só translada origem (sem rotação), útil quando ``rotate=False`` no legado numpy."""
+    if origin_mode is None:
+        origin_mode = get_export_origin()
+    if origin_mode == "none":
+        return
+    try:
+        mesh = _load_as_trimesh(path)
+        _apply_origin_trimesh(mesh, origin_mode)
+        ext = path.suffix.lower().lstrip(".") or "ply"
+        mesh.export(str(path), file_type=ext)
+    except Exception as e:
+        warnings.warn(f"Não foi possível aplicar origem: {e}", stacklevel=2)
 
 
 def _apply_rotation_trimesh(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
@@ -181,6 +231,32 @@ def _apply_rotation_trimesh(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
     axis = [1, 0, 0]
     rotation_matrix = trimesh.transformations.rotation_matrix(angle, axis)
     mesh.apply_transform(rotation_matrix)
+    return mesh
+
+
+def _apply_origin_trimesh(mesh: trimesh.Trimesh, mode: str) -> trimesh.Trimesh:
+    """
+    Reposiciona a malha para uma origem consistente **após** a rotação Y-up.
+
+    - ``feet``: base da AABB em Y=0, centro em X e Z (convénio personagens Godot/Blender).
+    - ``center``: centro da AABB em (0, 0, 0).
+    - ``none``: sem translação.
+    """
+    if mode == "none":
+        return mesh
+    bounds = mesh.bounds
+    if mode == "feet":
+        cx = (bounds[0][0] + bounds[1][0]) * 0.5
+        cy = float(bounds[0][1])
+        cz = (bounds[0][2] + bounds[1][2]) * 0.5
+        mesh.apply_translation([-cx, -cy, -cz])
+    elif mode == "center":
+        cx = (bounds[0][0] + bounds[1][0]) * 0.5
+        cy = (bounds[0][1] + bounds[1][1]) * 0.5
+        cz = (bounds[0][2] + bounds[1][2]) * 0.5
+        mesh.apply_translation([-cx, -cy, -cz])
+    else:
+        raise ValueError(f"Modo de origem desconhecido: {mode!r}")
     return mesh
 
 

@@ -41,6 +41,35 @@ def get_export_rotation_x_rad() -> float:
     return math.pi / 2
 
 
+# --- Origem ao gravar mesh (após rotação Y-up) ---
+# Godot/Blender: personagens costumam ter origem entre os pés, Y=0 no chão, X/Z centrados.
+# ``feet`` = base da AABB em Y=0 e centro em XZ. ``center`` = centro da caixa em (0,0,0).
+# ``none`` = não transladar (útil para depuração ou viewers que já centram).
+DEFAULT_EXPORT_ORIGIN = "feet"
+
+_origin_override: str | None = None
+
+_VALID_ORIGINS = frozenset({"feet", "center", "none"})
+
+
+def set_export_origin_override(value: str | None) -> None:
+    """Usado pelo CLI ``generate``; None = voltar a env/defeito."""
+    global _origin_override
+    if value is not None and value not in _VALID_ORIGINS:
+        raise ValueError(f"export origin inválido: {value!r}")
+    _origin_override = value
+
+
+def get_export_origin() -> str:
+    """Modo de origem após rotação: ``feet`` | ``center`` | ``none``."""
+    if _origin_override is not None:
+        return _origin_override
+    env = os.environ.get("TEXT3D_EXPORT_ORIGIN", "").strip().lower()
+    if env in _VALID_ORIGINS:
+        return env
+    return DEFAULT_EXPORT_ORIGIN
+
+
 # --- Text2D (imagem intermédia) ---
 # 1024² puxa muita VRAM no FLUX; 768 é um compromisso estável em ~6GB.
 DEFAULT_T2D_WIDTH = 768
