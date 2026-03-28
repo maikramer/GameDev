@@ -57,7 +57,7 @@ fi
 source "$VENV_DIR/bin/activate"
 
 log_info "A atualizar pip..."
-pip install --upgrade pip setuptools wheel
+pip install --upgrade pip "setuptools>=68,<82" wheel
 
 cd "$PROJECT_ROOT"
 if [ "$INSTALL_DEV" -eq 1 ]; then

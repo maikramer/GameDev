@@ -43,7 +43,7 @@ $PYTHON_CMD -m venv "$VENV_DIR"
 source "$VENV_DIR/bin/activate"
 
 log_info "Atualizando pip..."
-pip install --upgrade pip setuptools wheel
+pip install --upgrade pip "setuptools>=68,<82" wheel
 
 log_info "Instalando dependências do projeto..."
 pip install -r "$PROJECT_ROOT/config/requirements.txt"

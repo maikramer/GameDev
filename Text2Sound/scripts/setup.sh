@@ -24,7 +24,7 @@ echo "Venv ativado: $VENV_DIR"
 
 # Dependências base
 echo "Atualizando pip/setuptools/wheel..."
-pip install --upgrade pip setuptools wheel -q
+pip install --upgrade pip "setuptools>=68,<82" wheel -q
 
 # stable-audio-tools fixa pandas==2.0.2 que não compila em Python 3.13+.
 # Instalamos pandas moderno primeiro, depois stable-audio-tools --no-deps,

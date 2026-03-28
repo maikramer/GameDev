@@ -50,3 +50,12 @@ Thumbs.db
 
 # Processos batch locais
 **/batch.pid
+
+# Logs
+**/logs/
+
+# PyTorch Lightning
+**/lightning_logs/
+
+# Rigging3D temp/runtime
+**/tmp/
