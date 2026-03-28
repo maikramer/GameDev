@@ -98,26 +98,50 @@ def _require_bash() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _make_env(root: Path, extra: dict[str, str] | None = None) -> dict[str, str]:
+def _make_env(
+    root: Path,
+    extra: dict[str, str] | None = None,
+    *,
+    python_bin: str | None = None,
+) -> dict[str, str]:
     merged = {**os.environ, **(extra or {})}
     root_s = str(root)
     pp = merged.get("PYTHONPATH", "")
     merged["PYTHONPATH"] = root_s if not pp else root_s + os.pathsep + pp
+    # Scripts launch/inference/*.sh usam ``python`` (uv/venv: o binário resolvido perde site-packages).
+    if python_bin:
+        bindir = str(Path(python_bin).expanduser().resolve().parent)
+        merged["PATH"] = bindir + os.pathsep + merged.get("PATH", "")
+        merged["PYTHON"] = python_bin
     return merged
 
 
-def _run(cmd: list[str], *, root: Path, env: dict[str, str] | None = None) -> int:
-    return subprocess.run(cmd, cwd=str(root), env=_make_env(root, env)).returncode
+def _run(
+    cmd: list[str],
+    *,
+    root: Path,
+    env: dict[str, str] | None = None,
+    python_bin: str | None = None,
+) -> int:
+    return subprocess.run(
+        cmd, cwd=str(root), env=_make_env(root, env, python_bin=python_bin)
+    ).returncode
 
 
-def _run_bash(root: Path, script: str, args: Sequence[str]) -> int:
+def _run_bash(
+    root: Path,
+    script: str,
+    args: Sequence[str],
+    *,
+    python_bin: str | None = None,
+) -> int:
     bash = _find_bash()
     if not bash:
         raise RuntimeError("bash não encontrado")
     full = root / script
     if not full.is_file():
         raise FileNotFoundError(f"Script em falta: {full}")
-    return _run([bash, _shell_path(full), *args], root=root)
+    return _run([bash, _shell_path(full), *args], root=root, python_bin=python_bin)
 
 
 def _run_module(root: Path, py: str, module: str, args: Sequence[str]) -> int:
@@ -181,12 +205,12 @@ def skeleton_cmd(
     output_dir: Path | None,
 ) -> None:
     """Gera skeleton (FBX) a partir de mesh (.glb/.obj/…)."""
-    root, _py = _ctx_root_py(ctx)
+    root, py = _ctx_root_py(ctx)
     _require_bash()
     _validate_io(input_path, output_path, input_dir, output_dir)
     args: list[str] = ["--seed", str(seed), "--skeleton_task", skeleton_task]
     args += _io_args(input_path, output_path, input_dir, output_dir)
-    rc = _run_bash(root, "launch/inference/generate_skeleton.sh", args)
+    rc = _run_bash(root, "launch/inference/generate_skeleton.sh", args, python_bin=py)
     if rc != 0:
         raise click.ClickException(f"generate_skeleton.sh terminou com código {rc}")
     console.print("[green]Skeleton concluído.[/green]")
@@ -215,12 +239,12 @@ def skin_cmd(
     data_name: str,
 ) -> None:
     """Prevê pesos de skinning a partir do FBX com skeleton."""
-    root, _py = _ctx_root_py(ctx)
+    root, py = _ctx_root_py(ctx)
     _require_bash()
     _validate_io(input_path, output_path, input_dir, output_dir)
     args: list[str] = ["--seed", str(seed), "--skin_task", skin_task, "--data_name", data_name]
     args += _io_args(input_path, output_path, input_dir, output_dir)
-    rc = _run_bash(root, "launch/inference/generate_skin.sh", args)
+    rc = _run_bash(root, "launch/inference/generate_skin.sh", args, python_bin=py)
     if rc != 0:
         raise click.ClickException(f"generate_skin.sh terminou com código {rc}")
     console.print("[green]Skinning concluído.[/green]")
@@ -282,17 +306,25 @@ def pipeline_cmd(ctx: click.Context, mesh: Path, out: Path, work_dir: Path | Non
             root,
             "launch/inference/generate_skeleton.sh",
             ["--input", _shell_path(mesh), "--output", _shell_path(skel), "--seed", str(seed)],
+            python_bin=py,
         )
-        if rc != 0:
-            raise click.ClickException(f"skeleton falhou ({rc})")
+        if rc != 0 or not skel.is_file() or skel.stat().st_size == 0:
+            raise click.ClickException(
+                "skeleton falhou (código %s ou FBX em falta). Confirma deps inferência, pesos HF e logs acima."
+                % (rc,)
+            )
 
         rc = _run_bash(
             root,
             "launch/inference/generate_skin.sh",
             ["--input", _shell_path(skel), "--output", _shell_path(skin), "--seed", str(seed)],
+            python_bin=py,
         )
-        if rc != 0:
-            raise click.ClickException(f"skin falhou ({rc})")
+        if rc != 0 or not skin.is_file() or skin.stat().st_size == 0:
+            raise click.ClickException(
+                "skin falhou (código %s ou FBX em falta). Confirma flash_attn, spconv, VRAM e logs acima."
+                % (rc,)
+            )
 
         rc = _run_module(
             root,
@@ -307,8 +339,14 @@ def pipeline_cmd(ctx: click.Context, mesh: Path, out: Path, work_dir: Path | Non
                 f"--output={_shell_path(out)}",
             ],
         )
+        if not out.is_file() or out.stat().st_size == 0:
+            raise click.ClickException(
+                "merge falhou (código %s ou GLB vazio). Confirma bpy/open3d e caminhos acima." % (rc,)
+            )
         if rc != 0:
-            raise click.ClickException(f"merge falhou ({rc})")
+            console.print(
+                f"[yellow]merge terminou com código {rc} mas o output existe ({out.stat().st_size} bytes) — prosseguindo.[/yellow]"
+            )
     finally:
         if cleanup is not None and not keep_temp:
             shutil.rmtree(cleanup, ignore_errors=True)

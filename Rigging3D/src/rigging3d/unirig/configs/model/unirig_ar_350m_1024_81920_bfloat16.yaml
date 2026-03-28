@@ -13,7 +13,7 @@ mesh_encoder:
   pretrained_path: ~
   freeze_encoder: False
   device: cpu
-  dtype: float32
+  dtype: bfloat16
   num_latents: 512
   embed_dim: 64
   point_feats: 3

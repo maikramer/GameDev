@@ -1,4 +1,5 @@
 # generate skeleton
+PY="${PYTHON:-python}"
 config="configs/data/quick_inference.yaml"
 require_suffix="obj,fbx,FBX,dae,glb,gltf,vrm"
 num_runs=1
@@ -53,8 +54,7 @@ eval $cmd
 wait
 
 # 2. inference skeleton
-cmd="\
-    python run.py \
+cmd="${PY} run.py \
     --task=$skeleton_task \
     --seed=$seed \
 "

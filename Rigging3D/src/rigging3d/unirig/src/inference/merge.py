@@ -383,7 +383,10 @@ def merge(
         elif output_path.endswith(".fbx") or output_path.endswith(".FBX"):
             bpy.ops.export_scene.fbx(filepath=output_path, add_leaf_bones=True)
         elif output_path.endswith(".glb") or output_path.endswith(".gltf"):
-            bpy.ops.export_scene.gltf(filepath=output_path)
+            bpy.ops.export_scene.gltf(
+                filepath=output_path,
+                export_draco_mesh_compression_enable=False,
+            )
         elif output_path.endswith(".dae"):
             bpy.ops.wm.collada_export(filepath=output_path)
         elif output_path.endswith(".blend"):

@@ -86,12 +86,20 @@ class SerializedAttention(PointModule):
         self.upcast_attention = upcast_attention
         self.upcast_softmax = upcast_softmax
         self.enable_rpe = enable_rpe
-        self.enable_flash = enable_flash
         self.enable_qknorm = enable_qknorm
         if enable_qknorm:
             self.qknorm = QueryKeyNorm(channels, num_heads)
         else:
             print("WARNING: enable_qknorm is False in PTv3Object and training may be fragile")
+        if enable_flash and flash_attn is None:
+            import warnings
+            warnings.warn(
+                "flash_attn não instalado — a usar fallback (atenção sem flash). "
+                "Instala com: bash scripts/install_flash_attn.sh",
+                stacklevel=2,
+            )
+            enable_flash = False
+        self.enable_flash = enable_flash
         if enable_flash:
             assert (
                 enable_rpe is False
@@ -102,7 +110,6 @@ class SerializedAttention(PointModule):
             assert (
                 upcast_softmax is False
             ), "Set upcast_softmax to False when enable Flash Attention"
-            assert flash_attn is not None, "Make sure flash_attn is installed."
             self.patch_size = patch_size
             self.attn_drop = attn_drop
         else:

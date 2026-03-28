@@ -48,9 +48,16 @@ class UniRigAR(ModelSpec):
         
         _d = llm.copy()
         _d['vocab_size'] = self.tokenizer.vocab_size
+        _has_flash = False
+        try:
+            import flash_attn as _fa  # noqa: F401
+            _has_flash = True
+        except ImportError:
+            pass
+        if not _has_flash and _d.get('_attn_implementation') == 'flash_attention_2':
+            _d['_attn_implementation'] = 'sdpa'
         llm_config = AutoConfig.from_pretrained(**_d)
-        # Force float32 precision for the model
-        llm_config.torch_dtype = torch.float32
+        llm_config.torch_dtype = torch.bfloat16
         # Force enable pre_norm
         llm_config.pre_norm = True
         self.transformer = AutoModelForCausalLM.from_config(config=llm_config)

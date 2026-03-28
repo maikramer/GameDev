@@ -21,19 +21,15 @@ while [[ "$#" -gt 0 ]]; do
     shift
 done
 
-# ensure psutil is installed for memory management
-pip install psutil --quiet
-if [ $? -ne 0 ]; then
-    echo "Warning: Failed to install psutil. Memory management may not work properly."
-fi
+# Interpretador: variável PYTHON definida pelo CLI rigging3d (venv com bpy, lightning, …).
+PY="${PYTHON:-python}"
 
 # set the time for all processes to use
 time=$(date "+%Y_%m_%d_%H_%M_%S")
 
 for (( i=0; i<num_runs; i++ ))
 do
-    cmd=" \
-    python -m src.data.extract \
+    cmd="${PY} -m src.data.extract \
     --config=$config \
     --require_suffix=$require_suffix \
     --force_override=$force_override \

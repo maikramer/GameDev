@@ -7,7 +7,7 @@ components:
   data: quick_inference
   tokenizer: tokenizer_parts_articulationxl_256
   transform: inference_ar_transform
-  model: unirig_ar_350m_1024_81920_float32
+  model: unirig_ar_350m_1024_81920_bfloat16
   system: ar_inference_articulationxl
   data_name: raw_data.npz
 

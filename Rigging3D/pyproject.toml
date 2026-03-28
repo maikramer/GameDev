@@ -22,7 +22,7 @@ dependencies = [
 inference = [
     "torch>=2.3.1",
     "torchvision>=0.18.0",
-    "numpy==1.26.4",
+    "numpy>=1.26.4,<3",
     "transformers==4.51.3",
     "python-box",
     "einops",
@@ -32,13 +32,15 @@ inference = [
     "addict",
     "timm",
     "fast-simplification",
-    "bpy==4.2",
-    "flash_attn",
+    "bpy==4.2.0",     # wheels PyPI só cp311 — usar Python 3.11
     "trimesh",
     "open3d",
     "pyrender",
     "huggingface_hub",
     "wandb",
+    # Deps CUDA-specific (instaladas por setup.sh / installer.py --inference):
+    #   spconv-cu121, cumm-cu121, torch-scatter, torch-cluster
+    # flash_attn: opcional (fallback SDPA). Instalar com: bash scripts/install_flash_attn.sh
 ]
 dev = ["pytest>=7.4.0", "pytest-cov>=4.0.0", "ruff>=0.11.0"]
 

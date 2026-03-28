@@ -161,7 +161,14 @@ def main() -> None:
 
     trainer = L.Trainer(callbacks=callbacks, logger=None, **trainer_config)
     assert ckpt is not None, "resume_from_checkpoint necessário para inferência"
-    trainer.predict(system, datamodule=data, ckpt_path=ckpt, return_predictions=False)
+    # PyTorch ≥2.6: checkpoints UniRig/HF incluem hyperparams serializados (box.Box, etc.).
+    trainer.predict(
+        system,
+        datamodule=data,
+        ckpt_path=ckpt,
+        return_predictions=False,
+        weights_only=False,
+    )
 
 
 if __name__ == "__main__":

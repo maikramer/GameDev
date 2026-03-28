@@ -134,6 +134,9 @@ class ARSystem(L.LightningModule):
             if self.validate_cast == 'bfloat16':
                 with torch.autocast('cuda', dtype=torch.bfloat16):
                     prediction: List[DetokenizeOutput] = self._predict_step(batch=batch, batch_idx=batch_idx, dataloader_idx=dataloader_idx)
+            elif self.validate_cast == 'float16':
+                with torch.autocast('cuda', dtype=torch.float16):
+                    prediction: List[DetokenizeOutput] = self._predict_step(batch=batch, batch_idx=batch_idx, dataloader_idx=dataloader_idx)
             else:
                 prediction: List[DetokenizeOutput] = self._predict_step(batch=batch, batch_idx=batch_idx, dataloader_idx=dataloader_idx)
         except Exception as e:
