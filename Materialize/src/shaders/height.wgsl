@@ -1,4 +1,17 @@
-// src/shaders/height.wgsl
+struct Params {
+    height_blur_radius_0: f32,
+    height_blur_radius_1: f32,
+    height_blur_radius_2: f32,
+    height_contrast: f32,
+    normal_strength: f32,
+    metallic_scale: f32,
+    smoothness_base: f32,
+    smoothness_metallic_boost: f32,
+    edge_contrast: f32,
+    ao_depth_scale: f32,
+    _pad0: f32,
+    _pad1: f32,
+}
 
 @group(0) @binding(0)
 var input_texture: texture_2d<f32>;
@@ -6,10 +19,11 @@ var input_texture: texture_2d<f32>;
 @group(0) @binding(1)
 var output_texture: texture_storage_2d<r32float, write>;
 
-// Luminance weights (ITU-R BT.709)
+@group(1) @binding(0)
+var<uniform> params: Params;
+
 const LUM_WEIGHTS: vec3<f32> = vec3<f32>(0.2126, 0.7152, 0.0722);
 
-// Simple box blur for MVP (can be improved to Gaussian)
 fn simple_blur(coords: vec2<i32>, dims: vec2<u32>, radius: i32) -> f32 {
     var sum = 0.0;
     var count = 0.0;
@@ -34,20 +48,21 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let dims = textureDimensions(input_texture);
     let coords = vec2<i32>(global_id.xy);
 
-    // Early exit if out of bounds
     if (coords.x >= i32(dims.x) || coords.y >= i32(dims.y)) {
         return;
     }
 
-    // Multi-level blur (simplified for MVP)
-    let h0 = simple_blur(coords, dims, 1);
-    let h1 = simple_blur(coords, dims, 2);
-    let h2 = simple_blur(coords, dims, 4);
+    let r0 = i32(params.height_blur_radius_0);
+    let r1 = i32(params.height_blur_radius_1);
+    let r2 = i32(params.height_blur_radius_2);
+
+    let h0 = simple_blur(coords, dims, r0);
+    let h1 = simple_blur(coords, dims, r1);
+    let h2 = simple_blur(coords, dims, r2);
 
     let height = h0 * 0.5 + h1 * 0.3 + h2 * 0.2;
 
-    // Apply contrast enhancement (sigmoid-like)
-    let contrasted = (height - 0.5) * 1.5 + 0.5;
+    let contrasted = (height - 0.5) * params.height_contrast + 0.5;
     let final_height = clamp(contrasted, 0.0, 1.0);
 
     textureStore(output_texture, coords, vec4<f32>(final_height, 0.0, 0.0, 1.0));

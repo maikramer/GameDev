@@ -2,6 +2,7 @@ mod cli;
 mod gpu;
 mod io;
 mod pipeline;
+mod preset;
 mod skill_install;
 
 use clap::Parser;
@@ -30,8 +31,11 @@ async fn run() -> anyhow::Result<()> {
     let image = io::load_image(&input)?;
     let (width, height) = (image.width(), image.height());
 
+    let params = args.preset.params();
+
     if args.verbose {
         println!("Loaded: {} ({}x{})", input, width, height);
+        println!("Preset: {}", args.preset);
     }
 
     let pipeline = pipeline::Pipeline::new().await?;
@@ -40,7 +44,7 @@ async fn run() -> anyhow::Result<()> {
         println!("Processing...");
     }
 
-    let maps = pipeline.process(&image).await?;
+    let maps = pipeline.process(&image, &params).await?;
 
     if args.verbose {
         println!("Processing complete");

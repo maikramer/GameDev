@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use image::GenericImageView;
+use wgpu::util::DeviceExt;
 
 pub struct GpuContext {
     pub device: wgpu::Device,
@@ -108,19 +109,62 @@ impl GpuContext {
         })
     }
 
+    /// Bind group layout for the uniform params buffer at @group(1) @binding(0).
+    pub fn create_params_bind_group_layout(&self) -> wgpu::BindGroupLayout {
+        self.device
+            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("params_bind_group_layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            })
+    }
+
+    /// Create a GPU buffer initialised with the preset params bytes.
+    pub fn create_params_buffer(&self, data: &[u8]) -> wgpu::Buffer {
+        self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("params_buffer"),
+            contents: data,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        })
+    }
+
+    /// Bind group that binds the params buffer to @group(1) @binding(0).
+    pub fn create_params_bind_group(
+        &self,
+        layout: &wgpu::BindGroupLayout,
+        buffer: &wgpu::Buffer,
+    ) -> wgpu::BindGroup {
+        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: buffer.as_entire_binding(),
+            }],
+            label: Some("params_bind_group"),
+        })
+    }
+
     pub fn create_compute_pipeline(
         &self,
         shader_code: &str,
         entry_point: &str,
         input_format: wgpu::TextureFormat,
         output_format: wgpu::TextureFormat,
+        params_layout: &wgpu::BindGroupLayout,
     ) -> Result<ComputePipeline> {
         let shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("compute_shader"),
             source: wgpu::ShaderSource::Wgsl(shader_code.into()),
         });
 
-        // R32Float is not filterable; Rgba8Unorm is
         let filterable = matches!(input_format, wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba8UnormSrgb);
 
         let bind_group_layout = self
@@ -155,7 +199,7 @@ impl GpuContext {
             self.device
                 .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("pipeline_layout"),
-                    bind_group_layouts: &[&bind_group_layout],
+                    bind_group_layouts: &[&bind_group_layout, params_layout],
                     push_constant_ranges: &[],
                 });
 
@@ -196,7 +240,6 @@ impl GpuContext {
         })
     }
 
-    /// Create a compute pipeline with two input textures and one storage output.
     pub fn create_compute_pipeline_2_inputs(
         &self,
         shader_code: &str,
@@ -204,6 +247,7 @@ impl GpuContext {
         input_format_0: wgpu::TextureFormat,
         input_format_1: wgpu::TextureFormat,
         output_format: wgpu::TextureFormat,
+        params_layout: &wgpu::BindGroupLayout,
     ) -> Result<ComputePipeline> {
         let shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("compute_shader_2in"),
@@ -265,7 +309,7 @@ impl GpuContext {
             self.device
                 .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("pipeline_layout_2in"),
-                    bind_group_layouts: &[&bind_group_layout],
+                    bind_group_layouts: &[&bind_group_layout, params_layout],
                     push_constant_ranges: &[],
                 });
 
@@ -314,7 +358,8 @@ impl GpuContext {
     pub fn dispatch_compute(
         &self,
         pipeline: &wgpu::ComputePipeline,
-        bind_group: &wgpu::BindGroup,
+        texture_bind_group: &wgpu::BindGroup,
+        params_bind_group: &wgpu::BindGroup,
         workgroups_x: u32,
         workgroups_y: u32,
     ) {
@@ -331,7 +376,8 @@ impl GpuContext {
             });
 
             compute_pass.set_pipeline(pipeline);
-            compute_pass.set_bind_group(0, bind_group, &[]);
+            compute_pass.set_bind_group(0, texture_bind_group, &[]);
+            compute_pass.set_bind_group(1, params_bind_group, &[]);
             compute_pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
         }
 

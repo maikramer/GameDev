@@ -1,11 +1,26 @@
-// Ambient occlusion from height map (cavity-style).
-// Samples in 8 directions; occlusion where neighbor height > center. Original uses normal+height ray march.
+struct Params {
+    height_blur_radius_0: f32,
+    height_blur_radius_1: f32,
+    height_blur_radius_2: f32,
+    height_contrast: f32,
+    normal_strength: f32,
+    metallic_scale: f32,
+    smoothness_base: f32,
+    smoothness_metallic_boost: f32,
+    edge_contrast: f32,
+    ao_depth_scale: f32,
+    _pad0: f32,
+    _pad1: f32,
+}
 
 @group(0) @binding(0)
 var height_texture: texture_2d<f32>;
 
 @group(0) @binding(1)
 var output_texture: texture_storage_2d<rgba8unorm, write>;
+
+@group(1) @binding(0)
+var<uniform> params: Params;
 
 fn sample_height(coords: vec2<i32>, dims: vec2<u32>) -> f32 {
     let clamped = clamp(coords, vec2<i32>(0), vec2<i32>(dims) - vec2<i32>(1));
@@ -22,8 +37,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     let center_h = sample_height(coords, dims);
-    let r1 = 1;
-    let r2 = 2;
     var occlusion = 0.0;
 
     let h1_0 = sample_height(coords + vec2<i32>(1, 0), dims);
@@ -59,8 +72,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     occlusion += max(0.0, h1_7 - center_h) * 1.0 + max(0.0, h2_7 - center_h) * 0.5;
 
     occlusion = occlusion / 12.0;
-    let depth_scale = 3.0;
-    occlusion = clamp(occlusion * depth_scale, 0.0, 1.0);
+    occlusion = clamp(occlusion * params.ao_depth_scale, 0.0, 1.0);
     let ao = 1.0 - occlusion;
 
     textureStore(output_texture, coords, vec4<f32>(ao, ao, ao, 1.0));

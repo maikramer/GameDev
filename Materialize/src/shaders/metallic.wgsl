@@ -1,4 +1,17 @@
-// src/shaders/metallic.wgsl
+struct Params {
+    height_blur_radius_0: f32,
+    height_blur_radius_1: f32,
+    height_blur_radius_2: f32,
+    height_contrast: f32,
+    normal_strength: f32,
+    metallic_scale: f32,
+    smoothness_base: f32,
+    smoothness_metallic_boost: f32,
+    edge_contrast: f32,
+    ao_depth_scale: f32,
+    _pad0: f32,
+    _pad1: f32,
+}
 
 @group(0) @binding(0)
 var input_texture: texture_2d<f32>;
@@ -6,22 +19,21 @@ var input_texture: texture_2d<f32>;
 @group(0) @binding(1)
 var output_texture: texture_storage_2d<rgba8unorm, write>;
 
-// RGB to HSL conversion
+@group(1) @binding(0)
+var<uniform> params: Params;
+
 fn rgb_to_hsl(rgb: vec3<f32>) -> vec3<f32> {
     let max_val = max(max(rgb.r, rgb.g), rgb.b);
     let min_val = min(min(rgb.r, rgb.g), rgb.b);
     let delta = max_val - min_val;
 
-    // Luminance
     let l = (max_val + min_val) * 0.5;
 
-    // Saturation
     var s = 0.0;
     if (delta > 0.0) {
         s = delta / (1.0 - abs(2.0 * l - 1.0));
     }
 
-    // Hue
     var h = 0.0;
     if (delta > 0.0) {
         if (max_val == rgb.r) {
@@ -40,13 +52,11 @@ fn rgb_to_hsl(rgb: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(h, s, l);
 }
 
-// Smoothstep function
 fn smooth_step(edge0: f32, edge1: f32, x: f32) -> f32 {
     let t = clamp((x - edge0) / (edge1 - edge0), 0.0, 1.0);
     return t * t * (3.0 - 2.0 * t);
 }
 
-// Detect metallic based on HSL analysis
 fn detect_metallic(rgb: vec3<f32>) -> f32 {
     let hsl = rgb_to_hsl(rgb);
     let h = hsl.x;
@@ -95,7 +105,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     let color = textureLoad(input_texture, coords, 0).rgb;
-    let metallic = detect_metallic(color);
+    let raw = detect_metallic(color);
+    let metallic = clamp(raw * params.metallic_scale, 0.0, 1.0);
 
     textureStore(output_texture, coords, vec4<f32>(metallic, 0.0, 0.0, 1.0));
 }

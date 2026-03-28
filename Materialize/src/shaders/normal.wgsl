@@ -1,4 +1,17 @@
-// src/shaders/normal.wgsl
+struct Params {
+    height_blur_radius_0: f32,
+    height_blur_radius_1: f32,
+    height_blur_radius_2: f32,
+    height_contrast: f32,
+    normal_strength: f32,
+    metallic_scale: f32,
+    smoothness_base: f32,
+    smoothness_metallic_boost: f32,
+    edge_contrast: f32,
+    ao_depth_scale: f32,
+    _pad0: f32,
+    _pad1: f32,
+}
 
 @group(0) @binding(0)
 var height_texture: texture_2d<f32>;
@@ -6,15 +19,15 @@ var height_texture: texture_2d<f32>;
 @group(0) @binding(1)
 var output_texture: texture_storage_2d<rgba8unorm, write>;
 
+@group(1) @binding(0)
+var<uniform> params: Params;
+
 fn sample_height(coords: vec2<i32>, dims: vec2<u32>) -> f32 {
     let clamped = clamp(coords, vec2<i32>(0), vec2<i32>(dims) - vec2<i32>(1));
     return textureLoad(height_texture, clamped, 0).r;
 }
 
 fn sobel_gradient(center: vec2<i32>, dims: vec2<u32>) -> vec2<f32> {
-    // Sobel X: [-1,0,1; -2,0,2; -1,0,1]
-    // Sobel Y: [-1,-2,-1; 0,0,0; 1,2,1]
-    // Unrolled to avoid variable array index
     let h_m1_m1 = sample_height(center + vec2<i32>(-1, -1), dims);
     let h_0_m1 = sample_height(center + vec2<i32>(0, -1), dims);
     let h_1_m1 = sample_height(center + vec2<i32>(1, -1), dims);
@@ -42,7 +55,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     let gradient = sobel_gradient(coords, dims);
 
-    let scale = 2.0;
+    let scale = params.normal_strength;
     let gx = gradient.x * scale;
     let gy = gradient.y * scale;
 

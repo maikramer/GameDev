@@ -1,11 +1,26 @@
-// Edge from normal map: gradient of normal X/Y, combined.
-// Matches Blit_Edge_From_Normal fragEdge logic (diffX, diffY from neighbor samples).
+struct Params {
+    height_blur_radius_0: f32,
+    height_blur_radius_1: f32,
+    height_blur_radius_2: f32,
+    height_contrast: f32,
+    normal_strength: f32,
+    metallic_scale: f32,
+    smoothness_base: f32,
+    smoothness_metallic_boost: f32,
+    edge_contrast: f32,
+    ao_depth_scale: f32,
+    _pad0: f32,
+    _pad1: f32,
+}
 
 @group(0) @binding(0)
 var normal_texture: texture_2d<f32>;
 
 @group(0) @binding(1)
 var output_texture: texture_storage_2d<rgba8unorm, write>;
+
+@group(1) @binding(0)
+var<uniform> params: Params;
 
 fn sample_normal_rg(coords: vec2<i32>, dims: vec2<u32>) -> vec2<f32> {
     let clamped = clamp(coords, vec2<i32>(0), vec2<i32>(dims) - vec2<i32>(1));
@@ -22,7 +37,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
-    let contrast = 2.0;
+    let contrast = params.edge_contrast;
     let n_x_plus = sample_normal_rg(coords + vec2<i32>(1, 0), dims);
     let n_x_minus = sample_normal_rg(coords + vec2<i32>(-1, 0), dims);
     let n_y_plus = sample_normal_rg(coords + vec2<i32>(0, 1), dims);

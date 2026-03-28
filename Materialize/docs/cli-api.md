@@ -22,6 +22,7 @@ materialize [OPTIONS] [INPUT] [COMMAND]
 |-------|-------|------|--------|-----------|
 | `--output` | `-o` | String | `./` | Diretório de saída |
 | `--format` | `-f` | Enum | `png` | Formato dos arquivos de saída |
+| `--preset` | `-p` | Enum | `default` | Preset de material (ver seção Presets) |
 | `--quality` | `-q` | Int (0-100) | `95` | Qualidade JPEG (quando aplicável) |
 | `--verbose` | `-v` | Bool | `false` | Modo verbose |
 | `--quiet` | | Bool | `false` | Não listar arquivos gerados no sucesso |
@@ -29,6 +30,18 @@ materialize [OPTIONS] [INPUT] [COMMAND]
 | `--version` | `-V` | | | Mostrar versão |
 
 ## Enums
+
+### Preset de Material (`--preset`)
+
+| Valor | Descrição | Uso ideal |
+|-------|-----------|-----------|
+| `default` | Configurações balanceadas | Qualquer textura (comportamento original) |
+| `skin` | Metallic zero, smoothness médio-alto, normals suaves | Pele humana, personagens |
+| `floor` | Height pronunciado, AO forte, superfície áspera | Chão, piso, azulejo, terra |
+| `metal` | Metallic boost, edges nítidos, polido | Aço, ouro, cobre, alumínio |
+| `fabric` | Matte, sem metallic, edges suaves | Tecido, roupa, cortina |
+| `wood` | Sem metallic, detalhe de grão moderado | Madeira, móveis, piso de madeira |
+| `stone` | Muito áspero, AO profundo, normals fortes | Pedra, rocha, concreto |
 
 ### Formato de Saída (`--format`)
 
@@ -126,15 +139,23 @@ materialize brick.png
 
 Gera na pasta atual os seis mapas (height, normal, metallic, smoothness, edge, ao).
 
-### Exemplo 2: Diretório de saída
+### Exemplo 2: Diretório de saída com preset
 
 ```bash
-materialize brick.png -o ./materials/brick/
+materialize brick.png -o ./materials/brick/ -p floor
 ```
 
-Gera em `./materials/brick/` os seis mapas com prefixo do nome do arquivo.
+Gera em `./materials/brick/` os seis mapas otimizados para textura de chão.
 
-### Exemplo 3: Pipeline em script
+### Exemplo 3: Textura de personagem
+
+```bash
+materialize character_skin.png -p skin -o ./character/
+```
+
+Gera mapas otimizados para pele humana (sem metallic, normals suaves).
+
+### Exemplo 4: Pipeline em script
 
 ```bash
 #!/bin/bash
