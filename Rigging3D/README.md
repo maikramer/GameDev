@@ -35,6 +35,8 @@ cd Rigging3D && python3.11 -m venv .venv && source .venv/bin/activate
 pip install -e ".[inference]"
 ```
 
+**Windows:** o fluxo de inferência completo foi testado em **Linux**; no Windows usa `python scripts/installer.py --inference` (Python por defeito `python` se `PYTHON_CMD` não estiver definido). O script `install_flash_attn.sh` exige **Git Bash** ou **WSL** — sem `bash` no PATH, o instalador avisa e podes instalar flash-attn manualmente.
+
 ### Deps CUDA-specific (se instalou manualmente)
 
 O `setup.sh` instala tudo automaticamente, mas se precisares instalar manualmente:

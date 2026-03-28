@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -20,6 +21,7 @@ if _shared_src.is_dir() and str(_shared_src) not in sys.path:
     sys.path.insert(0, str(_shared_src))
 
 from gamedev_shared.installer import PythonProjectInstaller
+from gamedev_shared.installer.base import default_python_command
 
 
 class Rigging3DInstaller(PythonProjectInstaller):
@@ -125,11 +127,16 @@ class Rigging3DInstaller(PythonProjectInstaller):
 
         if not self.skip_flash:
             flash_script = self.project_root / "scripts" / "install_flash_attn.sh"
-            if flash_script.is_file():
+            if self.is_windows and not shutil.which("bash"):
+                self.logger.warn(
+                    "flash-attn: script bash não disponível no Windows sem Git Bash/WSL. "
+                    "Instala manualmente ou usa WSL; ver scripts/install_flash_attn.sh"
+                )
+            elif flash_script.is_file() and (shutil.which("bash") or not self.is_windows):
                 self.logger.step("Instalando flash-attn...")
-                pip_bin = str(self.venv_python).replace("/python", "/pip")
-                subprocess.run(["bash", str(flash_script), "--pip", pip_bin])
-            else:
+                pip_bin = str(self.venv_python).replace("/python", "/pip").replace("\\python.exe", "\\pip.exe")
+                subprocess.run(["bash", str(flash_script), "--pip", pip_bin], check=False)
+            elif not flash_script.is_file():
                 self.logger.warn("Script install_flash_attn.sh em falta")
 
     def setup_directories(self) -> None:
@@ -197,8 +204,8 @@ Sem --inference instala apenas CLI base. Com --inference instala PyTorch, bpy, s
     parser.add_argument("--force", action="store_true", help="Reinstalar mesmo se já existir")
     parser.add_argument(
         "--python",
-        default=os.environ.get("PYTHON_CMD", "python3"),
-        help="Comando Python",
+        default=default_python_command(),
+        help="Comando Python (defeito: python no Windows)",
     )
 
     args = parser.parse_args()

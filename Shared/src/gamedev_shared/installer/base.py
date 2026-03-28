@@ -11,6 +11,16 @@ from pathlib import Path
 from ..logging import Logger
 
 
+def default_python_command() -> str:
+    """Comando Python por defeito: ``PYTHON_CMD`` se definido; senão ``python`` no Windows e ``python3`` noutros."""
+    env = os.environ.get("PYTHON_CMD", "").strip()
+    if env:
+        return env
+    if platform.system().lower() == "windows":
+        return "python"
+    return "python3"
+
+
 class BaseInstaller:
     """Classe base para instaladores do monorepo GameDev.
 
@@ -101,8 +111,15 @@ class BaseInstaller:
         elif shutil.which("pacman"):
             self.logger.info("Detectado: Arch Linux")
             self.logger.warn("Opcional: sudo pacman -S python python-pip git base-devel")
+        elif self.is_windows:
+            self.logger.info("Detectado: Windows")
+            self.logger.warn(
+                "Python: python.org ou ``winget install Python.Python.3.12``. "
+                "CUDA: drivers NVIDIA + CUDA Toolkit (nvcc) para compilar extensões. "
+                "Git for Windows para clones sparse (Text3D custom_rasterizer)."
+            )
         else:
-            self.logger.warn("Gerenciador de pacotes não reconhecido")
+            self.logger.warn("SO não reconhecido — instala Python 3.10+, pip e git manualmente.")
 
     # ------------------------------------------------------------------
     # PyTorch

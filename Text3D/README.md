@@ -30,6 +30,8 @@ pip install -r config/requirements.txt
 pip install -e .
 ```
 
+**Windows:** `python -m venv .venv` e `.\.venv\Scripts\Activate.ps1`; ou `scripts\setup.ps1`. **Instalador** (`python scripts/installer.py`): cria `.venv`, instala dependências e gera `text3d.cmd` em `%USERPROFILE%\bin` (adiciona essa pasta ao PATH). **Linux/macOS:** `bash scripts/setup.sh` ou o mesmo instalador (wrappers em `~/.local/bin`). O interpretador por defeito é `python` no Windows e `python3` noutros (sobrescrever com `PYTHON_CMD`).
+
 ## Uso
 
 | Subcomando | Descrição |

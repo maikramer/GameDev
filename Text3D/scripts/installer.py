@@ -21,6 +21,7 @@ if _shared_src.is_dir() and str(_shared_src) not in sys.path:
     sys.path.insert(0, str(_shared_src))
 
 from gamedev_shared.installer import PythonProjectInstaller
+from gamedev_shared.installer.base import default_python_command
 
 
 class Text3DInstaller(PythonProjectInstaller):
@@ -56,7 +57,7 @@ class Text3DInstaller(PythonProjectInstaller):
         self._show_text3d_summary()
         return True
 
-    def check_python(self, min_version: tuple[int, int] = (3, 8)) -> bool:
+    def check_python(self, min_version: tuple[int, int] = (3, 10)) -> bool:
         return super().check_python(min_version)
 
     def _warn_monorepo_layout(self) -> None:
@@ -110,7 +111,8 @@ class Text3DInstaller(PythonProjectInstaller):
         if not shutil.which("nvcc"):
             cuda_home = self._detect_cuda_home()
             if cuda_home and (Path(cuda_home) / "bin" / "nvcc").is_file():
-                os.environ["PATH"] = f"{cuda_home}/bin:" + os.environ.get("PATH", "")
+                cuda_bin = str(Path(cuda_home) / "bin")
+                os.environ["PATH"] = cuda_bin + os.pathsep + os.environ.get("PATH", "")
             else:
                 self.logger.warn(
                     "nvcc não encontrado — custom_rasterizer não será compilado. "
@@ -125,6 +127,13 @@ class Text3DInstaller(PythonProjectInstaller):
 
         self.logger.info(f"CUDA_HOME={cuda_home}")
         os.environ["CUDA_HOME"] = cuda_home
+
+        if not shutil.which("git"):
+            self.logger.warn(
+                "git não encontrado no PATH — necessário para sparse-clone do Hunyuan3D-2. "
+                "Linux: git; Windows: Git for Windows."
+            )
+            return
 
         import tempfile
 
@@ -198,25 +207,53 @@ class Text3DInstaller(PythonProjectInstaller):
     def write_env_file(self) -> None:
         config_dir = Path.home() / ".config" / "text3d"
         config_dir.mkdir(parents=True, exist_ok=True)
-        env_sh = config_dir / "env.sh"
-        content = (
-            "# Text3D — gerado por scripts/installer.py\n"
-            "# source ~/.config/text3d/env.sh\n"
-            'export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"\n'
-            "\n"
-            "# Descomenta se compilaste custom_rasterizer com um toolkit específico:\n"
-            "# export CUDA_HOME=/usr/local/cuda-11.8\n"
-        )
-        with open(env_sh, "w", encoding="utf-8") as f:
-            f.write(content)
-        self.logger.info(f"Ambiente opcional: {env_sh}")
+        if self.is_windows:
+            env_bat = config_dir / "env.bat"
+            content_bat = (
+                "@echo off\r\n"
+                "REM Text3D — gerado por scripts/installer.py\r\n"
+                "REM Chama antes de text3d: call %USERPROFILE%\\.config\\text3d\\env.bat\r\n"
+                'if not defined PYTORCH_CUDA_ALLOC_CONF set PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True\r\n'
+            )
+            with open(env_bat, "w", encoding="utf-8", newline="\r\n") as f:
+                f.write(content_bat)
+            self.logger.info(f"Ambiente opcional (cmd): {env_bat}")
+        else:
+            env_sh = config_dir / "env.sh"
+            content = (
+                "# Text3D — gerado por scripts/installer.py\n"
+                "# source ~/.config/text3d/env.sh\n"
+                'export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"\n'
+                "\n"
+                "# Descomenta se compilaste custom_rasterizer com um toolkit específico:\n"
+                "# export CUDA_HOME=/usr/local/cuda-11.8\n"
+            )
+            with open(env_sh, "w", encoding="utf-8") as f:
+                f.write(content)
+            self.logger.info(f"Ambiente opcional: {env_sh}")
 
     def create_text3d_wrappers(self) -> None:
-        python_path = str(self.venv_python) if (self.venv_exists and self.use_venv) else self.python_cmd
-        env_sh = Path.home() / ".config" / "text3d" / "env.sh"
-
+        python_path = str(self.venv_python) if self.venv_exists else self.python_cmd
         self.bin_dir.mkdir(parents=True, exist_ok=True)
 
+        if self.is_windows:
+            w_cmd = self.bin_dir / "text3d.cmd"
+            with open(w_cmd, "w", encoding="utf-8", newline="\r\n") as f:
+                f.write("@echo off\r\n")
+                f.write("REM Text3D — gerado por installer (Python do venv do projecto)\r\n")
+                f.write('if not defined PYTORCH_CUDA_ALLOC_CONF set PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True\r\n')
+                f.write(f'"{python_path}" -m text3d %*\r\n')
+            self.logger.success(str(w_cmd))
+
+            w_gen = self.bin_dir / "text3d-generate.cmd"
+            with open(w_gen, "w", encoding="utf-8", newline="\r\n") as f:
+                f.write("@echo off\r\n")
+                f.write(f'"{python_path}" -m text3d generate %*\r\n')
+            self.logger.success(str(w_gen))
+            self.create_activate_wrapper()
+            return
+
+        env_sh = Path.home() / ".config" / "text3d" / "env.sh"
         wrapper = self.bin_dir / "text3d"
         with open(wrapper, "w", encoding="utf-8") as f:
             f.write("#!/bin/bash\n")
@@ -278,7 +315,7 @@ Exemplos:
 
 Variáveis:
   INSTALL_PREFIX    Diretório de instalação
-  PYTHON_CMD        Interpretador Python (default: python3)
+  PYTHON_CMD        Interpretador Python (defeito: python no Windows, python3 no Linux/macOS)
         """,
     )
     parser.add_argument(
@@ -301,8 +338,8 @@ Variáveis:
     )
     parser.add_argument(
         "--python",
-        default=os.environ.get("PYTHON_CMD", "python3"),
-        help="Comando Python (padrão: python3)",
+        default=default_python_command(),
+        help="Comando Python (defeito: python no Windows, python3 noutros)",
     )
 
     args = parser.parse_args()

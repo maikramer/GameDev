@@ -19,6 +19,7 @@ if _shared_src.is_dir() and str(_shared_src) not in sys.path:
     sys.path.insert(0, str(_shared_src))
 
 from gamedev_shared.installer import PythonProjectInstaller
+from gamedev_shared.installer.base import default_python_command
 
 
 class Skymap2DInstaller(PythonProjectInstaller):
@@ -99,7 +100,7 @@ Nota: Skymap2D não usa PyTorch local — geração via HF Inference API (cloud)
     parser.add_argument("--force", action="store_true", help="Reinstalar mesmo se já existir")
     parser.add_argument(
         "--python",
-        default=os.environ.get("PYTHON_CMD", "python3"),
+        default=default_python_command(),
         help="Comando Python",
     )
 

@@ -1,6 +1,6 @@
 """Instaladores base para projetos Python e Rust do monorepo GameDev."""
 
-from .base import BaseInstaller
+from .base import BaseInstaller, default_python_command
 from .python_installer import PythonProjectInstaller
 from .registry import (
     TOOLS,
@@ -16,6 +16,7 @@ from .rust_installer import RustProjectInstaller
 __all__ = [
     "TOOLS",
     "BaseInstaller",
+    "default_python_command",
     "PythonProjectInstaller",
     "RustProjectInstaller",
     "ToolKind",
