@@ -122,12 +122,16 @@ def _expected_materialize_paths(albedo_stem: str, out_dir: Path, ext: str = "png
     }
 
 
+MATERIALIZE_PRESETS = ("default", "skin", "floor", "metal", "fabric", "wood", "stone")
+
+
 def run_materialize_cli(
     albedo_path: Path,
     output_dir: Path,
     *,
     materialize_bin: str | Path | None = None,
     image_format: str = "png",
+    preset: str = "default",
     verbose: bool = False,
 ) -> dict:
     """
@@ -143,6 +147,8 @@ def run_materialize_cli(
         str(output_dir),
         "-f",
         image_format,
+        "-p",
+        preset,
     ]
     if verbose:
         cmd.append("-v")
@@ -166,6 +172,7 @@ def apply_materialize_pbr(
     work_dir: str | Path | None = None,
     save_sidecar_maps_dir: str | Path | None = None,
     roughness_from_one_minus_smoothness: bool = True,
+    preset: str = "default",
     verbose: bool = False,
 ) -> trimesh.Trimesh:
     """
@@ -186,6 +193,7 @@ def apply_materialize_pbr(
             wd,
             materialize_bin=materialize_bin,
             image_format="png",
+            preset=preset,
             verbose=verbose,
         )
 

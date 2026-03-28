@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -43,6 +45,7 @@ class Text3DInstaller(PythonProjectInstaller):
         if not super().run():
             return False
 
+        self.install_custom_rasterizer()
         self.setup_models()
         self.create_text3d_wrappers()
         self.setup_directories()
@@ -68,6 +71,102 @@ class Text3DInstaller(PythonProjectInstaller):
     def install_system_wide(self) -> None:
         self._warn_monorepo_layout()
         super().install_system_wide()
+
+    # ------------------------------------------------------------------
+    # custom_rasterizer (Hunyuan3D-Paint)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _detect_cuda_home() -> str | None:
+        for candidate in (
+            os.environ.get("CUDA_HOME"),
+            os.environ.get("CUDA_PATH"),
+        ):
+            if candidate and Path(candidate).is_dir():
+                return candidate
+        for p in sorted(Path("/usr/local").glob("cuda-*"), reverse=True):
+            if (p / "bin" / "nvcc").is_file():
+                return str(p)
+        if (Path("/usr/lib/cuda") / "bin" / "nvcc").is_file():
+            return "/usr/lib/cuda"
+        return None
+
+    def install_custom_rasterizer(self) -> None:
+        """Compila e instala custom_rasterizer via sparse-clone do Hunyuan3D-2."""
+        self.logger.step("custom_rasterizer (Hunyuan3D-Paint)...")
+
+        python = str(self.venv_python) if self.venv_exists else self.python_cmd
+        try:
+            subprocess.run(
+                [python, "-c", "import torch; import custom_rasterizer"],
+                capture_output=True,
+                check=True,
+            )
+            self.logger.info("custom_rasterizer já instalado — pulando.")
+            return
+        except subprocess.CalledProcessError:
+            pass
+
+        if not shutil.which("nvcc"):
+            cuda_home = self._detect_cuda_home()
+            if cuda_home and (Path(cuda_home) / "bin" / "nvcc").is_file():
+                os.environ["PATH"] = f"{cuda_home}/bin:" + os.environ.get("PATH", "")
+            else:
+                self.logger.warn(
+                    "nvcc não encontrado — custom_rasterizer não será compilado. "
+                    "Instale CUDA Toolkit e execute: bash scripts/install_custom_rasterizer.sh"
+                )
+                return
+
+        cuda_home = self._detect_cuda_home()
+        if not cuda_home:
+            self.logger.warn("CUDA_HOME não detectado — pulando custom_rasterizer.")
+            return
+
+        self.logger.info(f"CUDA_HOME={cuda_home}")
+        os.environ["CUDA_HOME"] = cuda_home
+
+        import tempfile
+
+        clone_dir = Path(tempfile.gettempdir()) / "Hunyuan3D-2"
+        cr_dir = clone_dir / "hy3dgen" / "texgen" / "custom_rasterizer"
+
+        if not cr_dir.is_dir():
+            self.logger.info("Sparse-clone do Hunyuan3D-2 (só custom_rasterizer)...")
+            if clone_dir.exists():
+                shutil.rmtree(clone_dir, ignore_errors=True)
+            subprocess.run(
+                [
+                    "git",
+                    "clone",
+                    "--depth",
+                    "1",
+                    "--filter=blob:none",
+                    "--sparse",
+                    "https://github.com/Tencent-Hunyuan/Hunyuan3D-2.git",
+                    str(clone_dir),
+                ],
+                check=True,
+            )
+            subprocess.run(
+                ["git", "sparse-checkout", "set", "hy3dgen/texgen/custom_rasterizer"],
+                check=True,
+                cwd=str(clone_dir),
+            )
+
+        self.logger.info("Compilando custom_rasterizer...")
+        pip_cmd = [python, "-m", "pip", "install", "-e", ".", "--no-build-isolation"]
+        subprocess.run(pip_cmd, check=True, cwd=str(cr_dir))
+
+        try:
+            subprocess.run(
+                [python, "-c", "import torch; import custom_rasterizer"],
+                capture_output=True,
+                check=True,
+            )
+            self.logger.success("custom_rasterizer compilado e importável.")
+        except subprocess.CalledProcessError:
+            self.logger.warn("custom_rasterizer compilou mas falhou na importação. Verifique nvcc/CUDA.")
 
     def setup_models(self) -> None:
         self.logger.step("Configurando modelos...")
@@ -150,11 +249,15 @@ class Text3DInstaller(PythonProjectInstaller):
             commands=[
                 "text3d doctor",
                 "text3d --help",
-                "text3d generate 'um robô' -o robô.glb --preset balanced",
-                "text3d generate 'prompt' --final -o modelo.glb",
+                "text3d generate 'um robô' -o robô.glb",
+                "text3d generate 'guerreiro' --no-texture -o shape.glb",
+                "text3d generate 'carro' --preset hq -o carro.glb",
                 "text3d texture mesh.glb -i ref.png -o pintado.glb",
             ],
             extras=[
+                "[dim]Pipeline padrão: shape → repair → remesh → textura (Paint)[/dim]"
+                if self.logger.rich_available
+                else "Pipeline padrão: shape → repair → remesh → textura (Paint)",
                 "[dim]Modelos: cache ~/.cache/huggingface[/dim]"
                 if self.logger.rich_available
                 else "Modelos: cache ~/.cache/huggingface",

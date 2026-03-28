@@ -391,12 +391,19 @@ def remove_ground_shadow_artifacts(
     return yup
 
 
+def _bbox_volume(part: trimesh.Trimesh) -> float:
+    """Volume do bounding box (produto dos extents)."""
+    e = part.extents
+    return float(e[0] * e[1] * e[2])
+
+
 def keep_largest_component(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
     """
-    Mantém apenas a componente conexa com mais faces (descarta ilhas pequenas).
+    Mantém a componente conexa "principal" (descarta ilhas/placas).
 
-    Resolve casos em que partes do corpo aparecem como mesh separada (pés flutuantes
-    como ilha extra, etc.). Se houver uma única componente, devolve igual.
+    Usa volume do bounding box como critério em vez de contagem de faces:
+    com octree alto, placas de sombra planas podem ter mais triângulos
+    que o modelo 3D real mas volume AABB muito menor.
     """
     mesh = mesh.copy()
     try:
@@ -405,7 +412,7 @@ def keep_largest_component(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
         return mesh
     if len(parts) <= 1:
         return mesh
-    return max(parts, key=lambda m: len(m.faces))
+    return max(parts, key=_bbox_volume)
 
 
 def laplacian_smooth(mesh: trimesh.Trimesh, iterations: int = 1, lamb: float = 0.5) -> trimesh.Trimesh:
@@ -415,6 +422,81 @@ def laplacian_smooth(mesh: trimesh.Trimesh, iterations: int = 1, lamb: float = 0
     m = mesh.copy()
     trimesh.smoothing.filter_laplacian(m, iterations=iterations, lamb=lamb)
     return m
+
+
+def isotropic_remesh(
+    mesh: trimesh.Trimesh,
+    *,
+    resolution: int = 150,
+    iterations: int = 5,
+    adaptive: bool = True,
+    close_holes: bool = True,
+    close_holes_max_edges: int = 300,
+    taubin_steps: int = 3,
+    taubin_lambda: float = 0.5,
+    taubin_mu: float = -0.53,
+) -> trimesh.Trimesh:
+    """Isotropic remeshing via pymeshlab + Taubin smoothing.
+
+    Reconstrói a topologia com triângulos uniformes, eliminando faces
+    degeneradas (spikes) sem perder as features da superfície.
+
+    ``resolution`` controla o nível de detalhe (~nº de subdivisões na diagonal).
+    ``close_holes`` fecha buracos (marching cubes deixa buracos nas bordas do volume).
+    ``taubin_steps`` controla suavização pós-remesh (0 = desliga, preserva volume).
+    """
+    try:
+        import pymeshlab
+    except ImportError:
+        import warnings
+        warnings.warn(
+            "pymeshlab não instalado — isotropic_remesh indisponível. "
+            "pip install pymeshlab",
+            stacklevel=2,
+        )
+        return mesh
+
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory(prefix="remesh_") as tmpdir:
+        in_ply = str(Path(tmpdir) / "in.ply")
+        out_ply = str(Path(tmpdir) / "out.ply")
+        mesh.export(in_ply)
+
+        ms = pymeshlab.MeshSet()
+        ms.load_new_mesh(in_ply)
+
+        ms.meshing_repair_non_manifold_edges()
+        ms.meshing_repair_non_manifold_vertices()
+        ms.meshing_remove_duplicate_faces()
+        ms.meshing_remove_duplicate_vertices()
+        ms.meshing_remove_unreferenced_vertices()
+
+        if close_holes:
+            ms.meshing_close_holes(maxholesize=close_holes_max_edges)
+
+        diag = ms.current_mesh().bounding_box().diagonal()
+        target_edge = diag / max(resolution, 10)
+
+        ms.meshing_isotropic_explicit_remeshing(
+            iterations=iterations,
+            targetlen=pymeshlab.PureValue(target_edge),
+            adaptive=adaptive,
+            selectedonly=False,
+            checksurfdist=True,
+            maxsurfdist=pymeshlab.PureValue(target_edge * 0.5),
+        )
+
+        if taubin_steps > 0:
+            ms.apply_coord_taubin_smoothing(
+                stepsmoothnum=taubin_steps,
+                lambda_=taubin_lambda,
+                mu=taubin_mu,
+            )
+
+        ms.save_current_mesh(out_ply)
+        return trimesh.load(out_ply, force="mesh")
 
 
 def repair_mesh(
@@ -432,6 +514,9 @@ def repair_mesh(
     fill_small_holes_max_edges: int = 16,
     smooth_iterations: int = 0,
     smooth_lamb: float = 0.45,
+    remesh: bool = False,
+    remesh_resolution: int = 150,
+    remesh_taubin_steps: int = 3,
 ) -> trimesh.Trimesh:
     """
     Encadeia heurísticas de reparo.
@@ -441,10 +526,11 @@ def repair_mesh(
     para não fundir sombra com o corpo).
     ``ground_artifact_mesh_space``: ``hunyuan`` para saída do pipeline Text3D;
     ``y_up`` para GLB já orientado (ex.: Godot).
-    ``ground_artifact_y_up_flip_x_rad``: ver ``remove_ground_shadow_artifacts``.
     ``ground_shadow_aggressive``: cilindro na base + peel forte (cascas 3D grandes).
     ``remove_small_island_fragments``: apaga ilhas minúsculas (fragmentos flutuantes).
     ``fill_small_holes_max_edges``: fecha buracos com contorno até N arestas (0 = desliga).
+    ``remesh``: isotropic remeshing — reconstrói topologia com triângulos uniformes,
+    eliminando spikes/faces degeneradas. Requer pymeshlab.
     """
     m = mesh.copy()
 
@@ -482,6 +568,14 @@ def repair_mesh(
 
     if keep_largest:
         m = keep_largest_component(m)
+
+    if remesh:
+        with contextlib.suppress(Exception):
+            m = isotropic_remesh(
+                m,
+                resolution=remesh_resolution,
+                taubin_steps=remesh_taubin_steps,
+            )
 
     if smooth_iterations > 0:
         m = laplacian_smooth(m, iterations=smooth_iterations, lamb=smooth_lamb)

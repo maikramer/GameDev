@@ -70,21 +70,23 @@ def ensure_dirs():
 @click.pass_context
 def cli(ctx, verbose):
     """
-    Text3D — mesh 3D a partir de texto (Text2D + Hunyuan3D-2mini).
+    Text3D — mesh 3D texturizada a partir de texto.
+
+    Pipeline padrão: Text2D → Hunyuan3D-2mini (shape) → repair → remesh → Paint (textura).
 
     \b
-        text3d generate "um robô futurista" --output robo.glb
-        text3d generate "carro" --preset hq --final -o carro.glb
+        text3d generate "um robô futurista" -o robo.glb
+        text3d generate "carro" --preset hq -o carro.glb
+        text3d generate "espada" --no-texture -o espada.glb
         text3d texture mesh.glb -i ref.png -o mesh_tex.glb
         text3d texture mesh.glb -i ref.png -o mesh_pbr.glb --materialize
         text3d doctor
         text3d repair-ground modelo.glb --y-up-flip-x-180 --no-keep-largest
-        text3d generate -v "prompt" --low-vram
         text3d -v generate "prompt"
         text3d info
 
-    Na primeira execução pode parecer parado: download dos pesos (HF) e duas
-    fases (Text2D, depois Hunyuan). Use -v para ver o progresso no log.
+    Na primeira execução pode parecer parado: download dos pesos (HF) e fases
+    (Text2D + Hunyuan shape + Paint). Use -v para ver o progresso no log.
     """
     ensure_pytorch_cuda_alloc_conf()
     ctx.ensure_object(dict)
@@ -267,13 +269,25 @@ def skill_install_cmd(target: Path, force: bool) -> None:
     help="Suavização Laplaciana (1-2 reduz aspereza; pode arredondar detalhes finos).",
 )
 @click.option(
-    "--texture",
-    "--final",
-    "--with-texture",
+    "--remesh/--no-remesh",
+    default=_defaults.DEFAULT_REMESH,
+    show_default=True,
+    help="Isotropic remeshing: reconstrói topologia com triângulos uniformes, fecha buracos e elimina spikes. Requer pymeshlab.",
+)
+@click.option(
+    "--remesh-resolution",
+    default=_defaults.DEFAULT_REMESH_RESOLUTION,
+    show_default=True,
+    type=int,
+    help="Resolução do remeshing (~nº subdivisões na diagonal). Maior = mais detalhe.",
+)
+@click.option(
+    "--texture/--no-texture",
     "texture",
-    is_flag=True,
-    help="Após a mesh, aplica Hunyuan3D-Paint (textura; usa a imagem Text2D ou --from-image). "
-    "Alias: --final, --with-texture.",
+    default=_defaults.DEFAULT_TEXTURE,
+    show_default=True,
+    help="Hunyuan3D-Paint (textura) após a mesh. Usa a imagem Text2D ou --from-image. "
+    "Desliga com --no-texture para obter só a geometria.",
 )
 @click.option(
     "--model-subfolder",
@@ -299,9 +313,32 @@ def skill_install_cmd(target: Path, force: bool) -> None:
     help="Mantém modelos Paint na GPU (VRAM alta). O defeito usa CPU offload.",
 )
 @click.option(
+    "--upscale/--no-upscale",
+    "upscale",
+    default=_defaults.DEFAULT_UPSCALE,
+    show_default=True,
+    help="Upscale IA da textura (Real-ESRGAN 4x via spandrel). "
+    "Escala 1024→4096 ou conforme --upscale-factor. Requer: pip install spandrel.",
+)
+@click.option(
+    "--upscale-factor",
+    default=_defaults.DEFAULT_UPSCALE_FACTOR,
+    show_default=True,
+    type=click.Choice(["2", "4"], case_sensitive=False),
+    help="Factor de upscale (2 = 1024→2048, 4 = 1024→4096).",
+)
+@click.option(
     "--materialize",
     is_flag=True,
     help="Após Paint, gera mapas PBR (Materialize CLI) e embute no GLB (normal, AO, metallic-roughness).",
+)
+@click.option(
+    "--materialize-preset",
+    "materialize_preset",
+    default="default",
+    show_default=True,
+    type=click.Choice(["default", "skin", "floor", "metal", "fabric", "wood", "stone"]),
+    help="Preset Materialize: ajusta parâmetros PBR ao tipo de superfície.",
 )
 @click.option(
     "--materialize-output-dir",
@@ -374,11 +411,16 @@ def generate(
     no_ground_shadow_removal,
     ground_shadow_aggressive,
     mesh_smooth,
+    remesh,
+    remesh_resolution,
     texture,
+    upscale,
+    upscale_factor,
     paint_repo,
     paint_subfolder,
     paint_full_gpu,
     materialize,
+    materialize_preset,
     materialize_output_dir,
     materialize_bin,
     materialize_no_invert,
@@ -392,7 +434,7 @@ def generate(
     verbose = bool(ctx.obj.get("VERBOSE")) or generate_verbose
 
     if materialize and not texture:
-        raise click.UsageError("--materialize requer --texture (Hunyuan3D-Paint primeiro).")
+        raise click.UsageError("--materialize requer textura ativa (remova --no-texture).")
 
     if preset is not None:
         pv = _defaults.PRESET_HUNYUAN[preset]
@@ -450,6 +492,8 @@ def generate(
         rep += ", anti-sombra base"
         if ground_shadow_aggressive:
             rep += " (agressivo)"
+    if remesh and not no_mesh_repair:
+        rep += f", remesh(res={remesh_resolution})"
     if mesh_smooth > 0 and not no_mesh_repair:
         rep += f", smooth={mesh_smooth}"
     info_table.add_row("[bold]Pós-mesh[/bold]", rep)
@@ -460,6 +504,8 @@ def generate(
             "[bold]Textura[/bold]",
             f"Hunyuan3D-Paint ({paint_subfolder}) {'GPU' if paint_full_gpu else 'CPU offload'}",
         )
+        if upscale:
+            info_table.add_row("[bold]Upscale[/bold]", f"Real-ESRGAN {upscale_factor}x")
         if materialize:
             info_table.add_row(
                 "[bold]Materialize PBR[/bold]",
@@ -566,6 +612,8 @@ def generate(
                     ground_artifact_mesh_space="hunyuan",
                     ground_shadow_aggressive=ground_shadow_aggressive,
                     smooth_iterations=max(0, mesh_smooth),
+                    remesh=remesh,
+                    remesh_resolution=remesh_resolution,
                 )
 
             if texture:
@@ -584,15 +632,33 @@ def generate(
                         paint_cpu_offload=not paint_full_gpu,
                         verbose=verbose,
                     )
+                if upscale:
+                    from .texture_upscale import upscale_trimesh_texture
+
+                    clear_cuda_memory()
+                    with console.status(
+                        f"[bold yellow]Upscale textura (Real-ESRGAN {upscale_factor}x)...",
+                        spinner="dots",
+                    ):
+                        result = upscale_trimesh_texture(
+                            result,
+                            scale=int(upscale_factor),
+                            device="cpu" if cpu else None,
+                            verbose=verbose,
+                        )
                 if materialize:
                     from .materialize_pbr import apply_materialize_pbr
 
-                    with console.status("[bold yellow]Materialize (mapas PBR)...", spinner="dots"):
+                    with console.status(
+                        f"[bold yellow]Materialize PBR (preset={materialize_preset})...",
+                        spinner="dots",
+                    ):
                         result = apply_materialize_pbr(
                             result,
                             materialize_bin=materialize_bin,
                             save_sidecar_maps_dir=materialize_output_dir,
                             roughness_from_one_minus_smoothness=not materialize_no_invert,
+                            preset=materialize_preset,
                             verbose=verbose,
                         )
 
@@ -911,6 +977,15 @@ def texture(
     help="Roughness = smoothness (sem 1-smoothness).",
 )
 @click.option(
+    "--preset",
+    "-p",
+    "mat_preset",
+    default="default",
+    show_default=True,
+    type=click.Choice(["default", "skin", "floor", "metal", "fabric", "wood", "stone"]),
+    help="Preset Materialize: ajusta parâmetros PBR ao tipo de superfície.",
+)
+@click.option(
     "-v",
     "--verbose",
     "mat_verbose",
@@ -934,6 +1009,7 @@ def materialize_pbr_cmd(
     materialize_output_dir,
     materialize_bin,
     materialize_no_invert,
+    mat_preset,
     mat_verbose,
     allow_shared_gpu,
     gpu_kill_others,
@@ -977,13 +1053,16 @@ def materialize_pbr_cmd(
 
     try:
         start = time.time()
-        with console.status("[bold yellow]Materialize (mapas PBR)...", spinner="dots"):
+        with console.status(
+            f"[bold yellow]Materialize PBR (preset={mat_preset})...", spinner="dots"
+        ):
             mesh = load_mesh_trimesh(mesh_path)
             result = apply_materialize_pbr(
                 mesh,
                 materialize_bin=materialize_bin,
                 save_sidecar_maps_dir=materialize_output_dir,
                 roughness_from_one_minus_smoothness=not materialize_no_invert,
+                preset=mat_preset,
                 verbose=verbose,
             )
             mp = save_mesh(result, out_path, format="glb")
@@ -1050,6 +1129,19 @@ def materialize_pbr_cmd(
     default=False,
     help="Anti-sombra forte (cilindro + peel; cascas grandes na base).",
 )
+@click.option(
+    "--remesh/--no-remesh",
+    default=_defaults.DEFAULT_REMESH,
+    show_default=True,
+    help="Isotropic remeshing: reconstrói topologia com triângulos uniformes, fecha buracos e elimina spikes. Requer pymeshlab.",
+)
+@click.option(
+    "--remesh-resolution",
+    default=_defaults.DEFAULT_REMESH_RESOLUTION,
+    show_default=True,
+    type=int,
+    help="Resolução do remeshing (~nº subdivisões na diagonal).",
+)
 def repair_ground_cmd(
     input_glb: Path,
     output,
@@ -1059,6 +1151,8 @@ def repair_ground_cmd(
     no_small_islands: bool,
     fill_holes_max_edges: int,
     ground_shadow_aggressive: bool,
+    remesh: bool,
+    remesh_resolution: int,
 ):
     """Pós-processa um GLB: anti-sombra na base (e opcionalmente corrige orientação)."""
     import trimesh as tm
@@ -1086,6 +1180,8 @@ def repair_ground_cmd(
             remove_small_island_fragments=not no_small_islands,
             fill_small_holes_max_edges=max(0, int(fill_holes_max_edges)),
             smooth_iterations=0,
+            remesh=remesh,
+            remesh_resolution=remesh_resolution,
         )
 
         out_path = Path(output) if output else input_glb

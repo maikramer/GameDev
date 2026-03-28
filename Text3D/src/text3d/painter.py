@@ -260,7 +260,9 @@ def paint_file_to_file(
             roughness_from_one_minus_smoothness=not materialize_no_invert,
             verbose=verbose,
         )
+    from .utils.export import save_mesh
+
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    out.export(str(output_path), file_type="glb")
+    save_mesh(out, output_path, format="glb", rotate=False)
     return output_path

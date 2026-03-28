@@ -25,6 +25,7 @@ dependencies = [
     "rich-click>=1.8.0",
     "tqdm>=4.66.0",
     "pydantic>=2.0.0",
+    "pymeshlab>=2023.12",
     "text2d",
     "hy3dgen @ git+https://github.com/Tencent-Hunyuan/Hunyuan3D-2.git",
 ]
@@ -39,6 +40,7 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
+upscale = ["spandrel>=0.4.0"]
 dev = ["pytest>=7.4.0", "pytest-cov>=4.0.0", "ruff>=0.11.0"]
 
 [project.scripts]

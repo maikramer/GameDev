@@ -58,11 +58,30 @@ DEFAULT_SUBFOLDER = "hunyuan3d-dit-v2-mini"
 
 DEFAULT_HY_STEPS = 24
 DEFAULT_HY_GUIDANCE = 5.0
-DEFAULT_OCTREE_RESOLUTION = 128
-DEFAULT_NUM_CHUNKS = 4096
+# octree_resolution controla a grelha do volume (grid (N+1)³) onde o marching cubes extrai
+# a superfície. Valores baixos (128) geram triângulos degenerados em zonas de curvatura
+# alta (cabeça, dedos). 256 produz triângulos ~4x mais uniformes sem impacto significativo
+# em VRAM (~65 MB vs ~8 MB para o grid; o gargalo real é o volume decoding em chunks).
+# O default do Hunyuan3D upstream é 384; usamos 256 como compromisso para ~6GB VRAM.
+DEFAULT_OCTREE_RESOLUTION = 256
+DEFAULT_NUM_CHUNKS = 8000
 
 # Pós-processo ao gravar mesh (CLI): 0 = só maior componente + merge; 1-2 suaviza superfície.
 DEFAULT_MESH_SMOOTH = 0
+
+# Isotropic remeshing (pymeshlab): reconstrói topologia com triângulos uniformes,
+# fecha buracos do marching cubes e elimina faces degeneradas. Padrão: ligado.
+DEFAULT_REMESH = True
+DEFAULT_REMESH_RESOLUTION = 150
+
+# Pipeline padrão: gerar → reparar → remesh → textura. A textura (Hunyuan3D-Paint)
+# é aplicada automaticamente. Desligar com --no-texture.
+DEFAULT_TEXTURE = True
+
+# Upscaling IA da textura (Real-ESRGAN via spandrel). Escala 1024→4096 (4x)
+# ou 1024→2048 (2x). Requer: pip install spandrel
+DEFAULT_UPSCALE = False
+DEFAULT_UPSCALE_FACTOR = 4
 
 # --- Hunyuan3D-Paint (textura multivista, hy3dgen.texgen) ---
 # Pesos no repositório Hunyuan3D-2 (não confundir com Hunyuan3D-2mini só shape).
@@ -72,8 +91,8 @@ DEFAULT_PAINT_SUBFOLDER = "hunyuan3d-paint-v2-0-turbo"
 DEFAULT_PAINT_CPU_OFFLOAD = True
 
 # --- Referência "alta qualidade" (model card HF / GPU com bastante VRAM) ---
-# Ex.: --octree-resolution 380 --num-chunks 20000 --steps 30
-HUNYUAN_HQ_OCTREE = 380
+# Ex.: --octree-resolution 384 --num-chunks 20000 --steps 30
+HUNYUAN_HQ_OCTREE = 384
 HUNYUAN_HQ_NUM_CHUNKS = 20000
 HUNYUAN_HQ_STEPS = 30
 
@@ -81,9 +100,9 @@ HUNYUAN_HQ_STEPS = 30
 DEFAULT_MC_LEVEL = 0.0
 
 # Perfis CLI `--preset`: substituem steps + octree + num_chunks de uma vez.
-# fast: menos VRAM/tempo; balanced: igual aos DEFAULT_*; hq: próximo do model card HF.
+# fast: qualidade razoável, menos VRAM/tempo; balanced: boa qualidade ~6GB; hq: model card HF.
 PRESET_HUNYUAN = {
-    "fast": {"steps": 18, "octree": 96, "chunks": 3072},
+    "fast": {"steps": 18, "octree": 128, "chunks": 4096},
     "balanced": {
         "steps": DEFAULT_HY_STEPS,
         "octree": DEFAULT_OCTREE_RESOLUTION,

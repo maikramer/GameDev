@@ -6,6 +6,7 @@ from .export import convert_mesh, get_mesh_info, save_gif, save_mesh
 from .memory import check_gpu_compatibility, format_bytes, get_gpu_info, get_system_info
 from .mesh_repair import (
     fill_small_boundary_holes,
+    isotropic_remesh,
     keep_largest_component,
     remove_ground_shadow_artifacts,
     remove_small_islands,
@@ -20,6 +21,7 @@ __all__ = [
     "get_gpu_info",
     "get_mesh_info",
     "get_system_info",
+    "isotropic_remesh",
     "keep_largest_component",
     "remove_ground_shadow_artifacts",
     "remove_small_islands",

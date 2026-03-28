@@ -12,6 +12,17 @@ from diffusers.utils import export_to_gif, export_to_obj, export_to_ply
 from ..defaults import get_export_rotation_x_rad
 
 
+def _export_glb_with_normals(mesh: trimesh.Trimesh, output_path: Path) -> None:
+    """Export GLB ensuring vertex normals and doubleSided are included."""
+    _ = mesh.vertex_normals  # force computation
+    if hasattr(mesh, "visual") and hasattr(mesh.visual, "material"):
+        mesh.visual.material.doubleSided = True
+    scene = trimesh.Scene(geometry={"mesh": mesh})
+    glb_bytes = scene.export(file_type="glb", include_normals=True)
+    with open(str(output_path), "wb") as f:
+        f.write(glb_bytes)
+
+
 def save_mesh(
     mesh_input: np.ndarray | trimesh.Trimesh,
     output_path: str | Path,
@@ -36,7 +47,7 @@ def save_mesh(
         if rotate:
             mesh = _apply_rotation_trimesh(mesh.copy())
         if format == "glb":
-            mesh.export(str(output_path), file_type="glb")
+            _export_glb_with_normals(mesh, output_path)
             return output_path
         if format == "ply":
             mesh.export(str(output_path), file_type="ply")
