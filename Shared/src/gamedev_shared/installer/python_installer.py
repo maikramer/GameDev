@@ -11,6 +11,9 @@ from .base import BaseInstaller
 # ``pip install -e`` (modo editável). Alterações ao código-fonte refletem-se
 # no venv ou no prefix — não há modo wheel-only neste instalador.
 
+# PyTorch (p.ex. 2.11+) declara ``setuptools<82``; builds [build-system] usam tipicamente >=68.
+_PIP_BOOTSTRAP = ("pip", "setuptools>=68,<82", "wheel")
+
 
 class PythonProjectInstaller(BaseInstaller):
     """Instalador para projectos Python (sempre ``pip install -e``).
@@ -126,7 +129,7 @@ class PythonProjectInstaller(BaseInstaller):
 
         _root = str(self.project_root)
         subprocess.run(
-            [python, "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"],
+            [python, "-m", "pip", "install", "--upgrade", *_PIP_BOOTSTRAP],
             check=True,
             cwd=_root,
         )
@@ -175,7 +178,7 @@ class PythonProjectInstaller(BaseInstaller):
         _root = str(self.project_root)
 
         subprocess.run(
-            [self.python_cmd, "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"],
+            [self.python_cmd, "-m", "pip", "install", "--upgrade", *_PIP_BOOTSTRAP],
             check=True,
             cwd=_root,
         )

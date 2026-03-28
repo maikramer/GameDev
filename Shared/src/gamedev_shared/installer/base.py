@@ -149,15 +149,18 @@ class BaseInstaller:
                         if "CUDA Version" in line:
                             cuda_version = line.split("CUDA Version:")[1].split()[0]
                             self.logger.info(f"CUDA detectado: {cuda_version}")
-                            if py_minor >= 13:
-                                self.logger.info("Python 3.13+ — torch+torchvision (PyPI)...")
+                            cuda_major = int(cuda_version.split(".")[0])
+                            cuda_minor = int(cuda_version.split(".")[1]) if "." in cuda_version else 0
+                            if py_minor >= 13 or cuda_major >= 13:
+                                self.logger.info(f"PyTorch via PyPI (CUDA {cuda_version})...")
                                 subprocess.run([*pip_cmd, "torch", "torchvision"], check=True, **_kw)
                                 return
-                            idx = (
-                                "https://download.pytorch.org/whl/cu121"
-                                if cuda_version.startswith("12")
-                                else "https://download.pytorch.org/whl/cu118"
-                            )
+                            if cuda_major == 12 and cuda_minor >= 6:
+                                idx = "https://download.pytorch.org/whl/cu126"
+                            elif cuda_version.startswith("12"):
+                                idx = "https://download.pytorch.org/whl/cu121"
+                            else:
+                                idx = "https://download.pytorch.org/whl/cu118"
                             self.logger.info(f"PyTorch ({idx.split('/')[-1]})...")
                             subprocess.run(
                                 [*pip_cmd, "torch", "torchvision", "--index-url", idx],
