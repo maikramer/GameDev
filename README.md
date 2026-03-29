@@ -17,7 +17,8 @@ Monorepo com ferramentas de **texto para imagem**, **texto para 3D** e **texto p
 | [**Texture2D**](Texture2D/) | **Texturas 2D seamless** (tileable) via HF Inference API — sem GPU local. |
 | [**Skymap2D**](Skymap2D/) | **Skymaps equirectangular 360°** via HF Inference API — skyboxes para game dev, sem GPU local. |
 | [**Text2Sound**](Text2Sound/) | CLI **text-to-audio** com Stable Audio Open 1.0: áudio estéreo 44.1 kHz, presets para game dev. |
-| [**Rigging3D**](Rigging3D/) | **rigging3d** — auto-rigging 3D com [**UniRig**](https://github.com/VAST-AI-Research/UniRig) (skeleton + skinning + merge); GPU CUDA. |
+| [**Rigging3D**](Rigging3D/) | **rigging3d** — auto-rigging 3D com [**UniRig**](https://github.com/VAST-AI-Research/UniRig) (skeleton + skinning + merge); GPU CUDA; Python **3.11**, **bpy** 5.0.x (Open3D). |
+| [**Animator3D**](Animator3D/) | **animator3d** — animação com **bpy** 5.1 (Blender 5.1); Python **3.13**; inspeção, keyframes de teste, export GLB/FBX após rigging. |
 | [**Materialize**](Materialize/) | CLI **PBR maps** (Rust/wgpu): gera normal, AO, metallic, smoothness a partir de textura difusa. |
 
 Cada projeto tem o seu próprio `README`, `setup`, requisitos e licença.
@@ -33,7 +34,8 @@ GameDev/
   Texture2D/         ← texture2d (pip) — depende de Shared; inferência HF na cloud
   Skymap2D/          ← skymap2d (pip) — depende de Shared; skymaps equirectangular via HF
   Text2Sound/        ← text2sound (pip) — depende de Shared; Stable Audio Open 1.0
-  Rigging3D/         ← rigging3d (pip) — depende de Shared; auto-rigging 3D
+  Rigging3D/         ← rigging3d (pip) — Shared; inferência Py 3.11 + bpy 5.0.x
+  Animator3D/        ← animator3d (pip) — Shared; Py 3.13 + bpy 5.1 (animação)
   Materialize/       ← materialize-cli (cargo) — instalador Python usa Shared
 ```
 
@@ -58,6 +60,7 @@ O monorepo inclui um instalador unificado que instala qualquer ferramenta automa
 ./install.sh skymap2d                   # Skymap2D (skymaps equirectangular; sem GPU)
 ./install.sh text2sound                 # Text2Sound (requer CUDA; instala PyTorch)
 ./install.sh rigging3d                  # Rigging3D (UniRig empacotado + PyTorch/CUDA via instalador)
+./install.sh animator3d                 # Animator3D (bpy / animação; sem PyTorch)
 ./install.sh all                        # Instalar tudo
 
 # Windows PowerShell (recomendado no Windows: o script detecta `python` e passa-o ao instalador)
@@ -68,6 +71,7 @@ O monorepo inclui um instalador unificado que instala qualquer ferramenta automa
 .\install.ps1 skymap2d
 .\install.ps1 text2sound
 .\install.ps1 rigging3d
+.\install.ps1 animator3d
 .\install.ps1 all
 
 # Windows CMD (idem: `install.bat` passa o interpretador ao instalador)
