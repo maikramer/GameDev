@@ -22,11 +22,17 @@ _AUDIO_KIND_HINTS: dict[str, str] = {
 }
 
 # Quando generate_3d=true, a mesma imagem alimenta image-to-3D; sombras/pedestal viram geometria fantasma.
+# Estratégia v2: framing positivo em vez de negações. FLUX ignora "no X" mas respeita
+# descrições positivas do tipo de render.
 _I2M_REF_LIGHTING = (
-    "Image-to-3D reference: even diffuse studio lighting, soft fill, "
-    "no cast shadows, no dark blob under the object, no contact shadow, "
-    "no circular ground shadow, no pedestal or platform, no visible floor plane, "
-    "neutral seamless background, single isolated subject"
+    "3D game asset reference render, "
+    "flat ambient lighting from all directions equally, "
+    "uniform soft diffuse illumination, "
+    "pure white seamless infinite void background on all sides, "
+    "single isolated object centered in frame, "
+    "vibrant flat colors, completely shadowless, matte surface finish, "
+    "white background visible beneath and around the object, "
+    "clean silhouette"
 )
 
 _I2M_EXTRA_NEGATIVES: tuple[str, ...] = (
@@ -38,8 +44,10 @@ _I2M_EXTRA_NEGATIVES: tuple[str, ...] = (
     "dark circle under object",
     "pedestal",
     "platform base",
-    "floating shadow",
     "ground plane",
+    "spotlight",
+    "rim light",
+    "volumetric light",
 )
 
 _MESH_HINT_NO_FAKE_GROUND = (
