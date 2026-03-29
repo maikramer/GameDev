@@ -191,6 +191,7 @@ class SkinWriter(BasePredictionWriter):
         self.add_num            = kwargs.get('add_num', False)
         self.export_npz         = kwargs.get('export_npz', True)
         self.export_fbx         = kwargs.get('export_fbx', False)
+        self.export_glb         = kwargs.get('export_glb', False)
         if order_config is not None:
             self.order = get_order(config=order_config)
         else:
@@ -253,9 +254,11 @@ class SkinWriter(BasePredictionWriter):
                 parents=parents,
                 faces=faces[id, :F],
                 sampled_skin=skin_pred,
-                sample_method='median',
+                sample_method='mean',
                 alpha=2.0,
-                threshold=0.03,
+                threshold=0.01,
+                nearest_samples=12,
+                iter_steps=3,
             )
             
             def make_path(save_name: str, suffix: str, trim: bool=False):
@@ -276,7 +279,8 @@ class SkinWriter(BasePredictionWriter):
             raw_data = RawSkin(skin=skin_pred, vertices=sampled_vertices[id], joints=joints[id, :J])
             if self.export_npz is not None:
                 raw_data.save(path=make_path(self.export_npz, 'npz'))
-            if self.export_fbx is not None:
+            _export_mesh = self.export_glb is not None or self.export_fbx is not None
+            if _export_mesh:
                 try:
                     exporter = Exporter()
                     names = RawData.load(path=os.path.join(paths[id], data_names[id])).names
@@ -285,10 +289,14 @@ class SkinWriter(BasePredictionWriter):
                     if self.user_mode:
                         if self.output_name is not None:
                             path = self.output_name
+                        elif self.export_glb is not None:
+                            path = make_path(self.save_name, "glb", trim=True)
                         else:
-                            path = make_path(self.save_name, 'fbx', trim=True)
+                            path = make_path(self.save_name, "fbx", trim=True)
+                    elif self.export_glb is not None:
+                        path = make_path(self.export_glb, "glb")
                     else:
-                        path = make_path(self.export_fbx, 'fbx')
+                        path = make_path(self.export_fbx, "fbx")
                     exporter._export_fbx(
                         path=path,
                         vertices=o_vertices,
@@ -297,7 +305,7 @@ class SkinWriter(BasePredictionWriter):
                         parents=parents,
                         names=names,
                         faces=faces[id, :F],
-                        group_per_vertex=4,
+                        group_per_vertex=8,
                         tails=tails[id, :J],
                         use_extrude_bone=False,
                         use_connect_unique_child=False,

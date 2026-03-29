@@ -477,6 +477,12 @@ def nullable_string(val):
         return None
     return val
 
+def _stem_from_input_path(input_path: str) -> str:
+    """Nome do ficheiro sem extensão (suporta caminhos absolutos e vários pontos no nome)."""
+    base = os.path.basename(input_path.strip())
+    return os.path.splitext(base)[0]
+
+
 def get_files(
     data_name: str,
     input_dataset_dir: str,
@@ -492,9 +498,11 @@ def get_files(
         vis = {}
         inputs = inputs.split(',')
         for file in inputs:
-            file_name = file.removeprefix("./")
-            # remove suffix
-            file_name = '.'.join(file_name.split('.')[:-1])
+            file = file.strip()
+            if not file:
+                continue
+            # Só o basename: join(output, "/abs/path/stem") em Unix ignorava output_dataset_dir.
+            file_name = _stem_from_input_path(file)
             output_dir = os.path.join(output_dataset_dir, file_name)
             raw_data_npz = os.path.join(output_dir, data_name)
             if not force_override and os.path.exists(raw_data_npz):
@@ -508,10 +516,7 @@ def get_files(
         for root, dirs, f in os.walk(input_dataset_dir):
             for file in f:
                 if file.split('.')[-1] in require_suffix:
-                    file_name = file.removeprefix("./")
-                    # remove suffix
-                    file_name = '.'.join(file_name.split('.')[:-1])
-                    
+                    file_name = os.path.splitext(file)[0]
                     output_dir = os.path.join(output_dataset_dir, os.path.relpath(root, input_dataset_dir), file_name)
                     raw_data_npz = os.path.join(output_dir, data_name)
                     

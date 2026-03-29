@@ -9,11 +9,6 @@ from timm.models.layers import DropPath
 from typing import Union
 from einops import rearrange
 
-try:
-    import flash_attn
-except ImportError:
-    flash_attn = None
-
 from .utils.misc import offset2bincount
 from .utils.structure import Point
 from .modules import PointModule, PointSequential
@@ -91,34 +86,11 @@ class SerializedAttention(PointModule):
             self.qknorm = QueryKeyNorm(channels, num_heads)
         else:
             print("WARNING: enable_qknorm is False in PTv3Object and training may be fragile")
-        if enable_flash and flash_attn is None:
-            import warnings
-            warnings.warn(
-                "flash_attn não instalado — a usar fallback (atenção sem flash). "
-                "Instala com: bash scripts/install_flash_attn.sh",
-                stacklevel=2,
-            )
-            enable_flash = False
-        self.enable_flash = enable_flash
-        if enable_flash:
-            assert (
-                enable_rpe is False
-            ), "Set enable_rpe to False when enable Flash Attention"
-            assert (
-                upcast_attention is False
-            ), "Set upcast_attention to False when enable Flash Attention"
-            assert (
-                upcast_softmax is False
-            ), "Set upcast_softmax to False when enable Flash Attention"
-            self.patch_size = patch_size
-            self.attn_drop = attn_drop
-        else:
-            # when disable flash attention, we still don't want to use mask
-            # consequently, patch size will auto set to the
-            # min number of patch_size_max and number of points
-            self.patch_size_max = patch_size
-            self.patch_size = 0
-            self.attn_drop = torch.nn.Dropout(attn_drop)
+        # enable_flash: ignorado (configs antigas podem ainda definir true). Atenção via PyTorch SDPA.
+        _ = enable_flash
+        self.patch_size_max = patch_size
+        self.patch_size = 0
+        self.attn_drop = torch.nn.Dropout(attn_drop)
 
         self.qkv = torch.nn.Linear(channels, channels * 3, bias=qkv_bias)
         self.proj = torch.nn.Linear(channels, channels)
@@ -195,16 +167,15 @@ class SerializedAttention(PointModule):
         return point[pad_key], point[unpad_key], point[cu_seqlens_key]
 
     def forward(self, point):
-        if not self.enable_flash:
-            self.patch_size = min(
-                offset2bincount(point.offset).min().tolist(), self.patch_size_max
-            )
+        self.patch_size = min(
+            offset2bincount(point.offset).min().tolist(), self.patch_size_max
+        )
 
         H = self.num_heads
         K = self.patch_size
         C = self.channels
 
-        pad, unpad, cu_seqlens = self.get_padding_and_inverse(point)
+        pad, unpad, _ = self.get_padding_and_inverse(point)
 
         order = point.serialized_order[self.order_index][pad]
         inverse = unpad[point.serialized_inverse[self.order_index]]
@@ -214,32 +185,26 @@ class SerializedAttention(PointModule):
         if self.enable_qknorm:
             qkv = self.qknorm(qkv)
 
-        if not self.enable_flash:
-            # encode and reshape qkv: (N', K, 3, H, C') => (3, N', H, K, C')
-            q, k, v = (
-                qkv.reshape(-1, K, 3, H, C // H).permute(2, 0, 3, 1, 4).unbind(dim=0)
-            )
-            # attn
+        # encode and reshape qkv: (N', K, 3, H, C') => (3, N', H, K, C')
+        q, k, v = (
+            qkv.reshape(-1, K, 3, H, C // H).permute(2, 0, 3, 1, 4).unbind(dim=0)
+        )
+        if self.enable_rpe:
             if self.upcast_attention:
                 q = q.float()
                 k = k.float()
-            attn = (q * self.scale) @ k.transpose(-2, -1)  # (N', H, K, K)
-            if self.enable_rpe:
-                attn = attn + self.rpe(self.get_rel_pos(point, order))
+            attn = (q * self.scale) @ k.transpose(-2, -1)
+            attn = attn + self.rpe(self.get_rel_pos(point, order))
             if self.upcast_softmax:
                 attn = attn.float()
             attn = self.softmax(attn)
             attn = self.attn_drop(attn).to(qkv.dtype)
             feat = (attn @ v).transpose(1, 2).reshape(-1, C)
         else:
-            feat = flash_attn.flash_attn_varlen_qkvpacked_func(
-                qkv.half().reshape(-1, 3, H, C // H),
-                cu_seqlens,
-                max_seqlen=self.patch_size,
-                dropout_p=self.attn_drop if self.training else 0,
-                softmax_scale=self.scale,
-            ).reshape(-1, C)
-            feat = feat.to(qkv.dtype)
+            drop_p = self.attn_drop.p if self.training else 0.0
+            feat = torch.nn.functional.scaled_dot_product_attention(
+                q, k, v, dropout_p=drop_p, scale=self.scale,
+            ).transpose(1, 2).reshape(-1, C)
         feat = feat[inverse]
 
         # ffn

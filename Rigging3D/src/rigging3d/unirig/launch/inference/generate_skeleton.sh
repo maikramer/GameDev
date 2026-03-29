@@ -3,7 +3,8 @@ PY="${PYTHON:-python}"
 config="configs/data/quick_inference.yaml"
 require_suffix="obj,fbx,FBX,dae,glb,gltf,vrm"
 num_runs=1
-force_override="false"
+# true: reextrai sempre (evita lista vazia quando raw_data.npz já existe — run falhava com «0 models processed»).
+force_override="true"
 faces_target_count=50000
 skeleton_task="configs/task/quick_inference_skeleton_articulationxl_ar_256.yaml"
 add_root="false"

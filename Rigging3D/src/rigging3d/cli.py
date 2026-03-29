@@ -108,11 +108,15 @@ def _make_env(
     root_s = str(root)
     pp = merged.get("PYTHONPATH", "")
     merged["PYTHONPATH"] = root_s if not pp else root_s + os.pathsep + pp
-    # Scripts launch/inference/*.sh usam ``python`` (uv/venv: o binário resolvido perde site-packages).
     if python_bin:
-        bindir = str(Path(python_bin).expanduser().resolve().parent)
+        abspath = os.path.abspath(os.path.expanduser(python_bin))
+        bindir = os.path.dirname(abspath)
         merged["PATH"] = bindir + os.pathsep + merged.get("PATH", "")
-        merged["PYTHON"] = python_bin
+        merged["PYTHON"] = abspath
+    if not _WIN32:
+        merged.setdefault("PYOPENGL_PLATFORM", "egl")
+        merged.setdefault("__NV_PRIME_RENDER_OFFLOAD", "1")
+        merged.setdefault("__GLX_VENDOR_LIBRARY_NAME", "nvidia")
     return merged
 
 
@@ -144,8 +148,15 @@ def _run_bash(
     return _run([bash, _shell_path(full), *args], root=root, python_bin=python_bin)
 
 
-def _run_module(root: Path, py: str, module: str, args: Sequence[str]) -> int:
-    return _run([py, "-m", module, *args], root=root)
+def _run_module(
+    root: Path,
+    py: str,
+    module: str,
+    args: Sequence[str],
+    *,
+    env: dict[str, str] | None = None,
+) -> int:
+    return _run([py, "-m", module, *args], root=root, env=env, python_bin=py)
 
 
 # ---------------------------------------------------------------------------
@@ -204,7 +215,7 @@ def skeleton_cmd(
     input_dir: Path | None,
     output_dir: Path | None,
 ) -> None:
-    """Gera skeleton (FBX) a partir de mesh (.glb/.obj/…)."""
+    """Gera skeleton (GLB por defeito; .fbx ainda suportado) a partir de mesh (.glb/.obj/…)."""
     root, py = _ctx_root_py(ctx)
     _require_bash()
     _validate_io(input_path, output_path, input_dir, output_dir)
@@ -238,7 +249,7 @@ def skin_cmd(
     output_dir: Path | None,
     data_name: str,
 ) -> None:
-    """Prevê pesos de skinning a partir do FBX com skeleton."""
+    """Prevê pesos de skinning a partir do GLB/FBX com skeleton."""
     root, py = _ctx_root_py(ctx)
     _require_bash()
     _validate_io(input_path, output_path, input_dir, output_dir)
@@ -254,12 +265,22 @@ def skin_cmd(
 
 
 @cli.command("merge")
-@click.option("--source", "-s", type=click.Path(path_type=Path), required=True, help="FBX skin")
+@click.option("--source", "-s", type=click.Path(path_type=Path), required=True, help="GLB/FBX com skin")
 @click.option("--target", "-t", type=click.Path(path_type=Path), required=True, help="Mesh original")
 @click.option("--output", "-o", type=click.Path(path_type=Path), required=True)
 @click.option("--require-suffix", default="obj,fbx,FBX,dae,glb,gltf,vrm", show_default=True)
+@click.option("--smooth-iterations", type=int, default=2, show_default=True, help="Passagens de suavização Laplaciana.")
+@click.option("--groups-per-vertex", type=int, default=8, show_default=True, help="Influências de osso por vértice.")
 @click.pass_context
-def merge_cmd(ctx: click.Context, source: Path, target: Path, output: Path, require_suffix: str) -> None:
+def merge_cmd(
+    ctx: click.Context,
+    source: Path,
+    target: Path,
+    output: Path,
+    require_suffix: str,
+    smooth_iterations: int,
+    groups_per_vertex: int,
+) -> None:
     """Combina resultado da fase skin com o mesh original (GLB rigado)."""
     root, py = _ctx_root_py(ctx)
     args = [
@@ -270,7 +291,11 @@ def merge_cmd(ctx: click.Context, source: Path, target: Path, output: Path, requ
         f"--target={_shell_path(target)}",
         f"--output={_shell_path(output)}",
     ]
-    rc = _run_module(root, py, "src.inference.merge", args)
+    merge_env = {
+        "RIGGING3D_SMOOTH_ITERATIONS": str(smooth_iterations),
+        "RIGGING3D_GROUPS_PER_VERTEX": str(groups_per_vertex),
+    }
+    rc = _run_module(root, py, "src.inference.merge", args, env=merge_env)
     if rc != 0:
         raise click.ClickException(f"merge terminou com código {rc}")
     console.print("[green]Merge concluído.[/green]")
@@ -279,14 +304,82 @@ def merge_cmd(ctx: click.Context, source: Path, target: Path, output: Path, requ
 # --- pipeline ---
 
 
+def _prep_mesh_for_rigging(input_path: Path, output_path: Path, python_bin: str) -> bool:
+    """Prepara mesh para rigging: merge verts, remove degenerados, remesh, close holes.
+
+    Retorna True se conseguiu preparar (output_path escrito); False se não
+    conseguiu (input_path é usado sem modificação).
+    """
+    import subprocess as _sp
+
+    script = """
+import sys, trimesh, numpy as np
+mesh = trimesh.load(sys.argv[1], force='mesh')
+mesh.merge_vertices(digits_vertex=4)
+mask = mesh.area_faces > 1e-7
+mesh.update_faces(mask)
+mesh.remove_unreferenced_vertices()
+try:
+    import pymeshlab
+    ms = pymeshlab.MeshSet()
+    ms.add_mesh(pymeshlab.Mesh(mesh.vertices, mesh.faces))
+    ms.meshing_repair_non_manifold_edges()
+    ms.meshing_repair_non_manifold_vertices()
+    ms.meshing_remove_duplicate_faces()
+    ms.meshing_remove_duplicate_vertices()
+    ms.meshing_close_holes(maxholesize=300)
+    ms.meshing_isotropic_explicit_remeshing(
+        targetlen=pymeshlab.PercentageValue(1.0),
+        adaptive=True,
+        iterations=5,
+    )
+    ms.apply_coord_taubin_smoothing(stepsmoothnum=3)
+    ms.meshing_remove_unreferenced_vertices()
+    out = ms.current_mesh()
+    mesh = trimesh.Trimesh(vertices=out.vertex_matrix(), faces=out.face_matrix())
+except ImportError:
+    pass
+trimesh.repair.fill_holes(mesh)
+trimesh.repair.fix_normals(mesh, multibody=True)
+mesh.export(sys.argv[2], file_type='glb')
+print(f'prep: {len(mesh.vertices)} verts, {len(mesh.faces)} faces')
+"""
+    try:
+        r = _sp.run(
+            [python_bin, "-c", script, str(input_path), str(output_path)],
+            capture_output=True, text=True, timeout=120,
+        )
+        if r.returncode == 0 and output_path.is_file() and output_path.stat().st_size > 0:
+            console.print(f"[dim]{r.stdout.strip()}[/dim]")
+            return True
+        if r.stderr:
+            console.print(f"[yellow]prep mesh aviso: {r.stderr[:200]}[/yellow]")
+    except Exception as e:
+        console.print(f"[yellow]prep mesh falhou ({e}); a usar mesh original.[/yellow]")
+    return False
+
+
 @cli.command("pipeline")
 @click.option("--input", "-i", "mesh", type=click.Path(exists=True, path_type=Path), required=True)
 @click.option("--output", "-o", "out", type=click.Path(path_type=Path), required=True)
 @click.option("--work-dir", type=click.Path(file_okay=False, path_type=Path), default=None, help="Dir intermédio")
 @click.option("--seed", type=int, default=12345, show_default=True)
 @click.option("--keep-temp", is_flag=True, help="Não apagar work-dir temporário")
+@click.option("--smooth-iterations", type=int, default=2, show_default=True, help="Passagens de suavização Laplaciana no merge.")
+@click.option("--groups-per-vertex", type=int, default=8, show_default=True, help="Influências de osso por vértice.")
+@click.option("--no-prep", is_flag=True, help="Não preparar mesh (skip remesh/repair).")
 @click.pass_context
-def pipeline_cmd(ctx: click.Context, mesh: Path, out: Path, work_dir: Path | None, seed: int, keep_temp: bool) -> None:
+def pipeline_cmd(
+    ctx: click.Context,
+    mesh: Path,
+    out: Path,
+    work_dir: Path | None,
+    seed: int,
+    keep_temp: bool,
+    smooth_iterations: int,
+    groups_per_vertex: int,
+    no_prep: bool,
+) -> None:
     """Encadeia skeleton → skin → merge até um GLB rigado."""
     root, py = _ctx_root_py(ctx)
     _require_bash()
@@ -299,18 +392,27 @@ def pipeline_cmd(ctx: click.Context, mesh: Path, out: Path, work_dir: Path | Non
         wd = work_dir
         wd.mkdir(parents=True, exist_ok=True)
 
-    skel = wd / "_skeleton.fbx"
-    skin = wd / "_skin.fbx"
+    actual_mesh = mesh
+    if not no_prep:
+        prepped = wd / "_prepped.glb"
+        console.print("[dim]Preparando mesh (remesh + repair)...[/dim]")
+        if _prep_mesh_for_rigging(mesh, prepped, py):
+            actual_mesh = prepped
+        else:
+            console.print("[yellow]Prep falhou; a usar mesh original.[/yellow]")
+
+    skel = wd / "_skeleton.glb"
+    skin = wd / "_skin.glb"
     try:
         rc = _run_bash(
             root,
             "launch/inference/generate_skeleton.sh",
-            ["--input", _shell_path(mesh), "--output", _shell_path(skel), "--seed", str(seed)],
+            ["--input", _shell_path(actual_mesh), "--output", _shell_path(skel), "--seed", str(seed)],
             python_bin=py,
         )
         if rc != 0 or not skel.is_file() or skel.stat().st_size == 0:
             raise click.ClickException(
-                "skeleton falhou (código %s ou FBX em falta). Confirma deps inferência, pesos HF e logs acima."
+                "skeleton falhou (código %s ou GLB em falta). Confirma deps inferência, pesos HF e logs acima."
                 % (rc,)
             )
 
@@ -322,10 +424,14 @@ def pipeline_cmd(ctx: click.Context, mesh: Path, out: Path, work_dir: Path | Non
         )
         if rc != 0 or not skin.is_file() or skin.stat().st_size == 0:
             raise click.ClickException(
-                "skin falhou (código %s ou FBX em falta). Confirma flash_attn, spconv, VRAM e logs acima."
+                "skin falhou (código %s ou GLB em falta). Confirma spconv, VRAM e logs acima."
                 % (rc,)
             )
 
+        merge_env = {
+            "RIGGING3D_SMOOTH_ITERATIONS": str(smooth_iterations),
+            "RIGGING3D_GROUPS_PER_VERTEX": str(groups_per_vertex),
+        }
         rc = _run_module(
             root,
             py,
@@ -338,6 +444,7 @@ def pipeline_cmd(ctx: click.Context, mesh: Path, out: Path, work_dir: Path | Non
                 f"--target={_shell_path(mesh)}",
                 f"--output={_shell_path(out)}",
             ],
+            env=merge_env,
         )
         if not out.is_file() or out.stat().st_size == 0:
             raise click.ClickException(

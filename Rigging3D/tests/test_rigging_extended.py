@@ -75,7 +75,7 @@ def test_validate_io_input_only(tmp_path: Path) -> None:
 
 def test_io_args_single_file(tmp_path: Path) -> None:
     inp = tmp_path / "i.glb"
-    out = tmp_path / "o.fbx"
+    out = tmp_path / "o.glb"
     inp.write_bytes(b"x")
     args = _io_args(inp, out, None, None)
     assert "--input" in args and "--output" in args
@@ -140,7 +140,7 @@ def test_skin_requires_bash(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     with patch("rigging3d.cli._find_bash", return_value=None):
         r = CliRunner().invoke(
             cli,
-            ["skin", "--data-name", "d", "-i", "a.glb", "-o", "b.fbx"],
+            ["skin", "--data-name", "d", "-i", "a.glb", "-o", "b.glb"],
             catch_exceptions=False,
         )
     assert r.exit_code != 0
@@ -153,7 +153,7 @@ def test_skeleton_requires_bash(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     with patch("rigging3d.cli._find_bash", return_value=None):
         r = CliRunner().invoke(
             cli,
-            ["skeleton", "-i", "mesh.glb", "-o", "skel.fbx"],
+            ["skeleton", "-i", "mesh.glb", "-o", "skel.glb"],
             catch_exceptions=False,
         )
     assert r.exit_code != 0

@@ -17,7 +17,7 @@ writer:
   repeat: 1
   save_name: predict
   export_npz: predict_skin # this must be specified if textured results are required
-  export_fbx: result_fbx
+  export_glb: result_glb
 
 trainer:
   num_nodes: 1

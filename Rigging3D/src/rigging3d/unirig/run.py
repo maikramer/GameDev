@@ -6,8 +6,15 @@ e PYTHONPATH a incluir esta raiz (para imports ``from src.*``).
 
 from __future__ import annotations
 
-import argparse
 import os
+import platform
+
+if platform.system() == "Linux":
+    os.environ.setdefault("PYOPENGL_PLATFORM", "egl")
+    os.environ.setdefault("__NV_PRIME_RENDER_OFFLOAD", "1")
+    os.environ.setdefault("__GLX_VENDOR_LIBRARY_NAME", "nvidia")
+
+import argparse
 from math import ceil
 
 import lightning as L
@@ -127,7 +134,9 @@ def main() -> None:
         assert predict_transform_config is not None
         if args.output_dir is not None or args.output is not None:
             if args.output is not None:
-                assert args.output.endswith(".fbx"), "output must be .fbx"
+                assert args.output.lower().endswith((".fbx", ".glb", ".gltf")), (
+                    "output must be .fbx, .glb ou .gltf"
+                )
             writer_config["npz_dir"] = args.npz_dir
             writer_config["output_dir"] = args.output_dir
             writer_config["output_name"] = args.output

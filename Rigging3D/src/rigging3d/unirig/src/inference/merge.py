@@ -20,8 +20,49 @@ import itertools
 import bpy
 from mathutils import Vector
 
+from scipy.sparse import csr_matrix
+
 from ..data.raw_data import RawData, RawSkin
 from ..data.extract import process_mesh, process_armature, get_arranged_bones
+
+
+def _laplacian_smooth_weights(
+    faces: ndarray,
+    skin_weights: ndarray,
+    iterations: int = 2,
+    factor: float = 0.5,
+) -> ndarray:
+    """Suaviza pesos de skinning via media Laplaciana nas arestas do mesh.
+
+    Para cada vertice, mistura os seus pesos com a media dos vizinhos
+    (vertices conectados por aresta). Renormaliza para soma=1 no final.
+    """
+    N = skin_weights.shape[0]
+    if iterations <= 0 or N == 0:
+        return skin_weights
+
+    edges_a = np.concatenate([faces[:, 0], faces[:, 1], faces[:, 2]])
+    edges_b = np.concatenate([faces[:, 1], faces[:, 2], faces[:, 0]])
+    all_edges = np.stack([
+        np.concatenate([edges_a, edges_b]),
+        np.concatenate([edges_b, edges_a]),
+    ], axis=1)
+    # Adjacencia sparse: valor 1 para cada aresta
+    data = np.ones(len(all_edges), dtype=np.float32)
+    adj = csr_matrix((data, (all_edges[:, 0], all_edges[:, 1])), shape=(N, N))
+    # Grau de cada vertice
+    degree = np.asarray(adj.sum(axis=1)).ravel()
+    degree[degree == 0] = 1.0
+
+    sw = skin_weights.copy()
+    for _ in range(iterations):
+        neighbor_avg = adj.dot(sw) / degree[:, None]
+        sw = (1.0 - factor) * sw + factor * neighbor_avg
+        row_sum = sw.sum(axis=1, keepdims=True)
+        row_sum[row_sum == 0] = 1.0
+        sw = sw / row_sum
+
+    return sw
 
 def parser():
     parser = argparse.ArgumentParser()
@@ -204,6 +245,7 @@ def make_armature(
     skin: ndarray,
     group_per_vertex: int=4,
     add_root: bool=False,
+    smooth_iterations: int=2,
     is_vrm: bool=False,
 ):
     context = bpy.context
@@ -299,16 +341,40 @@ def make_armature(
 
         _, index = tree.query(n_vertices)
 
-        for v, co in enumerate(tqdm(n_vertices)):
+        # Build full weight matrix for this mesh then smooth
+        J_total = skin.shape[1]
+        mesh_skin = skin[index]  # (V_mesh, J_total)
+
+        if smooth_iterations > 0:
+            ob_faces = np.array([p.vertices[:] for p in ob.data.polygons if len(p.vertices) == 3], dtype=np.int64)
+            if len(ob_faces) == 0:
+                # Triangulate non-tri faces
+                ob_faces_list = []
+                for p in ob.data.polygons:
+                    verts = list(p.vertices)
+                    for k in range(1, len(verts) - 1):
+                        ob_faces_list.append([verts[0], verts[k], verts[k + 1]])
+                ob_faces = np.array(ob_faces_list, dtype=np.int64) if ob_faces_list else np.zeros((0, 3), dtype=np.int64)
+            if len(ob_faces) > 0:
+                mesh_skin = _laplacian_smooth_weights(ob_faces, mesh_skin, iterations=smooth_iterations)
+
+        # Top-k + renormalize per vertex of this mesh
+        mesh_argsorted = np.argsort(-mesh_skin, axis=1)
+        mesh_reweight = mesh_skin[np.arange(len(mesh_skin))[:, None], mesh_argsorted]
+        top_sum = mesh_reweight[:, :group_per_vertex].sum(axis=1, keepdims=True)
+        top_sum[top_sum == 0] = 1.0
+        mesh_reweight = mesh_reweight / top_sum
+        mesh_reweight = np.nan_to_num(mesh_reweight)
+
+        for v in tqdm(range(len(n_vertices))):
             for ii in range(group_per_vertex):
-                i = argsorted[index[v], ii]
+                i = mesh_argsorted[v, ii]
                 if i >= len(names):
                     continue
                 n = names[i]
                 if n not in ob.vertex_groups:
                     continue
-                        
-                ob.vertex_groups[n].add([v], vertex_group_reweight[index[v], ii], 'REPLACE')
+                ob.vertex_groups[n].add([v], float(mesh_reweight[v, ii]), 'REPLACE')
         armature.select_set(False)
         ob.select_set(False)
     armature.parent = local_parent
@@ -348,10 +414,17 @@ def merge(
     tails: ndarray,
     add_root: bool=False,
     is_vrm: bool=False,
+    group_per_vertex: int | None=None,
+    smooth_iterations: int | None=None,
 ):
     '''
     Merge skin and bone into original file.
     '''
+    if group_per_vertex is None:
+        group_per_vertex = int(os.environ.get("RIGGING3D_GROUPS_PER_VERTEX", "8"))
+    if smooth_iterations is None:
+        smooth_iterations = int(os.environ.get("RIGGING3D_SMOOTH_ITERATIONS", "2"))
+
     clean_bpy()
     try:
         load(path)
@@ -362,16 +435,16 @@ def merge(
         bpy.data.armatures.remove(c)
     
     bones = np.concatenate([joints, tails], axis=1)
-    # if the result is weired, orientation may be wrong
     make_armature(
         vertices=vertices,
         bones=bones,
         parents=parents,
         names=names,
         skin=skin,
-        group_per_vertex=4,
+        group_per_vertex=group_per_vertex,
         add_root=add_root,
         is_vrm=is_vrm,
+        smooth_iterations=smooth_iterations,
     )
     
     dirpath = os.path.dirname(output_path)
@@ -386,6 +459,7 @@ def merge(
             bpy.ops.export_scene.gltf(
                 filepath=output_path,
                 export_draco_mesh_compression_enable=False,
+                export_all_influences=True,
             )
         elif output_path.endswith(".dae"):
             bpy.ops.wm.collada_export(filepath=output_path)

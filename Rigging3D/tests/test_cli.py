@@ -16,6 +16,27 @@ def _mock_tree(p: Path) -> None:
     (p / "src").mkdir()
 
 
+def _bash_write_output_fbx(root: Path, script: str, args: list[str], *, python_bin: str | None = None) -> int:
+    """Simula generate_skeleton / generate_skin: escreve o ficheiro indicado em --output (GLB/FBX)."""
+    if "--output" in args:
+        i = args.index("--output")
+        out = Path(args[i + 1])
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"mockfbx")
+    return 0
+
+
+def _module_write_glb(root: Path, py: str, module: str, args: list[str], **_kwargs) -> int:
+    """Simula merge: cria o GLB em --output=."""
+    for a in args:
+        if a.startswith("--output="):
+            p = Path(a.split("=", 1)[1])
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(b"mockglb")
+            return 0
+    return 1
+
+
 # ── Help / version ─────────────────────────────────────────────────────
 
 
@@ -64,7 +85,7 @@ class TestSkeleton:
         with patch("rigging3d.cli._find_bash", return_value=None):
             result = CliRunner().invoke(
                 cli,
-                ["skeleton", "-i", "mesh.glb", "-o", "skel.fbx"],
+                ["skeleton", "-i", "mesh.glb", "-o", "skel.glb"],
                 catch_exceptions=False,
             )
         assert result.exit_code != 0
@@ -89,7 +110,7 @@ class TestSkeleton:
         ):
             result = CliRunner().invoke(
                 cli,
-                ["skeleton", "-i", "mesh.glb", "-o", "skel.fbx"],
+                ["skeleton", "-i", "mesh.glb", "-o", "skel.glb"],
                 catch_exceptions=False,
             )
         assert result.exit_code == 0
@@ -105,7 +126,7 @@ class TestSkeleton:
         ):
             result = CliRunner().invoke(
                 cli,
-                ["skeleton", "-i", "mesh.glb", "-o", "skel.fbx"],
+                ["skeleton", "-i", "mesh.glb", "-o", "skel.glb"],
                 catch_exceptions=False,
             )
         assert result.exit_code != 0
@@ -126,7 +147,7 @@ class TestSkin:
         ):
             result = CliRunner().invoke(
                 cli,
-                ["skin", "-i", "skel.fbx", "-o", "skin.fbx"],
+                ["skin", "-i", "skel.glb", "-o", "skin.glb"],
                 catch_exceptions=False,
             )
         assert result.exit_code == 0
@@ -142,7 +163,7 @@ class TestSkin:
         ):
             result = CliRunner().invoke(
                 cli,
-                ["skin", "-i", "skel.fbx", "-o", "skin.fbx"],
+                ["skin", "-i", "skel.glb", "-o", "skin.glb"],
                 catch_exceptions=False,
             )
         assert result.exit_code != 0
@@ -153,7 +174,9 @@ class TestSkin:
         monkeypatch.setenv("RIGGING3D_ROOT", str(ur))
         captured_args: list[str] = []
 
-        def fake_run_bash(_root: Path, _script: str, args: list[str]) -> int:
+        def fake_run_bash(
+            _root: Path, _script: str, args: list[str], *, python_bin: str | None = None
+        ) -> int:
             captured_args.extend(args)
             return 0
 
@@ -163,7 +186,7 @@ class TestSkin:
         ):
             CliRunner().invoke(
                 cli,
-                ["skin", "-i", "skel.fbx", "-o", "skin.fbx", "--data-name", "custom.npz"],
+                ["skin", "-i", "skel.glb", "-o", "skin.glb", "--data-name", "custom.npz"],
                 catch_exceptions=False,
             )
         assert "custom.npz" in captured_args
@@ -180,7 +203,7 @@ class TestMerge:
         with patch("rigging3d.cli._run_module", return_value=0):
             result = CliRunner().invoke(
                 cli,
-                ["merge", "-s", "skin.fbx", "-t", "mesh.glb", "-o", "out.glb"],
+                ["merge", "-s", "skin.glb", "-t", "mesh.glb", "-o", "out.glb"],
                 catch_exceptions=False,
             )
         assert result.exit_code == 0
@@ -193,7 +216,7 @@ class TestMerge:
         with patch("rigging3d.cli._run_module", return_value=3):
             result = CliRunner().invoke(
                 cli,
-                ["merge", "-s", "skin.fbx", "-t", "mesh.glb", "-o", "out.glb"],
+                ["merge", "-s", "skin.glb", "-t", "mesh.glb", "-o", "out.glb"],
                 catch_exceptions=False,
             )
         assert result.exit_code != 0
@@ -204,14 +227,14 @@ class TestMerge:
         monkeypatch.setenv("RIGGING3D_ROOT", str(ur))
         captured: list[str] = []
 
-        def fake_run_module(_root: Path, _py: str, module: str, _args: list[str]) -> int:
+        def fake_run_module(_root: Path, _py: str, module: str, _args: list[str], **_kw) -> int:
             captured.append(module)
             return 0
 
         with patch("rigging3d.cli._run_module", side_effect=fake_run_module):
             CliRunner().invoke(
                 cli,
-                ["merge", "-s", "skin.fbx", "-t", "mesh.glb", "-o", "out.glb"],
+                ["merge", "-s", "skin.glb", "-t", "mesh.glb", "-o", "out.glb"],
                 catch_exceptions=False,
             )
         assert captured == ["src.inference.merge"]
@@ -249,8 +272,8 @@ class TestPipeline:
         out = tmp_path / "o.glb"
         with (
             patch("rigging3d.cli._find_bash", return_value="/bin/bash"),
-            patch("rigging3d.cli._run_bash", return_value=0),
-            patch("rigging3d.cli._run_module", return_value=0),
+            patch("rigging3d.cli._run_bash", side_effect=_bash_write_output_fbx),
+            patch("rigging3d.cli._run_module", side_effect=_module_write_glb),
         ):
             result = CliRunner().invoke(
                 cli,
@@ -278,10 +301,12 @@ class TestPipeline:
         _ur, mesh = self._setup(tmp_path, monkeypatch)
         call_count = 0
 
-        def bash_side_effect(*_args, **_kwargs) -> int:
+        def bash_side_effect(root: Path, script: str, args: list[str], *, python_bin: str | None = None) -> int:
             nonlocal call_count
             call_count += 1
-            return 0 if call_count == 1 else 1
+            if call_count == 1:
+                return _bash_write_output_fbx(root, script, args, python_bin=python_bin)
+            return 1
 
         with (
             patch("rigging3d.cli._find_bash", return_value="/bin/bash"),
@@ -299,7 +324,7 @@ class TestPipeline:
         _ur, mesh = self._setup(tmp_path, monkeypatch)
         with (
             patch("rigging3d.cli._find_bash", return_value="/bin/bash"),
-            patch("rigging3d.cli._run_bash", return_value=0),
+            patch("rigging3d.cli._run_bash", side_effect=_bash_write_output_fbx),
             patch("rigging3d.cli._run_module", return_value=1),
         ):
             result = CliRunner().invoke(
@@ -315,8 +340,8 @@ class TestPipeline:
         wd = tmp_path / "work"
         with (
             patch("rigging3d.cli._find_bash", return_value="/bin/bash"),
-            patch("rigging3d.cli._run_bash", return_value=0),
-            patch("rigging3d.cli._run_module", return_value=0),
+            patch("rigging3d.cli._run_bash", side_effect=_bash_write_output_fbx),
+            patch("rigging3d.cli._run_module", side_effect=_module_write_glb),
         ):
             CliRunner().invoke(
                 cli,
@@ -339,8 +364,8 @@ class TestPipeline:
 
         with (
             patch("rigging3d.cli._find_bash", return_value="/bin/bash"),
-            patch("rigging3d.cli._run_bash", return_value=0),
-            patch("rigging3d.cli._run_module", return_value=0),
+            patch("rigging3d.cli._run_bash", side_effect=_bash_write_output_fbx),
+            patch("rigging3d.cli._run_module", side_effect=_module_write_glb),
             patch("tempfile.mkdtemp", side_effect=tracking_mkdtemp),
         ):
             CliRunner().invoke(
@@ -365,8 +390,8 @@ class TestPipeline:
 
         with (
             patch("rigging3d.cli._find_bash", return_value="/bin/bash"),
-            patch("rigging3d.cli._run_bash", return_value=0),
-            patch("rigging3d.cli._run_module", return_value=0),
+            patch("rigging3d.cli._run_bash", side_effect=_bash_write_output_fbx),
+            patch("rigging3d.cli._run_module", side_effect=_module_write_glb),
             patch("tempfile.mkdtemp", side_effect=tracking_mkdtemp),
         ):
             CliRunner().invoke(
@@ -401,7 +426,7 @@ class TestRootOption:
         ):
             result = CliRunner().invoke(
                 cli,
-                ["--root", str(ur), "skeleton", "-i", "mesh.glb", "-o", "skel.fbx"],
+                ["--root", str(ur), "skeleton", "-i", "mesh.glb", "-o", "skel.glb"],
                 catch_exceptions=False,
             )
         assert result.exit_code == 0

@@ -1,7 +1,9 @@
 import platform
 import os
 if platform.system() == "Linux":
-    os.environ['PYOPENGL_PLATFORM'] = 'egl'
+    os.environ.setdefault("PYOPENGL_PLATFORM", "egl")
+    os.environ.setdefault("__NV_PRIME_RENDER_OFFLOAD", "1")
+    os.environ.setdefault("__GLX_VENDOR_LIBRARY_NAME", "nvidia")
 
 from typing import Dict, List, Tuple, Literal
 from dataclasses import dataclass

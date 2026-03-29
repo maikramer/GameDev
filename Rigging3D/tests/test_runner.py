@@ -219,7 +219,7 @@ class TestFindBash:
 
 class TestValidateIO:
     def test_single_file_ok(self, tmp_path: Path) -> None:
-        _validate_io(tmp_path / "i.glb", tmp_path / "o.fbx", None, None)
+        _validate_io(tmp_path / "i.glb", tmp_path / "o.glb", None, None)
 
     def test_dir_mode_ok(self, tmp_path: Path) -> None:
         _validate_io(None, None, tmp_path / "in", tmp_path / "out")
@@ -246,7 +246,7 @@ class TestValidateIO:
         from click import ClickException
 
         with pytest.raises(ClickException):
-            _validate_io(None, tmp_path / "o.fbx", None, None)
+            _validate_io(None, tmp_path / "o.glb", None, None)
 
 
 # ── _io_args ───────────────────────────────────────────────────────────
@@ -255,7 +255,7 @@ class TestValidateIO:
 class TestIOArgs:
     def test_single_file_args(self, tmp_path: Path) -> None:
         inp = tmp_path / "i.glb"
-        out = tmp_path / "o.fbx"
+        out = tmp_path / "o.glb"
         inp.write_bytes(b"x")
         args = _io_args(inp, out, None, None)
         assert "--input" in args
@@ -273,7 +273,7 @@ class TestIOArgs:
 
     def test_single_file_with_output_dir(self, tmp_path: Path) -> None:
         inp = tmp_path / "i.glb"
-        out = tmp_path / "o.fbx"
+        out = tmp_path / "o.glb"
         odir = tmp_path / "out"
         inp.write_bytes(b"x")
         odir.mkdir()

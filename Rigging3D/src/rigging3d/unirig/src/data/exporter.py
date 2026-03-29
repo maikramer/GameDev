@@ -365,8 +365,14 @@ class Exporter():
             tails=tails,
         )
         
-        # always enable add_leaf_bones to keep leaf bones
-        bpy.ops.export_scene.fbx(filepath=path, check_existing=False, add_leaf_bones=False)
+        ext = os.path.splitext(path)[1].lower()
+        if ext == ".glb":
+            bpy.ops.export_scene.gltf(filepath=path, export_format="GLB", use_selection=False, export_all_influences=True)
+        elif ext == ".gltf":
+            bpy.ops.export_scene.gltf(filepath=path, export_format="GLTF_SEPARATE", use_selection=False, export_all_influences=True)
+        else:
+            # FBX por defeito (ext .fbx ou outro)
+            bpy.ops.export_scene.fbx(filepath=path, check_existing=False, add_leaf_bones=False)
     
     def _export_render(
         self,

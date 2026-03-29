@@ -1,11 +1,10 @@
 #!/bin/bash
 # Rigging3D — setup completo de inferência
-# Cria .venv, instala PyTorch+CUDA, extras inference, spconv, torch-scatter/cluster, flash-attn.
+# Cria .venv, instala PyTorch+CUDA, extras inference, spconv, torch-scatter/cluster.
 #
 # Uso:
 #   bash scripts/setup.sh                  # auto-detecta tudo
 #   bash scripts/setup.sh --python python3.11
-#   bash scripts/setup.sh --skip-flash     # pula flash-attn
 #   bash scripts/setup.sh --force          # recria venv do zero
 
 set -euo pipefail
@@ -15,19 +14,16 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 VENV_DIR="$PROJECT_ROOT/.venv"
 
 PYTHON_CMD="${PYTHON_CMD:-python3.11}"
-SKIP_FLASH=false
 FORCE=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --python)     PYTHON_CMD="$2"; shift ;;
-        --skip-flash) SKIP_FLASH=true ;;
         --force)      FORCE=true ;;
         -h|--help)
-            echo "Uso: bash scripts/setup.sh [--python CMD] [--skip-flash] [--force]"
+            echo "Uso: bash scripts/setup.sh [--python CMD] [--force]"
             echo ""
             echo "  --python CMD    Interpretador Python (default: python3.11)"
-            echo "  --skip-flash    Não instalar flash-attn"
             echo "  --force         Recriar .venv do zero"
             exit 0
             ;;
@@ -68,13 +64,13 @@ PY_MINOR=$("$PYTHON_CMD" -c "import sys; print(sys.version_info[1])")
 log_info "$PY_VERSION"
 
 if [[ "$PY_MINOR" -lt 10 ]]; then
-    log_error "Python 3.10+ necessário (recomendado 3.11)"
+    log_error "Python 3.10+ necessário"
     exit 1
 fi
 
 if [[ "$PY_MINOR" -ne 11 ]]; then
-    log_warn "Python 3.11 é recomendado (bpy==4.2.0 e open3d requerem cp311)."
-    log_warn "Com Python 3.$PY_MINOR, alguns pacotes podem não ter wheels."
+    log_warn "Inferência Rigging3D espera Python 3.11 (bpy==5.0.1 no PyPI exige cp311; open3d sem wheel cp313)."
+    log_warn "Para bpy 5.1 alinhado ao Blender 5.1.0 usa o projecto Animator3D com Python 3.13."
 fi
 
 # ---------------------------------------------------------------------------
@@ -202,13 +198,13 @@ else:
 
 log_info "torch=$TORCH_SHORT  cuda_tag=$TORCH_CUDA_TAG"
 
-# torch-scatter e torch-cluster
+# torch-scatter e torch-cluster — forçar reinstall garante wheel CUDA (não CPU)
 SCATTER_URL="https://data.pyg.org/whl/torch-${TORCH_SHORT}+${TORCH_CUDA_TAG}.html"
 log_info "Instalando torch-scatter, torch-cluster de $SCATTER_URL ..."
-"$PIP" install torch-scatter torch-cluster -f "$SCATTER_URL" --quiet 2>&1 || {
+"$PIP" install --force-reinstall --no-deps torch-scatter torch-cluster -f "$SCATTER_URL" --quiet 2>&1 || {
     log_warn "Wheels torch-scatter/cluster não disponíveis para torch $TORCH_SHORT+$TORCH_CUDA_TAG."
     log_warn "Tentando compilação pip (pode demorar)..."
-    "$PIP" install torch-scatter torch-cluster --quiet || log_warn "Falha na instalação de torch-scatter/cluster"
+    "$PIP" install --force-reinstall --no-deps torch-scatter torch-cluster --quiet || log_warn "Falha na instalação de torch-scatter/cluster"
 }
 log_ok "torch-scatter/cluster"
 
@@ -235,27 +231,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 7. flash-attn (opcional)
-# ---------------------------------------------------------------------------
-if [[ "$SKIP_FLASH" != true ]]; then
-    log_step "flash-attn"
-
-    if "$PYTHON" -c "import flash_attn" 2>/dev/null; then
-        FA_VER=$("$PYTHON" -c "import flash_attn; print(flash_attn.__version__)")
-        log_info "flash-attn $FA_VER já instalado"
-    else
-        log_info "Executando scripts/install_flash_attn.sh ..."
-        bash "$SCRIPT_DIR/install_flash_attn.sh" --pip "$PIP" || {
-            log_warn "flash-attn não instalado (o pipeline usa SDPA como fallback)."
-            log_warn "Para instalar depois: bash scripts/install_flash_attn.sh"
-        }
-    fi
-else
-    log_info "flash-attn ignorado (--skip-flash)"
-fi
-
-# ---------------------------------------------------------------------------
-# 8. Verificação
+# 7. Verificação
 # ---------------------------------------------------------------------------
 log_step "Verificação final"
 
@@ -267,7 +243,6 @@ print(f'  GPU:         {torch.cuda.get_device_name(0) if torch.cuda.is_available
 "$PYTHON" -c "import spconv; print(f'  spconv:      {spconv.__version__}')" 2>/dev/null || log_warn "  spconv: não instalado"
 "$PYTHON" -c "import torch_scatter; print('  torch-scatter: OK')" 2>/dev/null || log_warn "  torch-scatter: não instalado"
 "$PYTHON" -c "import torch_cluster; print('  torch-cluster: OK')" 2>/dev/null || log_warn "  torch-cluster: não instalado"
-"$PYTHON" -c "import flash_attn; print(f'  flash-attn:  {flash_attn.__version__}')" 2>/dev/null || log_info "  flash-attn:  não instalado (fallback SDPA)"
 "$PYTHON" -c "import bpy; print(f'  bpy:         {bpy.app.version_string}')" 2>/dev/null || log_warn "  bpy: não instalado"
 "$PYTHON" -c "import lightning; print(f'  lightning:   {lightning.__version__}')" 2>/dev/null || log_warn "  lightning: não instalado"
 "$PYTHON" -c "import rigging3d; print(f'  rigging3d:   {rigging3d.__version__}')" 2>/dev/null || log_warn "  rigging3d: não instalado"
