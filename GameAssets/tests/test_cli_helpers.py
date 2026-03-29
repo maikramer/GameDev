@@ -6,6 +6,7 @@ import zlib
 from pathlib import Path
 
 from gameassets.cli import (
+    _extract_json_from_output,
     _paths_for_row,
     _rigging3d_output_path,
     _rigging3d_pipeline_argv,
@@ -14,6 +15,19 @@ from gameassets.cli import (
 )
 from gameassets.manifest import ManifestRow
 from gameassets.profile import GameProfile, Rigging3DProfile, Text3DProfile
+
+
+def test_extract_json_from_mixed_stdout() -> None:
+    text = 'Blender 4.x\n{"armatures": [], "fps": 24.0}\nINFO done\n'
+    d = _extract_json_from_output(text)
+    assert d.get("fps") == 24.0
+    assert d.get("armatures") == []
+
+
+def test_extract_json_nested_object() -> None:
+    text = 'x\n{"a": 1, "b": {"c": true}}\n'
+    d = _extract_json_from_output(text)
+    assert d["b"]["c"] is True
 
 
 def test_seed_for_row_none_when_no_base() -> None:

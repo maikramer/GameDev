@@ -9,6 +9,7 @@ import sys
 import tempfile
 import time
 import zlib
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -2071,6 +2072,313 @@ def resume_cmd(
     )
     if failures:
         sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# debug — ferramentas visuais para agentes IA
+# ---------------------------------------------------------------------------
+
+
+@main.group("debug")
+def debug_group() -> None:
+    """Ferramentas de debugging visual para agentes IA (screenshots, inspect, compare, bundle)."""
+
+
+def _resolve_animator3d_bin() -> str | None:
+    return resolve_binary("ANIMATOR3D_BIN", "animator3d")
+
+
+def _extract_json_from_output(text: str) -> dict[str, Any]:
+    """Extrai o primeiro objecto JSON válido de stdout misturado com logs (usa raw_decode)."""
+    dec = json.JSONDecoder()
+    for i, ch in enumerate(text):
+        if ch != "{":
+            continue
+        try:
+            obj, _end = dec.raw_decode(text[i:])
+            if isinstance(obj, dict):
+                return obj
+            return {"_json_value": obj}
+        except json.JSONDecodeError:
+            continue
+    return {
+        "_parse_error": True,
+        "raw_preview": text[:8000] if len(text) > 8000 else text,
+    }
+
+
+@debug_group.command("screenshot")
+@click.argument("input_path", type=click.Path(exists=True, path_type=Path))
+@click.option("--output-dir", "-o", type=click.Path(path_type=Path), default=None, help="Pasta destino.")
+@click.option("--views", default="front,three_quarter,right,back", show_default=True, help="Vistas separadas por virgula.")
+@click.option("--resolution", "-r", default=512, show_default=True, type=int, help="Resolucao px.")
+@click.option("--show-bones", is_flag=True, help="Mostrar armature wireframe.")
+@click.option("--frame", default=None, type=int, help="Um frame para todas as vistas.")
+@click.option(
+    "--frame-list",
+    "frame_list",
+    default=None,
+    type=str,
+    help="Varios frames (ex.: 1,36,72) para animacao — ficheiros view_fNNNN.png.",
+)
+def debug_screenshot(
+    input_path: Path,
+    output_dir: Path | None,
+    views: str,
+    resolution: int,
+    show_bones: bool,
+    frame: int | None,
+    frame_list: str | None,
+) -> None:
+    """Gera screenshots multi-angulo de um GLB (invoca animator3d)."""
+    abin = _resolve_animator3d_bin()
+    if not abin:
+        console.print("[red]animator3d nao encontrado.[/red] Define ANIMATOR3D_BIN ou instala Animator3D.")
+        sys.exit(1)
+
+    if output_dir is None:
+        output_dir = input_path.parent / f"{input_path.stem}_debug"
+
+    argv = [
+        abin, "screenshot", str(input_path),
+        "--output-dir", str(output_dir),
+        "--views", views,
+        "--resolution", str(resolution),
+    ]
+    if show_bones:
+        argv.append("--show-bones")
+    if frame_list:
+        argv.extend(["--frame-list", frame_list])
+    elif frame is not None:
+        argv.extend(["--frame", str(frame)])
+
+    r = run_cmd(argv)
+    if r.returncode != 0:
+        err = merge_subprocess_output(r, max_chars=2000) or "animator3d screenshot falhou"
+        console.print(f"[red]Erro:[/red] {err}")
+        sys.exit(1)
+
+    report = _extract_json_from_output(r.stdout)
+    report_path = output_dir / "report.json"
+    report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n")
+    n = len(report.get("screenshots", []))
+    console.print(f"[green]{n} screenshots[/green] em {output_dir}")
+    console.print(json.dumps(report, indent=2, ensure_ascii=False))
+
+
+@debug_group.command("bundle")
+@click.argument("input_path", type=click.Path(exists=True, path_type=Path))
+@click.option("--output-dir", "-o", type=click.Path(path_type=Path), default=None, help="Pasta destino.")
+@click.option(
+    "--views",
+    default="front,three_quarter,right,back,low_front,worm",
+    show_default=True,
+    help="Vistas (inclui low_front e worm por defeito).",
+)
+@click.option("--resolution", "-r", default=512, show_default=True, type=int, help="Resolucao px.")
+@click.option("--show-bones", is_flag=True, help="Wireframe do armature nos screenshots.")
+@click.option("--frame", default=None, type=int, help="Frame unico para screenshots.")
+@click.option("--frame-list", "frame_list", default=None, type=str, help="Varios frames (animacao).")
+def debug_bundle(
+    input_path: Path,
+    output_dir: Path | None,
+    views: str,
+    resolution: int,
+    show_bones: bool,
+    frame: int | None,
+    frame_list: str | None,
+) -> None:
+    """Pacote único para agentes: inspect JSON + screenshots + bundle.json com metadados."""
+    abin = _resolve_animator3d_bin()
+    if not abin:
+        console.print("[red]animator3d nao encontrado.[/red] Define ANIMATOR3D_BIN ou instala Animator3D.")
+        sys.exit(1)
+
+    if output_dir is None:
+        output_dir = input_path.parent / f"{input_path.stem}_agent_bundle"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    inspect_path = output_dir / "inspect.json"
+    argv_in = [abin, "inspect", str(input_path), "--json-out"]
+    r_in = run_cmd(argv_in)
+    if r_in.returncode != 0:
+        err = merge_subprocess_output(r_in, max_chars=2000) or "inspect falhou"
+        console.print(f"[red]Erro:[/red] {err}")
+        sys.exit(1)
+    inspect_data = _extract_json_from_output(r_in.stdout)
+    inspect_path.write_text(json.dumps(inspect_data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    shot_dir = output_dir / "screenshots"
+    argv_sh = [
+        abin, "screenshot", str(input_path),
+        "--output-dir", str(shot_dir),
+        "--views", views,
+        "--resolution", str(resolution),
+    ]
+    if show_bones:
+        argv_sh.append("--show-bones")
+    if frame_list:
+        argv_sh.extend(["--frame-list", frame_list])
+    elif frame is not None:
+        argv_sh.extend(["--frame", str(frame)])
+
+    r_sh = run_cmd(argv_sh)
+    if r_sh.returncode != 0:
+        err = merge_subprocess_output(r_sh, max_chars=2000) or "screenshot falhou"
+        console.print(f"[red]Erro:[/red] {err}")
+        sys.exit(1)
+    shot_report = _extract_json_from_output(r_sh.stdout)
+    (output_dir / "screenshot_report.json").write_text(
+        json.dumps(shot_report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+
+    bundle: dict[str, Any] = {
+        "tool": "gameassets.debug.bundle",
+        "gameassets_version": __version__,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "input": str(input_path.resolve()),
+        "input_size_bytes": input_path.stat().st_size if input_path.is_file() else 0,
+        "inspect_path": str(inspect_path),
+        "screenshot_dir": str(shot_dir),
+        "screenshot_report_path": str(output_dir / "screenshot_report.json"),
+        "inspect": inspect_data,
+        "screenshots": shot_report.get("screenshots", []),
+        "world_bounds": shot_report.get("world_bounds"),
+        "mesh": shot_report.get("mesh"),
+        "animations": shot_report.get("animations"),
+    }
+    bundle_path = output_dir / "bundle.json"
+    bundle_path.write_text(json.dumps(bundle, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    console.print(f"[green]Bundle:[/green] {bundle_path}")
+    console.print(f"  inspect → {inspect_path}")
+    console.print(f"  screenshots → {shot_dir} ({len(bundle['screenshots'])} imagens)")
+    sys.stdout.write(json.dumps(bundle, indent=2, ensure_ascii=False) + "\n")
+
+
+@debug_group.command("inspect")
+@click.argument("input_path", type=click.Path(exists=True, path_type=Path))
+@click.option("--output", "-o", type=click.Path(path_type=Path), default=None, help="Guardar JSON em ficheiro.")
+def debug_inspect(input_path: Path, output: Path | None) -> None:
+    """Mostra metadados de armature/mesh/animacao em JSON (via animator3d)."""
+    abin = _resolve_animator3d_bin()
+    if not abin:
+        console.print("[red]animator3d nao encontrado.[/red]")
+        sys.exit(1)
+
+    argv = [abin, "inspect", str(input_path), "--json-out"]
+    r = run_cmd(argv)
+    if r.returncode != 0:
+        err = merge_subprocess_output(r, max_chars=2000) or "animator3d inspect falhou"
+        console.print(f"[red]Erro:[/red] {err}")
+        sys.exit(1)
+
+    data = _extract_json_from_output(r.stdout)
+
+    data["file_size_bytes"] = input_path.stat().st_size if input_path.is_file() else 0
+    data["input"] = str(input_path)
+
+    out_str = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+    if output:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(out_str)
+        console.print(f"[green]Guardado:[/green] {output}")
+    else:
+        sys.stdout.write(out_str)
+
+
+@debug_group.command("compare")
+@click.argument("file_a", type=click.Path(exists=True, path_type=Path))
+@click.argument("file_b", type=click.Path(exists=True, path_type=Path))
+@click.option("--output-dir", "-o", type=click.Path(path_type=Path), default=None, help="Pasta destino.")
+@click.option("--views", default="front,three_quarter", show_default=True, help="Vistas para comparar.")
+@click.option("--resolution", "-r", default=512, show_default=True, type=int, help="Resolucao px.")
+@click.option(
+    "--with-inspect",
+    "with_inspect",
+    is_flag=True,
+    help="Incluir inspect JSON por modelo (ossos, meshes, bounds) no diff_report.",
+)
+def debug_compare(
+    file_a: Path,
+    file_b: Path,
+    output_dir: Path | None,
+    views: str,
+    resolution: int,
+    with_inspect: bool,
+) -> None:
+    """Compara dois modelos lado a lado (screenshots + report JSON)."""
+    abin = _resolve_animator3d_bin()
+    if not abin:
+        console.print("[red]animator3d nao encontrado.[/red]")
+        sys.exit(1)
+
+    if output_dir is None:
+        output_dir = file_a.parent / f"{file_a.stem}_vs_{file_b.stem}"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    dir_a = output_dir / "a"
+    dir_b = output_dir / "b"
+
+    inspect_side: dict[str, Any] = {}
+    if with_inspect:
+        for label, fpath in [("a", file_a), ("b", file_b)]:
+            r_i = run_cmd([abin, "inspect", str(fpath), "--json-out"])
+            if r_i.returncode == 0:
+                inspect_side[label] = _extract_json_from_output(r_i.stdout)
+            else:
+                inspect_side[label] = {"_error": merge_subprocess_output(r_i, max_chars=500)}
+
+    reports = {}
+    for label, fpath, d in [("a", file_a, dir_a), ("b", file_b, dir_b)]:
+        argv = [
+            abin, "screenshot", str(fpath),
+            "--output-dir", str(d),
+            "--views", views,
+            "--resolution", str(resolution),
+            "--show-bones",
+        ]
+        r = run_cmd(argv)
+        if r.returncode != 0:
+            console.print(f"[red]Erro ao gerar screenshots de {label}:[/red] {merge_subprocess_output(r, max_chars=500)}")
+            sys.exit(1)
+        reports[label] = _extract_json_from_output(r.stdout)
+
+    side_by_side_paths = []
+    try:
+        from PIL import Image
+
+        view_list = [v.strip() for v in views.split(",") if v.strip()]
+        for vn in view_list:
+            pa = dir_a / f"{vn}.png"
+            pb = dir_b / f"{vn}.png"
+            if pa.is_file() and pb.is_file():
+                img_a = Image.open(pa)
+                img_b = Image.open(pb)
+                w = img_a.width + img_b.width + 4
+                h = max(img_a.height, img_b.height)
+                combined = Image.new("RGBA", (w, h), (30, 30, 30, 255))
+                combined.paste(img_a, (0, 0))
+                combined.paste(img_b, (img_a.width + 4, 0))
+                out_path = output_dir / f"compare_{vn}.png"
+                combined.save(out_path)
+                side_by_side_paths.append({"view": vn, "path": str(out_path)})
+    except ImportError:
+        console.print("[yellow]Pillow nao instalado — side-by-side nao gerado.[/yellow]")
+
+    diff_report: dict[str, Any] = {
+        "file_a": str(file_a),
+        "file_b": str(file_b),
+        "report_a": reports.get("a", {}),
+        "report_b": reports.get("b", {}),
+        "side_by_side": side_by_side_paths,
+    }
+    if inspect_side:
+        diff_report["inspect"] = inspect_side
+    diff_path = output_dir / "diff_report.json"
+    diff_path.write_text(json.dumps(diff_report, indent=2, ensure_ascii=False) + "\n")
+    console.print(f"[green]Comparacao:[/green] {output_dir}")
+    n = len(side_by_side_paths)
+    console.print(f"  {n} imagens side-by-side, report em {diff_path}")
 
 
 if __name__ == "__main__":
