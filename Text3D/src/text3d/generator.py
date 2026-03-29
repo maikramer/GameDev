@@ -17,6 +17,7 @@ from text2d.generator import KleinFluxGenerator
 
 from . import defaults as _defaults
 from .utils.memory import clear_cuda_memory as _clear_cuda_cache
+from .utils.prompt_enhance import create_optimized_prompt as _optimize_prompt
 
 
 def _as_trimesh(mesh_or_nested: Any) -> trimesh.Trimesh:
@@ -140,14 +141,22 @@ class HunyuanTextTo3DGenerator:
         mc_level: float = 0.0,
         t2d_full_gpu: bool = False,
         return_reference_image: bool = False,
+        optimize_prompt: bool = True,
     ) -> trimesh.Trimesh | tuple[trimesh.Trimesh, Image.Image]:
         """
         Text-to-3D: gera imagem com Text2D, descarrega Text2D, gera mesh com Hunyuan3D-2mini.
 
         Com ``return_reference_image=True`` devolve ``(mesh, imagem_pil)`` para Hunyuan3D-Paint.
+        Com ``optimize_prompt=True`` melhora o prompt para evitar placas/sombras na base.
         """
         if not prompt or not str(prompt).strip():
             raise ValueError("Prompt não pode ser vazio")
+
+        original_prompt = prompt
+        if optimize_prompt:
+            prompt = _optimize_prompt(prompt, aggressive=True)
+            if self.verbose and prompt != original_prompt:
+                self._log(f"Prompt otimizado: {prompt[:120]}...")
 
         if self.device == "cpu":
             low_t2d = True

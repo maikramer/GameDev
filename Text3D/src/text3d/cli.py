@@ -416,6 +416,28 @@ def skill_install_cmd(target: Path, force: bool) -> None:
         "center=centro da caixa em (0,0,0); none=não mover. Sobrescreve TEXT3D_EXPORT_ORIGIN."
     ),
 )
+@click.option(
+    "--save-reference-image",
+    "save_reference_image",
+    is_flag=True,
+    default=False,
+    help=(
+        "Guarda a imagem usada no image-to-3D: com prompt Text2D → PNG <stem>_text2d.png junto ao -o; "
+        "com --from-image copia a entrada para <stem>_input.png. "
+        "Serve para ver sombras de contacto / 'pratos' na rede antes do Hunyuan3D."
+    ),
+)
+@click.option(
+    "--no-prompt-optimize",
+    "no_prompt_optimize",
+    is_flag=True,
+    default=False,
+    help=(
+        "Desativa a otimização automática de prompts. Por defeito o sistema adiciona "
+        "termos como 'no ground plane', 'no contact shadow' para evitar placas na base. "
+        "Use esta flag para controlo total do prompt (prompts avançados)."
+    ),
+)
 @click.pass_context
 def generate(
     ctx,
@@ -463,6 +485,8 @@ def generate(
     model_subfolder,
     export_origin,
     export_rotation_x_deg,
+    save_reference_image,
+    no_prompt_optimize,
 ):
     """Gera 3D: PROMPT (Text2D → Hunyuan) ou --from-image (só Hunyuan)."""
     verbose = bool(ctx.obj.get("VERBOSE")) or generate_verbose
@@ -526,6 +550,9 @@ def generate(
     info_table.add_row("[bold]Octree / chunks[/bold]", f"{octree_resolution} / {num_chunks}")
     if mc_level != 0.0:
         info_table.add_row("[bold]mc_level[/bold]", str(mc_level))
+    if not from_image:
+        opt_label = "desligada" if no_prompt_optimize else "ativa (anti-placa)"
+        info_table.add_row("[bold]Otimização prompt[/bold]", opt_label)
     rep = "desligado" if no_mesh_repair else "maior componente + merge"
     if not no_mesh_repair and not no_ground_shadow_removal:
         rep += ", anti-sombra base"
@@ -613,7 +640,8 @@ def generate(
                         ref_for_paint = Path(from_image)
                 else:
                     task = progress.add_task("[cyan]Text2D → Hunyuan3D...", total=None)
-                    if texture:
+                    need_t2d_image = bool(texture or save_reference_image)
+                    if need_t2d_image:
                         result, ref_img = generator.generate(
                             prompt=prompt,
                             t2d_width=image_width,
@@ -630,8 +658,17 @@ def generate(
                             mc_level=mc_level,
                             t2d_full_gpu=t2d_full_gpu,
                             return_reference_image=True,
+                            optimize_prompt=not no_prompt_optimize,
                         )
-                        ref_for_paint = ref_img
+                        if texture:
+                            ref_for_paint = ref_img
+                        if save_reference_image:
+                            out_png = output.parent / f"{output.stem}_text2d.png"
+                            out_png.parent.mkdir(parents=True, exist_ok=True)
+                            ref_img.save(str(out_png), format="PNG")
+                            console.print(
+                                f"[dim]Imagem Text2D (rede Hunyuan): [cyan]{out_png.resolve()}[/cyan][/dim]"
+                            )
                     else:
                         result = generator.generate(
                             prompt=prompt,
@@ -648,8 +685,21 @@ def generate(
                             hy_seed=seed,
                             mc_level=mc_level,
                             t2d_full_gpu=t2d_full_gpu,
+                            return_reference_image=False,
+                            optimize_prompt=not no_prompt_optimize,
                         )
                 progress.update(task, description="[green]Concluído")
+
+            if save_reference_image and from_image:
+                import shutil
+
+                src = Path(from_image)
+                out_copy = output.parent / f"{output.stem}_input{src.suffix.lower() or '.png'}"
+                out_copy.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(from_image, out_copy)
+                console.print(
+                    f"[dim]Imagem de entrada copiada: [cyan]{out_copy.resolve()}[/cyan][/dim]"
+                )
 
             if not no_mesh_repair:
                 from .utils.mesh_repair import repair_mesh
