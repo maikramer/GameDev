@@ -75,7 +75,9 @@ def get_export_origin() -> str:
 DEFAULT_T2D_WIDTH = 768
 DEFAULT_T2D_HEIGHT = 768
 
-DEFAULT_T2D_STEPS = 4
+# 8 steps com prompt enhancement v2 produz imagens mais limpas de sombra/iluminação.
+# O modelo SDNQ ignora guidance (step-wise distilled), mas 8 steps dá melhor aderência.
+DEFAULT_T2D_STEPS = 8
 DEFAULT_T2D_GUIDANCE = 1.0
 
 # FLUX.2 Klein 4B não cabe em ~5-6GB com pipe.to(cuda); usar enable_model_cpu_offload.

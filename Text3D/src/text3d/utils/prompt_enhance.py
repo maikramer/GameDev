@@ -1,15 +1,26 @@
-"""Utilitários para melhorar prompts Text2D e evitar artefactos na base do mesh.
+"""Prompt enhancement para gerar imagens 2D limpas de sombras/iluminação.
 
 O Hunyuan3D interpreta silhuetas e contrastes da imagem 2D como geometria.
-Sombras de contato, "ground planes" e pedestais visuais na imagem
-viram discos/placas na base do mesh 3D.
+Qualquer sombra, gradiente de luz ou plano de chão na imagem vira
+disco/placa no mesh 3D.
+
+Estratégia v2: **framing positivo** em vez de negações.
+Modelos FLUX ignoram frequentemente "no X" porque ainda processam o token "X".
+Em vez disso, descrevemos positivamente o que queremos:
+  - Tipo de render (albedo/flat/unlit)
+  - Iluminação uniforme (flat ambient, softbox omnidirecional)
+  - Fundo (branco puro infinito, sem horizonte)
+  - Composição (objeto isolado, centrado, flutuante)
 """
 
 from __future__ import annotations
 
-# Termos que incentivam sombras de contato ou plataformas na imagem 2D
-# -> Evitar a todo custo pois viram geometria extra no mesh 3D
-GROUND_PLANE_TERMS: tuple[str, ...] = (
+import re
+
+# ---------------------------------------------------------------------------
+# Termos tóxicos — causam sombras/chão na imagem 2D
+# ---------------------------------------------------------------------------
+TOXIC_TERMS: tuple[str, ...] = (
     "on the ground",
     "on the floor",
     "on a pedestal",
@@ -17,126 +28,126 @@ GROUND_PLANE_TERMS: tuple[str, ...] = (
     "standing on",
     "sitting on",
     "on a surface",
+    "on a table",
+    "on a desk",
     "studio floor",
     "contact shadow",
     "drop shadow",
     "ground shadow",
     "ambient occlusion on ground",
+    "harsh lighting",
+    "dramatic lighting",
+    "rim light",
+    "strong directional light",
+    "spotlight",
+    "volumetric light",
+    "god rays",
+    "lens flare",
+    "backlit",
+    "side lit",
+    "chiaroscuro",
 )
 
-# Termos que devem ser adicionados ao prompt para evitar a base
-# e garantir um fundo verdadeiramente neutro sem "placas"
-CLEAN_BASE_SUFFIXES: tuple[str, ...] = (
-    "floating in empty space",
-    "no ground plane",
-    "no floor",
-    "no platform",
-    "no pedestal",
-    "no base",
-    "no contact shadow",
-    "no shadow underneath",
-    "clean bottom",
-    "seamless neutral background",
-    "solid neutral background",
-    "no visible ground",
+# ---------------------------------------------------------------------------
+# Bloco de render — pré-fixado ao prompt do utilizador
+# Descreve o "enquadramento técnico" da imagem: tipo de render + iluminação
+# ---------------------------------------------------------------------------
+_RENDER_PREFIX = (
+    "3D game asset reference render, "
+    "flat ambient lighting from all directions equally, "
+    "uniform soft diffuse illumination, "
+    "pure white seamless infinite void background on all sides, "
+    "single isolated object centered in frame"
 )
 
-# Termos de fundo neutro que ainda podem ter sombras implícitas
-# -> Precisam dos sufixos acima para garantir limpeza
-NEUTRAL_BG_TERMS: tuple[str, ...] = (
-    "neutral background",
-    "plain background",
-    "simple background",
-    "studio background",
-    "white background",
-    "gray background",
-    "grey background",
+_RENDER_PREFIX_LIGHT = (
+    "clean product render, soft even ambient light, "
+    "white seamless background, isolated centered object"
+)
+
+# ---------------------------------------------------------------------------
+# Sufixo de reforço — após a descrição do utilizador
+# ---------------------------------------------------------------------------
+_RENDER_SUFFIX = (
+    "vibrant flat colors, "
+    "completely shadowless, "
+    "matte surface finish, "
+    "white background visible beneath and around the object, "
+    "clean silhouette, game asset quality"
+)
+
+_RENDER_SUFFIX_LIGHT = (
+    "flat lit, clean render, game asset"
+)
+
+# ---------------------------------------------------------------------------
+# Detector de termos já presentes (evitar duplicação)
+# ---------------------------------------------------------------------------
+_ALREADY_CLEAN_MARKERS: tuple[str, ...] = (
+    "flat ambient",
+    "albedo",
+    "unlit render",
+    "flat lighting",
+    "uniform lighting",
+    "diffuse only",
+    "shadowless",
+    "white seamless",
+    "infinite background",
+    "3d asset reference",
+    "product render",
+    "flat shad",
 )
 
 
-def enhance_prompt_for_clean_base(prompt: str, aggressive: bool = True) -> str:
-    """Melhora o prompt para evitar 'placas' e sombras de contato na base.
-
-    Args:
-        prompt: Prompt original do usuário.
-        aggressive: Se True, adiciona múltiplos sufixos anti-placa.
-                   Se False, adiciona apenas o essencial.
-
-    Returns:
-        Prompt melhorado com termos que evitam geometria indesejada na base.
-    """
-    prompt_lower = prompt.lower()
-
-    # Verificar se já tem termos de fundo neutro
-    has_neutral_bg = any(term in prompt_lower for term in NEUTRAL_BG_TERMS)
-
-    # Construir lista de sufixos a adicionar
-    suffixes: list[str] = []
-
-    # Sempre adicionar no-ground quando aggressive
-    if aggressive:
-        # Seleção estratégica de sufixos para evitar redundância
-        suffixes.extend([
-            "no ground plane",
-            "no contact shadow",
-            "floating in empty space",
-            "clean bottom",
-        ])
-    else:
-        # Modo minimalista - apenas o essencial
-        suffixes.append("no ground plane, no contact shadow")
-
-    # Se não tem fundo neutro definido, adicionar um
-    if not has_neutral_bg:
-        suffixes.append("neutral background")
-
-    # Combinar prompt original com sufixos
-    enhanced = prompt.rstrip().rstrip(",. ")
-    suffix_str = ", ".join(suffixes)
-    enhanced = f"{enhanced}, {suffix_str}"
-
-    return enhanced
+def _has_clean_markers(prompt_lower: str) -> bool:
+    return any(m in prompt_lower for m in _ALREADY_CLEAN_MARKERS)
 
 
 def sanitize_prompt(prompt: str) -> str:
-    """Remove termos problemáticos que causam placas na base.
-
-    Args:
-        prompt: Prompt original.
-
-    Returns:
-        Prompt com termos problemáticos removidos ou substituídos.
-    """
-    import re
-
+    """Remove termos que causam sombras/chão na imagem 2D."""
     result = prompt
 
-    # Remover termos que incentivam ground planes
-    for term in GROUND_PLANE_TERMS:
-        # Regex case-insensitive para substituir termos
+    # Processar termos mais longos primeiro para evitar remoções parciais
+    for term in sorted(TOXIC_TERMS, key=len, reverse=True):
         pattern = re.compile(re.escape(term), re.IGNORECASE)
         result = pattern.sub("", result)
 
-    # Limpar espaços múltiplos e pontuação residual
+    # Conjunções/preposições/artigos órfãos após remoção de termos
+    result = re.sub(r"\bwith\s+(and|,)", r"\1", result, flags=re.IGNORECASE)
+    result = re.sub(r"\bwith\s*$", "", result)
+    result = re.sub(r"\bwith\s*,", ",", result)
+    result = re.sub(r"\band\s*,", ",", result)
+    result = re.sub(r",\s*and\s*$", "", result)
+    result = re.sub(r",\s*and\s*,", ",", result)
+    # Trailing dangling words: "standing", "sitting", etc. sem complemento
+    result = re.sub(r"\b(standing|sitting)\s+(and\s*)?$", "", result, flags=re.IGNORECASE)
+    result = re.sub(r"\b(standing|sitting)\s+(and\s*)?,", ",", result, flags=re.IGNORECASE)
+    # Trailing "and" solto no final
+    result = re.sub(r"\band\s*$", "", result, flags=re.IGNORECASE)
     result = re.sub(r"\s+", " ", result)
     result = re.sub(r"[,;]+\s*[,;]*", ", ", result)
     result = result.strip(",. ")
-
     return result
 
 
-def create_optimized_prompt(prompt: str, aggressive: bool = True) -> str:
-    """Pipeline completo: sanitizar + melhorar o prompt.
+def enhance_prompt_for_clean_base(prompt: str, aggressive: bool = True) -> str:
+    """Envolve o prompt do utilizador num enquadramento de render limpo.
 
-    Args:
-        prompt: Prompt original do usuário.
-        aggressive: Modo agressivo de anti-placa.
-
-    Returns:
-        Prompt otimizado para gerar meshes sem artefactos na base.
+    Modo aggressive (defeito): prefixo completo + sufixo albedo.
+    Modo light: prefixo curto + sufixo curto (menos tokens, prompts já bons).
     """
-    # Primeiro remover termos problemáticos
+    prompt_lower = prompt.lower()
+
+    if _has_clean_markers(prompt_lower):
+        return prompt
+
+    if aggressive:
+        return f"{_RENDER_PREFIX}, {prompt.strip()}, {_RENDER_SUFFIX}"
+    return f"{_RENDER_PREFIX_LIGHT}, {prompt.strip()}, {_RENDER_SUFFIX_LIGHT}"
+
+
+def create_optimized_prompt(prompt: str, aggressive: bool = True) -> str:
+    """Pipeline completo: sanitizar + enquadrar com render limpo."""
     clean = sanitize_prompt(prompt)
-    # Depois adicionar termos protetores
     enhanced = enhance_prompt_for_clean_base(clean, aggressive=aggressive)
     return enhanced

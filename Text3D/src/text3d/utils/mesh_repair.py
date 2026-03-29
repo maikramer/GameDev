@@ -1007,58 +1007,89 @@ def _remove_thin_plaque_clusters_at_base(
     return mesh
 
 
-def advanced_fill_holes(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
-    """
-    Pipeline avançada multi-etapa de fechamento de buracos.
+def _pymeshlab_roundtrip(mesh: trimesh.Trimesh, apply_fn) -> trimesh.Trimesh:
+    """Exporta → aplica filtros pymeshlab via callback → reimporta."""
+    import tempfile
+    from pathlib import Path
 
-    Primeiro a cascata de fecho; depois limpeza de base (spikes, teias, placas)
-    com reparo entre passos.
+    with tempfile.TemporaryDirectory(prefix="pml_") as tmpdir:
+        in_ply = str(Path(tmpdir) / "in.ply")
+        out_ply = str(Path(tmpdir) / "out.ply")
+        mesh.export(in_ply)
+        import pymeshlab
 
-    Cascata (para quando atinge watertight):
-    1. PyMeshLab: non-manifold repair + ``meshing_close_holes`` (Delaunay)
-    2. PyMeshFix: algoritmo MeshFix de Attene com refinamento
-    3. MeshLib: preenchimento com métrica universal otimizada
+        ms = pymeshlab.MeshSet()
+        ms.load_new_mesh(in_ply)
+        apply_fn(ms)
+        ms.save_current_mesh(out_ply)
+        m_new = trimesh.load(out_ply, force="mesh")
+        if isinstance(m_new, trimesh.Trimesh) and len(m_new.faces) > 0:
+            return m_new
+    return mesh
 
-    Requer ``pymeshlab``, ``pymeshfix`` e/ou ``meshlib`` (fallback gracioso).
+
+def manifold_repair(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
+    """Repara topologia non-manifold, duplicatas e vértices órfãos via pymeshlab."""
+    try:
+        def _apply(ms):
+            ms.meshing_repair_non_manifold_edges()
+            ms.meshing_repair_non_manifold_vertices()
+            ms.meshing_remove_duplicate_faces()
+            ms.meshing_remove_duplicate_vertices()
+            ms.meshing_remove_unreferenced_vertices()
+
+        return _pymeshlab_roundtrip(mesh, _apply)
+    except Exception:
+        m = mesh.copy()
+        with contextlib.suppress(Exception):
+            m.merge_vertices()
+            m.remove_unreferenced_vertices()
+            trimesh_repair.fix_normals(m, multibody=True)
+        return m
+
+
+def make_watertight(
+    mesh: trimesh.Trimesh,
+    *,
+    max_hole_edges: int = 500,
+) -> trimesh.Trimesh:
+    """Cascata multi-etapa para fechar todos os buracos e tornar a mesh watertight.
+
+    Ordem (para em cada etapa se já estiver watertight):
+    1. pymeshlab: manifold repair + meshing_close_holes (Delaunay)
+    2. pymeshfix: MeshFix de Attene — algoritmo específico para watertight
+    3. trimesh: fill_holes fallback
+
+    ``max_hole_edges``: buracos maiores que isto não são fechados pelo pymeshlab
+    (evita distorção em buracos enormes). pymeshfix tenta fechar tudo.
     """
     m = mesh.copy()
     boundary = _boundary_edge_count(m)
     if boundary <= 0:
         return m
 
-    # 1. PyMeshLab — non-manifold repair + close_holes
+    # Etapa 1: pymeshlab — repair manifold + close holes
     try:
-        import pymeshlab
-        import tempfile as _tf
-        from pathlib import Path as _Path
-
-        with _tf.TemporaryDirectory(prefix="meshlab_holes_") as tmpdir:
-            in_ply = str(_Path(tmpdir) / "in.ply")
-            out_ply = str(_Path(tmpdir) / "out.ply")
-            m.export(in_ply)
-
-            ms = pymeshlab.MeshSet()
-            ms.load_new_mesh(in_ply)
+        def _apply(ms):
             ms.meshing_repair_non_manifold_edges()
             ms.meshing_repair_non_manifold_vertices()
             ms.meshing_remove_duplicate_faces()
             ms.meshing_remove_duplicate_vertices()
             ms.meshing_remove_unreferenced_vertices()
-            ms.meshing_close_holes(maxholesize=500)
-            ms.save_current_mesh(out_ply)
+            ms.meshing_close_holes(maxholesize=max_hole_edges)
 
-            m_new = trimesh.load(out_ply, force="mesh")
-            b_new = _boundary_edge_count(m_new)
-            if b_new < boundary:
-                m = m_new
-                boundary = b_new
+        m_new = _pymeshlab_roundtrip(m, _apply)
+        b_new = _boundary_edge_count(m_new)
+        if b_new < boundary:
+            m = m_new
+            boundary = b_new
     except Exception:
         pass
 
     if boundary <= 0:
         return m
 
-    # 2. PyMeshFix — MeshFix de Attene
+    # Etapa 2: pymeshfix — algoritmo MeshFix (preenche tudo, refina triângulos)
     try:
         from pymeshfix import PyTMesh
 
@@ -1083,139 +1114,89 @@ def advanced_fill_holes(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
     if boundary <= 0:
         return m
 
-    # 3. MeshLib — universal metric fill
+    # Etapa 3: pymeshfix clean() — remoção de degenerescências + watertight forçado
     try:
-        import meshlib.mrmeshpy as mrmeshpy
-        import tempfile as _tf
-        from pathlib import Path as _Path
+        from pymeshfix import PyTMesh
 
-        with _tf.TemporaryDirectory(prefix="meshlib_holes_") as tmpdir:
-            in_stl = str(_Path(tmpdir) / "in.stl")
-            out_stl = str(_Path(tmpdir) / "out.stl")
-            m.export(in_stl)
-
-            ml_mesh = mrmeshpy.loadMesh(in_stl)
-            hole_edges = ml_mesh.topology.findHoleRepresentiveEdges()
-            for e in hole_edges:
-                params = mrmeshpy.FillHoleParams()
-                params.metric = mrmeshpy.getUniversalMetric(ml_mesh)
-                mrmeshpy.fillHole(ml_mesh, e, params)
-            mrmeshpy.saveMesh(ml_mesh, out_stl)
-
-            m_new = trimesh.load(out_stl, force="mesh")
-            b_new = _boundary_edge_count(m_new)
-            if b_new < boundary:
-                m = m_new
-                boundary = b_new
+        verts = np.asarray(m.vertices, dtype=np.float64)
+        faces = np.asarray(m.faces, dtype=np.int64)
+        mfix = PyTMesh()
+        mfix.load_array(verts, faces)
+        mfix.clean(max_iters=10, inner_loops=3)
+        v, f = mfix.return_arrays()
+        m_new = trimesh.Trimesh(
+            vertices=np.asarray(v, dtype=np.float64),
+            faces=np.asarray(f, dtype=np.int64),
+            process=True,
+        )
+        b_new = _boundary_edge_count(m_new)
+        if b_new < boundary:
+            m = m_new
+            boundary = b_new
     except Exception:
         pass
+
+    if boundary <= 0:
+        return m
+
+    # Etapa 4: trimesh fallback
+    with contextlib.suppress(Exception):
+        trimesh_repair.fill_holes(m)
 
     with contextlib.suppress(Exception):
         trimesh_repair.fix_normals(m, multibody=True)
 
-    m = _remove_spikes_and_repair(m)
-    m = _remove_planar_webs_and_repair(m)
-    m = _remove_plaque_clusters_and_repair(m)
-
     return m
 
 
-def _remove_spikes_and_repair(
+def taubin_smooth(
     mesh: trimesh.Trimesh,
     *,
-    max_spike_angle: float = 10.0,
-    repair_holes: bool = True,
+    iterations: int = 5,
+    lambda_: float = 0.5,
+    mu: float = -0.53,
 ) -> trimesh.Trimesh:
-    """
-    Remove "spikes" (pontas finas) na base e refecha buracos criados.
+    """Suavização Taubin volume-preserving via pymeshlab.
 
-    Detecta faces onde um vértice forma um ângulo muito pequeno,
-    criando uma ponta fina que geralmente é um artefato.
+    Ao contrário da Laplaciana, o Taubin aplica um passo de expansão (mu < 0)
+    após cada passo de contração (lambda > 0), preservando o volume global.
+    Ideal antes de rigging/animação pois não encolhe a mesh.
     """
+    if iterations <= 0:
+        return mesh
     try:
-        m = mesh.copy()
-        axis, direction = _detect_base_axis_mesh(m)
-        bottom_zone = _bottom_zone_face_mask(m, axis, direction, 0.08)
+        def _apply(ms):
+            ms.apply_coord_taubin_smoothing(
+                stepsmoothnum=iterations,
+                lambda_=lambda_,
+                mu=mu,
+            )
 
-        spike_faces = []
-        for i, face in enumerate(m.faces):
-            if not bottom_zone[i]:
-                continue
-
-            v0, v1, v2 = m.vertices[face]
-
-            # Vetores das arestas
-            e0 = v1 - v0
-            e1 = v2 - v0
-            e2 = v2 - v1
-
-            # Comprimentos
-            l0 = float(np.linalg.norm(e0))
-            l1 = float(np.linalg.norm(e1))
-            l2 = float(np.linalg.norm(e2))
-
-            if l0 < 1e-10 or l1 < 1e-10 or l2 < 1e-10:
-                continue
-
-            # Calcular ângulos
-            cos_angle_0 = float(np.dot(e0, e1)) / (l0 * l1)
-            angle_0 = np.degrees(np.arccos(np.clip(cos_angle_0, -1.0, 1.0)))
-
-            e0_inv = v0 - v1
-            cos_angle_1 = float(np.dot(e0_inv, e2)) / (float(np.linalg.norm(e0_inv)) * l2)
-            angle_1 = np.degrees(np.arccos(np.clip(cos_angle_1, -1.0, 1.0)))
-
-            e1_inv = v0 - v2
-            e2_inv = v1 - v2
-            cos_angle_2 = float(np.dot(e1_inv, e2_inv)) / (float(np.linalg.norm(e1_inv)) * float(np.linalg.norm(e2_inv)))
-            angle_2 = np.degrees(np.arccos(np.clip(cos_angle_2, -1.0, 1.0)))
-
-            min_angle = min(angle_0, angle_1, angle_2)
-            if min_angle < max_spike_angle:
-                spike_faces.append(i)
-
-        if len(spike_faces) > 0 and len(spike_faces) < len(m.faces) * 0.2:
-            keep_mask = np.ones(len(m.faces), dtype=bool)
-            keep_mask[spike_faces] = False
-            sub = m.submesh([np.where(keep_mask)[0]], append=True, only_watertight=False)
-            if isinstance(sub, trimesh.Trimesh) and len(sub.faces) > 0:
-                sub.remove_unreferenced_vertices()
-                m = _repair_holes_after_cut(sub) if repair_holes else sub
-        return m
+        return _pymeshlab_roundtrip(mesh, _apply)
     except Exception:
         return mesh
 
 
-def _remove_planar_webs_and_repair(
-    mesh: trimesh.Trimesh, *, repair_holes: bool = True
+def hc_laplacian_smooth(
+    mesh: trimesh.Trimesh,
+    *,
+    iterations: int = 3,
 ) -> trimesh.Trimesh:
-    """Remove teias planas entre garras na base e, por defeito, refecha buracos."""
-    try:
-        axis, direction = _detect_base_axis_mesh(mesh)
-        m = _remove_planar_webs_at_base(mesh, axis, direction)
-        if m is mesh or len(m.faces) == len(mesh.faces):
-            return mesh
-        return _repair_holes_after_cut(m) if repair_holes else m
-    except Exception:
+    """HC Laplacian smoothing via pymeshlab — preserva melhor o volume que Laplacian simples."""
+    if iterations <= 0:
         return mesh
-
-
-def _remove_plaque_clusters_and_repair(
-    mesh: trimesh.Trimesh, *, repair_holes: bool = True
-) -> trimesh.Trimesh:
-    """Remove placas planas finas conexas e, por defeito, refecha buracos."""
     try:
-        axis, direction = _detect_base_axis_mesh(mesh)
-        m = _remove_thin_plaque_clusters_at_base(mesh, axis, direction)
-        if m is mesh or len(m.faces) == len(mesh.faces):
-            return mesh
-        return _repair_holes_after_cut(m) if repair_holes else m
+        def _apply(ms):
+            for _ in range(iterations):
+                ms.apply_coord_hc_laplacian_smoothing()
+
+        return _pymeshlab_roundtrip(mesh, _apply)
     except Exception:
         return mesh
 
 
 def laplacian_smooth(mesh: trimesh.Trimesh, iterations: int = 1, lamb: float = 0.5) -> trimesh.Trimesh:
-    """Suavização Laplaciana leve (reduz aspereza tipo 'argila'; pode arredondar arestas)."""
+    """Suavização Laplaciana (pode encolher a mesh — preferir taubin_smooth para rigging)."""
     if iterations <= 0:
         return mesh
     m = mesh.copy()
@@ -1237,17 +1218,19 @@ def isotropic_remesh(
 ) -> trimesh.Trimesh:
     """Isotropic remeshing via pymeshlab + Taubin smoothing.
 
+    Pipeline: manifold repair → close holes → remesh → Taubin smooth.
     Reconstrói a topologia com triângulos uniformes, eliminando faces
     degeneradas (spikes) sem perder as features da superfície.
 
     ``resolution`` controla o nível de detalhe (~nº de subdivisões na diagonal).
     ``close_holes`` fecha buracos (marching cubes deixa buracos nas bordas do volume).
-    ``taubin_steps`` controla suavização pós-remesh (0 = desliga, preserva volume).
+    ``taubin_steps`` controla suavização pós-remesh (0 = desliga).
     """
     try:
         import pymeshlab
     except ImportError:
         import warnings
+
         warnings.warn(
             "pymeshlab não instalado — isotropic_remesh indisponível. "
             "pip install pymeshlab",
@@ -1298,6 +1281,52 @@ def isotropic_remesh(
         return trimesh.load(out_ply, force="mesh")
 
 
+def _remove_spikes_and_repair(
+    mesh: trimesh.Trimesh,
+    *,
+    max_spike_angle: float = 10.0,
+) -> trimesh.Trimesh:
+    """Remove pontas finas (spikes) na base e refecha buracos criados."""
+    try:
+        m = mesh.copy()
+        axis, direction = _detect_base_axis_mesh(m)
+        bottom_zone = _bottom_zone_face_mask(m, axis, direction, 0.08)
+
+        spike_faces = []
+        for i, face in enumerate(m.faces):
+            if not bottom_zone[i]:
+                continue
+            tri = m.vertices[face]
+            edges = [tri[1] - tri[0], tri[2] - tri[0], tri[2] - tri[1]]
+            lengths = [float(np.linalg.norm(e)) for e in edges]
+            if min(lengths) < 1e-10:
+                continue
+            cos_a0 = np.clip(float(np.dot(edges[0], edges[1])) / (lengths[0] * lengths[1]), -1.0, 1.0)
+            if np.degrees(np.arccos(cos_a0)) < max_spike_angle:
+                spike_faces.append(i)
+                continue
+            e0_inv = -edges[0]
+            cos_a1 = np.clip(float(np.dot(e0_inv, edges[2])) / (lengths[0] * lengths[2]), -1.0, 1.0)
+            if np.degrees(np.arccos(cos_a1)) < max_spike_angle:
+                spike_faces.append(i)
+                continue
+            e1_inv, e2_inv = -edges[1], -edges[2]
+            cos_a2 = np.clip(float(np.dot(e1_inv, e2_inv)) / (lengths[1] * lengths[2]), -1.0, 1.0)
+            if np.degrees(np.arccos(cos_a2)) < max_spike_angle:
+                spike_faces.append(i)
+
+        if 0 < len(spike_faces) < len(m.faces) * 0.2:
+            keep_mask = np.ones(len(m.faces), dtype=bool)
+            keep_mask[spike_faces] = False
+            sub = m.submesh([np.where(keep_mask)[0]], append=True, only_watertight=False)
+            if isinstance(sub, trimesh.Trimesh) and len(sub.faces) > 0:
+                sub.remove_unreferenced_vertices()
+                return make_watertight(sub)
+        return m
+    except Exception:
+        return mesh
+
+
 def repair_mesh(
     mesh: trimesh.Trimesh,
     *,
@@ -1317,25 +1346,29 @@ def repair_mesh(
     remesh: bool = False,
     remesh_resolution: int = 150,
     remesh_taubin_steps: int = 3,
+    watertight: bool = True,
+    taubin_smooth_steps: int = 0,
 ) -> trimesh.Trimesh:
-    """
-    Encadeia heurísticas de reparo.
+    """Pipeline de reparo completa: limpeza → watertight → remesh → smooth.
 
-    ``merge_vertices`` ajuda a fechar buracos pequenos de malha e consistência.
-    ``remove_ground_shadow`` remove discos/placas de sombra na base (antes do merge,
-    para não fundir sombra com o corpo).
-    ``ground_artifact_mesh_space``: ``hunyuan`` para saída do pipeline Text3D;
-    ``y_up`` para GLB já orientado (ex.: Godot).
-    ``ground_shadow_aggressive``: cilindro na base + peel forte (cascas 3D grandes).
-    ``ground_shadow_very_aggressive``: modo extremo para pedestais conectados ao modelo.
-    Usa análise de silhueta e flood-fill para detectar e remover pedestal grudado.
-    ``remove_small_island_fragments``: apaga ilhas minúsculas (fragmentos flutuantes).
-    ``fill_small_holes_max_edges``: fecha buracos com contorno até N arestas (0 = desliga).
-    ``remesh``: isotropic remeshing — reconstrói topologia com triângulos uniformes,
-    eliminando spikes/faces degeneradas. Requer pymeshlab.
+    Produz mesh watertight por defeito (``watertight=True``), pronta para
+    Hunyuan3D-Paint, rigging (UniRig) e animação.
+
+    Ordem de operações:
+    1. Remoção de sombras/pedestais na base
+    2. Remoção de ilhas minúsculas (fragmentos flutuantes)
+    3. Merge de vértices duplicados
+    4. Manifold repair (pymeshlab: non-manifold edges/vertices, duplicatas)
+    5. Watertight cascade (pymeshlab → pymeshfix → trimesh)
+    6. Remoção de spikes na base (se very_aggressive)
+    7. Keep largest component
+    8. Isotropic remesh (opcional, reconstrói topologia uniforme)
+    9. Taubin smoothing volume-preserving (opcional, ideal para rigging)
+    10. Laplacian smoothing legacy (opcional, se smooth_iterations > 0)
     """
     m = mesh.copy()
 
+    # 1. Remoção de sombras/pedestais
     if remove_ground_shadow:
         with contextlib.suppress(Exception):
             m = remove_ground_shadow_artifacts(
@@ -1346,6 +1379,7 @@ def repair_mesh(
                 very_aggressive=ground_shadow_very_aggressive,
             )
 
+    # 2. Remoção de ilhas minúsculas
     if remove_small_island_fragments:
         try:
             ratio = float(small_island_min_face_ratio)
@@ -1353,70 +1387,37 @@ def repair_mesh(
             if ground_shadow_aggressive or ground_shadow_very_aggressive:
                 ratio = max(ratio, 0.0018)
                 abs_m = max(abs_m, 256)
-            m = remove_small_islands(
-                m,
-                min_face_ratio=ratio,
-                min_faces_abs=abs_m,
-            )
+            m = remove_small_islands(m, min_face_ratio=ratio, min_faces_abs=abs_m)
         except Exception:
             pass
 
+    # 3. Merge de vértices
     if merge_vertices:
         with contextlib.suppress(Exception):
             m.merge_vertices()
 
-    # Pipeline avançada: fechamento de buracos + isotropic remesh + Taubin smoothing
-    if ground_shadow_very_aggressive:
+    # 4. Manifold repair
+    with contextlib.suppress(Exception):
+        m = manifold_repair(m)
+
+    # 5. Watertight
+    if watertight:
         with contextlib.suppress(Exception):
-            m = advanced_fill_holes(m)
-        # Pós-processamento: isotropic remesh + Taubin para suavizar patches reparados
-        try:
-            import pymeshlab
-            import tempfile as _tf
-            from pathlib import Path as _Path
-
-            with _tf.TemporaryDirectory(prefix="remesh_post_") as tmpdir:
-                in_ply = str(_Path(tmpdir) / "in.ply")
-                out_ply = str(_Path(tmpdir) / "out.ply")
-                m.export(in_ply)
-                ms = pymeshlab.MeshSet()
-                ms.load_new_mesh(in_ply)
-                ms.meshing_repair_non_manifold_edges()
-                ms.meshing_repair_non_manifold_vertices()
-                ms.meshing_remove_duplicate_faces()
-                ms.meshing_remove_duplicate_vertices()
-                ms.meshing_remove_unreferenced_vertices()
-                try:
-                    ms.meshing_close_holes(maxholesize=500)
-                except Exception:
-                    pass
-                diag = ms.current_mesh().bounding_box().diagonal()
-                target_edge = diag / 150
-                ms.meshing_isotropic_explicit_remeshing(
-                    iterations=3,
-                    targetlen=pymeshlab.PureValue(target_edge),
-                    adaptive=True,
-                    selectedonly=False,
-                    checksurfdist=True,
-                    maxsurfdist=pymeshlab.PureValue(target_edge * 0.5),
-                )
-                ms.apply_coord_taubin_smoothing(
-                    stepsmoothnum=5, lambda_=0.5, mu=-0.53,
-                )
-                ms.save_current_mesh(out_ply)
-                m_new = trimesh.load(out_ply, force="mesh")
-                if len(m_new.faces) > 0:
-                    m = m_new
-        except Exception:
-            pass
-
-    if fill_small_holes_max_edges > 0:
+            m = make_watertight(m, max_hole_edges=max(fill_small_holes_max_edges, 500))
+    elif fill_small_holes_max_edges > 0:
         with contextlib.suppress(Exception):
             _fill_small_boundary_holes_inplace(m, fill_small_holes_max_edges)
 
+    # 6. Spikes na base (very_aggressive pós-watertight)
+    if ground_shadow_very_aggressive:
+        with contextlib.suppress(Exception):
+            m = _remove_spikes_and_repair(m)
+
+    # 7. Keep largest
     if keep_largest:
         m = keep_largest_component(m)
 
+    # 8. Isotropic remesh
     if remesh:
         with contextlib.suppress(Exception):
             m = isotropic_remesh(
@@ -1425,6 +1426,12 @@ def repair_mesh(
                 taubin_steps=remesh_taubin_steps,
             )
 
+    # 9. Taubin smoothing volume-preserving
+    if taubin_smooth_steps > 0:
+        with contextlib.suppress(Exception):
+            m = taubin_smooth(m, iterations=taubin_smooth_steps)
+
+    # 10. Legacy Laplacian
     if smooth_iterations > 0:
         m = laplacian_smooth(m, iterations=smooth_iterations, lamb=smooth_lamb)
 

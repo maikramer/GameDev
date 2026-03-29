@@ -33,7 +33,7 @@ Text-to-3D completo.
 | Parâmetro | Padrão | Descrição |
 |-----------|--------|-----------|
 | `t2d_width`, `t2d_height` | `defaults.DEFAULT_T2D_*` (768) | Text2D; 1024 em GPU grande |
-| `t2d_steps` | `defaults.DEFAULT_T2D_STEPS` (4) | Passos Text2D |
+| `t2d_steps` | `defaults.DEFAULT_T2D_STEPS` (8) | Passos Text2D (8 steps melhora aderência ao prompt de iluminação) |
 | `t2d_guidance` | `defaults.DEFAULT_T2D_GUIDANCE` (1.0) | Guidance Text2D (SDNQ ~1.0) |
 | `text2d_model_id` | None | Override HF Text2D |
 | `t2d_seed` | None | Seed Text2D |
