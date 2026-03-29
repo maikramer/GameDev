@@ -1,6 +1,6 @@
 ---
 name: gameassets
-description: Orquestra batches de prompts e assets 2D/3D com game.yaml, manifest CSV e presets. Use quando o utilizador falar em GameAssets, manifest, game.yaml, batch de imagens, presets locais, TEXT2D_BIN, TEXT3D_BIN, MATERIALIZE_BIN, path_layout flat, ou integração Text2D/Text3D/Materialize.
+description: Orquestra batches de prompts e assets 2D/3D/áudio com game.yaml, manifest CSV e presets. Use quando o utilizador falar em GameAssets, manifest, game.yaml, batch de imagens, presets locais, TEXT2D_BIN, TEXTURE2D_BIN, TEXT2SOUND_BIN, TEXT3D_BIN, MATERIALIZE_BIN, RIGGING3D_BIN, image_source text2d/texture2d/skymap2d, generate_audio, generate_rig, batch --with-rig, Rigging3D, coluna image_source no CSV, path_layout flat, ou integração Text2D/Texture2D/Text2Sound/Text3D/Materialize.
 ---
 
 # GameAssets — batch de prompts e assets
@@ -9,29 +9,36 @@ description: Orquestra batches de prompts e assets 2D/3D com game.yaml, manifest
 
 - Gerar **várias** imagens e/ou GLBs a partir de um **CSV** alinhado ao estilo do jogo.
 - Trabalhar com **`game.yaml`** + **`manifest.csv`** + **`presets.yaml`** (e opcionalmente **`presets-local.yaml`**).
-- Integrar **Text2D** (2D) e **Text3D** (3D) sem escrever comandos à mão para cada linha.
+- Integrar **Text2D** ou **Texture2D** (2D), opcional **Text2Sound** (áudio por linha), e **Text3D** (3D) sem escrever comandos à mão para cada linha.
 
 ## O que é
 
-CLI que combina **perfil** (`game.yaml`), **manifest** (`manifest.csv`) e **presets** de estilo, e chama `text2d` e, se pedires, `text3d` em subprocess. O batch constrói prompts com `prompt_builder` e executa o equivalente a `text2d generate … -o` e `text3d generate --from-image … -o` com opções do perfil.
+CLI que combina **perfil** (`game.yaml`), **manifest** (`manifest.csv`) e **presets** de estilo, e chama **`text2d`** ou **`texture2d generate`** (conforme `image_source` no YAML ou coluna **`image_source`** por linha no CSV); se **`generate_audio=true`** na linha, **`text2sound generate`** após a imagem (Fase 1b, antes do 3D); e, se pedires, `text3d` em subprocess. Com **`texture2d.materialize: true`**, corre também o **Materialize** CLI sobre o PNG difuso (mapas PBR em pasta). O batch constrói prompts com `prompt_builder` e aplica opções do perfil.
 
 ## Pré-requisitos
 
 | Componente | Notas |
 |------------|--------|
 | Python | 3.10+ |
-| `text2d` | No `PATH` ou `TEXT2D_BIN` |
+| `text2d` | No `PATH` ou `TEXT2D_BIN` quando há linhas com fonte 2D **text2d** |
+| `texture2d` | No `PATH` ou `TEXTURE2D_BIN` quando há linhas com fonte **texture2d** |
 | `text3d` | Com `--with-3d`: no `PATH` ou `TEXT3D_BIN` |
-| Materialize (opcional) | Se `text3d.materialize: true` no YAML: binário `materialize` no `PATH` ou `MATERIALIZE_BIN` (o Text3D invoca-o para PBR no GLB) |
+| `text2sound` | Com `generate_audio` no CSV (e sem `--skip-audio`): no `PATH` ou `TEXT2SOUND_BIN` |
+| Materialize (opcional) | `text3d.materialize` (PBR no GLB via Text3D) e/ou `texture2d.materialize` (PBR a partir da difusa): `PATH` ou `MATERIALIZE_BIN` / `texture2d.materialize_bin` |
 
 ## Pipeline mental
 
 ```text
 game.yaml + manifest.csv + presets [+ presets-local.yaml]
-        → text2d generate (por linha)
+        → por linha: text2d generate OU texture2d generate (image_source global ou coluna CSV)
+              → [se texture2d.materialize] materialize <difusa> -o … (mapas PBR)
+        → [se generate_audio e não --skip-audio] text2sound generate …
         → [se generate_3d e --with-3d] text3d generate --from-image …
-              → [se materialize no perfil] Materialize CLI (via Text3D)
+              → [se text3d.materialize] Materialize CLI (via Text3D, PBR no GLB)
+        → [se generate_rig e --with-rig] rigging3d pipeline (GLB após Text3D → GLB rigado)
 ```
+
+**Nota:** O custo de API do Texture2D (Hugging Face Inference) não é calculado pelo GameAssets. O registo **`--log`** inclui **`timings_sec`** (segundos por fase: `image_text2d` / `image_texture2d`, `materialize_diffuse`, `text2sound`, `text3d` ou subpassos `text3d_*` com `phased_batch`), **`audio_path` / `audio_error`** quando aplicável, e **`texture2d_api`: true** nas linhas geradas via Texture2D.
 
 ## Comandos principais
 
@@ -39,10 +46,10 @@ game.yaml + manifest.csv + presets [+ presets-local.yaml]
 |---------|--------|
 | `gameassets init [--path DIR]` | Cria `game.yaml` e `manifest.csv` de exemplo |
 | `gameassets prompts [--profile …] [--manifest …]` | Pré-visualiza prompts (sem GPU); `-o ficheiro.jsonl` grava JSONL |
-| `gameassets batch [--profile …] [--manifest …]` | Gera imagens; `--with-3d` gera GLB quando `generate_3d=true` |
+| `gameassets batch [--profile …] [--manifest …]` | Gera imagens; `--with-3d` gera GLB quando `generate_3d=true`; `--with-rig` aplica Rigging3D quando `generate_rig=true` (após GLB) |
 | `gameassets skill install` | Instala esta skill em `.cursor/skills/gameassets/` do projeto alvo |
 
-**Flags úteis em `batch`:** `--dry-run` (ver comandos), `--fail-fast`, `--log run.jsonl` (registo JSONL por asset).
+**Flags úteis em `batch`:** `--dry-run` (ver comandos), `--fail-fast`, `--skip-audio` (ignora `generate_audio`), `--log run.jsonl` (registo JSONL por asset, com **`timings_sec`**).
 
 ## Preset só no teu ficheiro (`presets-local.yaml`)
 
@@ -58,23 +65,51 @@ Sem `--presets-local`, o comando falha com **preset desconhecido**.
 ## Perfil (`game.yaml`) — resumo
 
 - **`style_preset`**, **`output_dir`**, **`path_layout`**: `split` (pastas `images/` e `meshes/`) ou **`flat`** (PNG e GLB na mesma árvore; usa `id` com barra, ex. `Props/caixa_01`).
+- **`image_source`**: `text2d` (defeito), `texture2d` ou `skymap2d` — pode ser sobreposto **por linha** no CSV (coluna `image_source`).
 - **`text2d`**: `low_vram`, `cpu`, `width`, `height` (resolução 2D).
+- **`texture2d`**: opções do CLI seamless + **`materialize`** para PBR a partir da difusa (mapas em `materialize_maps_subdir`).
+- **`text2sound`** (opcional): `duration`, `steps`, `cfg_scale`, `audio_format`, etc. — ver Text2Sound; `audio_subdir` no perfil para destino relativo a `output_dir`.
 - **`text3d`**: `preset` (`fast` \| `balanced` \| `hq`), `low_vram`, `texture` (omitido = **`true`**), ou **Hunyuan explícito** (`steps`, `octree_resolution`, `num_chunks` — nesse caso não se passa `--preset` ao CLI), `no_mesh_repair`, `mesh_smooth`, `mc_level`.
-- **PBR (opcional):** `materialize`, `materialize_save_maps`, `materialize_maps_subdir`, `materialize_bin`, `materialize_no_invert` — ver `Text3D/docs/PBR_MATERIALIZE.md`.
+- **PBR no GLB (opcional):** `materialize`, `materialize_save_maps`, `materialize_maps_subdir`, `materialize_bin`, `materialize_no_invert` — ver `Text3D/docs/PBR_MATERIALIZE.md`.
+- **`rigging3d`** (opcional): `output_suffix`, `root`, `python` — usado com `batch --with-rig` e `generate_rig` no CSV.
 
 **Atenção:** `text3d.low_vram: true` em GPU faz o Hunyuan “shape” cair para CPU e **costuma degradar a forma**; preferir reduzir resolução 2D ou fechar outras apps que consumam VRAM.
 
 ## Manifest (`manifest.csv`)
 
-Colunas incluem **`id`**, **`idea`**, **`generate_3d`**, etc. (ver `manifest.py`). Com `path_layout: flat`, `id` pode ser `Categoria/nome` para espelhar pastas no Godot.
+Colunas incluem **`id`**, **`idea`**, **`generate_3d`**, opcionalmente **`generate_audio`**, **`generate_rig`**, **`image_source`** (`text2d` \| `texture2d` \| `skymap2d`), etc. (ver `manifest.py`). Com `path_layout: flat`, `id` pode ser `Categoria/nome` para espelhar pastas no Godot.
 
 ## Variáveis de ambiente
 
 | Variável | Função |
 |----------|--------|
 | `TEXT2D_BIN` | Caminho ao executável `text2d` se não estiver no `PATH` |
+| `TEXTURE2D_BIN` | Caminho ao executável `texture2d` se não estiver no `PATH` |
 | `TEXT3D_BIN` | Idem para `text3d` |
-| `MATERIALIZE_BIN` | Idem para `materialize` quando usas PBR via perfil |
+| `TEXT2SOUND_BIN` | Idem para `text2sound` quando há `generate_audio` |
+| `MATERIALIZE_BIN` | Idem para `materialize` (Text3D e/ou fluxo Texture2D+materialize) |
+| `RIGGING3D_BIN` | Idem para `rigging3d` (ou `python -m rigging3d`) com `--with-rig` |
+
+## Prompt — palavras a evitar para 3D limpo
+
+Quando `generate_3d=true`, a imagem 2D alimenta o Hunyuan3D. Sombras e iluminação direcional na imagem viram **placas/discos** no mesh 3D. O `prompt_builder` já injeta iluminação flat e negativos, mas a **`idea`** no CSV também importa.
+
+### Na coluna `idea` do manifest, **EVITAR**:
+
+| Categoria | Termos tóxicos |
+|-----------|---------------|
+| **Posição/chão** | "on the ground", "on the floor", "on a pedestal", "standing on", "sitting on" |
+| **Sombras** | "contact shadow", "drop shadow", "ground shadow" |
+| **Iluminação** | "dramatic lighting", "harsh lighting", "rim light", "spotlight", "volumetric light", "backlit" |
+| **Flutuação** | "floating" (trigger de sombra de flutuação) |
+
+### Na coluna `idea`, **PREFERIR**:
+
+- Descrever **o quê**, não **como iluminar**: "medieval sword with runes" em vez de "medieval sword with dramatic lighting"
+- Cores e materiais explícitos: "red dragon with golden wings" em vez de "dragon"
+- Evitar referências a superfícies: "robot warrior" em vez de "robot warrior standing on a platform"
+
+O sistema de prompt enhancement (v2) envolve automaticamente o prompt com enquadramento de render flat (iluminação uniforme, fundo branco infinito, sem sombras).
 
 ## Armadilhas frequentes
 
@@ -82,6 +117,7 @@ Colunas incluem **`id`**, **`idea`**, **`generate_3d`**, etc. (ver `manifest.py`
 |---------|------------------|
 | `Preset desconhecido` | Passar `--presets-local` com o YAML onde o preset está definido. |
 | GLB não gerado | `batch` sem `--with-3d` **nunca** corre 3D; ou `generate_3d` falso na linha. |
+| Rig não aplicado | `batch` sem `--with-rig` ignora `generate_rig`; precisa de GLB do Text3D primeiro (`--with-3d`). |
 | OOM no Text2D | Reduzir resolução em `text2d` no perfil; fechar **Godot** ou outros processos na GPU (`nvidia-smi`). |
 | Qualidade 3D pior que no Text3D “isolado” | Mesmo `game.yaml` e mesmas flags; comparar preset/steps e VRAM livre. |
 
@@ -89,9 +125,12 @@ Colunas incluem **`id`**, **`idea`**, **`generate_3d`**, etc. (ver `manifest.py`
 
 | Ferramenta | Papel |
 |------------|--------|
-| **Text2D** | Geração da imagem base por prompt. |
-| **Text3D** | Imagem → mesh + Paint + opcional Materialize. |
-| **Materialize** | Mapas PBR a partir do diffuse (também acoplado ao Text3D com `--materialize`). |
+| **Text2D** | Imagens gerais (FLUX) por prompt; referência para 3D. |
+| **Texture2D** | Texturas seamless (HF API); opcional + Materialize para mapas PBR em disco. |
+| **Text2Sound** | Text-to-audio (Stable Audio Open); clipes por linha com `generate_audio`. |
+| **Text3D** | Imagem → mesh + Paint + opcional Materialize no GLB. |
+| **Materialize** | Mapas PBR a partir do diffuse (CLI; via Text3D ou após Texture2D). |
+| **Rigging3D** | Rig automático do GLB (após Text3D) com `batch --with-rig` e `generate_rig`. |
 
 ## Referências no repositório
 

@@ -90,6 +90,27 @@ Colunas incluem **`id`**, **`idea`**, **`generate_3d`**, opcionalmente **`genera
 | `MATERIALIZE_BIN` | Idem para `materialize` (Text3D e/ou fluxo Texture2D+materialize) |
 | `RIGGING3D_BIN` | Idem para `rigging3d` (ou `python -m rigging3d`) com `--with-rig` |
 
+## Prompt — palavras a evitar para 3D limpo
+
+Quando `generate_3d=true`, a imagem 2D alimenta o Hunyuan3D. Sombras e iluminação direcional na imagem viram **placas/discos** no mesh 3D. O `prompt_builder` já injeta iluminação flat e negativos, mas a **`idea`** no CSV também importa.
+
+### Na coluna `idea` do manifest, **EVITAR**:
+
+| Categoria | Termos tóxicos |
+|-----------|---------------|
+| **Posição/chão** | "on the ground", "on the floor", "on a pedestal", "standing on", "sitting on" |
+| **Sombras** | "contact shadow", "drop shadow", "ground shadow" |
+| **Iluminação** | "dramatic lighting", "harsh lighting", "rim light", "spotlight", "volumetric light", "backlit" |
+| **Flutuação** | "floating" (trigger de sombra de flutuação) |
+
+### Na coluna `idea`, **PREFERIR**:
+
+- Descrever **o quê**, não **como iluminar**: "medieval sword with runes" em vez de "medieval sword with dramatic lighting"
+- Cores e materiais explícitos: "red dragon with golden wings" em vez de "dragon"
+- Evitar referências a superfícies: "robot warrior" em vez de "robot warrior standing on a platform"
+
+O sistema de prompt enhancement (v2) envolve automaticamente o prompt com enquadramento de render flat (iluminação uniforme, fundo branco infinito, sem sombras).
+
 ## Armadilhas frequentes
 
 | Sintoma | O que verificar |

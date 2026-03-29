@@ -44,15 +44,44 @@ text2d -v generate "teste"
 
 | Variável | Função |
 |----------|--------|
-| `TEXT2D_MODEL_ID` | Repo Hugging Face alternativo compatível com o pipeline Klein |
+| `TEXT2D_MODEL_ID` | Repo Hugging Face alternativo compatível com o pipeline Klein (default SDNQ = termos Disty0; `black-forest-labs/FLUX.2-klein-4B` = Apache 2.0 no card BFL) |
 | `HF_HOME` | Raiz do cache Hugging Face |
 
 ## Notas importantes
 
 - **Primeira execução:** download de pesos — pode parecer “parado” durante rede/disco.
 - Pesos **GGUF** são para fluxos tipo ComfyUI-GGUF, **não** este CLI Diffusers.
-- **Guidance** padrão **1.0** para o checkpoint SDNQ Disty0.
+- **Guidance** padrão **1.0** para o checkpoint SDNQ Disty0 (valores maiores são ignorados pelo modelo distilled).
+- **Licenças:** o default SDNQ (Disty0) declara no Hub termos tipo **non-commercial**; o BF16 oficial BFL é **Apache 2.0** — ver `Text2D/README.md` e `GameDev/README.md`.
 - Em **GameAssets**, resolução 2D elevada + outras apps na mesma GPU (ex.: **Godot** + editor 3D) aumenta risco de **OOM**; reduzir `width`/`height` no bloco `text2d` do `game.yaml` ou libertar VRAM.
+
+## Prompt — boas práticas para imagens limpas (especialmente para 3D)
+
+Quando a imagem 2D vai alimentar **Text3D** (image-to-3D), sombras e iluminação direcional viram **geometria fantasma** (placas/discos) no mesh. O Text3D aplica prompt enhancement automático, mas ao usar Text2D directamente convém seguir estas regras:
+
+### Palavras/frases a **EVITAR** (causam sombras/artefactos)
+
+| Categoria | Termos a evitar |
+|-----------|----------------|
+| **Posição/chão** | "on the ground", "on the floor", "on a pedestal", "standing on", "sitting on", "on a surface" |
+| **Sombras** | "contact shadow", "drop shadow", "ground shadow" |
+| **Iluminação direcional** | "dramatic lighting", "harsh lighting", "rim light", "spotlight", "volumetric light", "god rays", "backlit", "chiaroscuro" |
+| **Flutuação** | "floating" (trigger de sombra — o modelo adiciona sombra para indicar flutuação) |
+
+### Estrutura recomendada para prompts limpos
+
+```
+[enquadramento render] + [descrição do objeto] + [estilo visual] + [reforço de limpeza]
+```
+
+**Exemplo:**
+```
+3D game asset reference render, flat ambient lighting, white seamless background, a cute dragon, vibrant flat colors, completely shadowless, matte surface finish
+```
+
+### Nota sobre guidance
+
+O modelo FLUX.2 Klein SDNQ é **step-wise distilled** e **ignora guidance scale** (funciona sempre como ~1.0). Aumentar `--guidance` não tem efeito. Para melhor aderência ao prompt, aumentar `--steps` (8+ recomendado).
 
 ## Ferramentas relacionadas
 

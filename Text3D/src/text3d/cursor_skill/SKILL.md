@@ -46,6 +46,37 @@ text3d texture modelo.glb -i ref.png -o modelo_tex.glb
 text3d doctor
 ```
 
+## Prompt — boas práticas e palavras a evitar
+
+O Hunyuan3D interpreta silhuetas e contrastes da imagem 2D como geometria. Sombras, iluminação direcional e planos de chão na imagem viram **discos/placas** no mesh 3D.
+
+O sistema aplica **prompt enhancement automático** (v2, framing positivo) que envolve o prompt do utilizador num enquadramento de render limpo. Usa `--no-prompt-optimize` só se quiseres controlo total.
+
+### Palavras/frases a **EVITAR** no prompt (causam sombras → placas no 3D)
+
+| Categoria | Termos tóxicos |
+|-----------|---------------|
+| **Posição/chão** | "on the ground", "on the floor", "on a pedestal", "on a platform", "standing on", "sitting on", "on a surface", "on a table" |
+| **Sombras** | "contact shadow", "drop shadow", "ground shadow", "ambient occlusion on ground" |
+| **Iluminação direcional** | "dramatic lighting", "harsh lighting", "rim light", "strong directional light", "spotlight", "volumetric light", "god rays", "backlit", "side lit", "chiaroscuro" |
+| **Flutuação** | "floating" (trigger de sombra de flutuação — o modelo desenha sombra para indicar que o objeto flutua) |
+
+### Termos que **AJUDAM** (framing positivo — o enhancement automático já os adiciona)
+
+- "3D game asset reference render" — enquadra como render de referência
+- "flat ambient lighting from all directions equally" — iluminação uniforme
+- "pure white seamless infinite void background" — fundo branco sem horizonte
+- "vibrant flat colors" — cores preservadas, sem shading
+- "completely shadowless" — reforço positivo
+- "matte surface finish" — evita reflexos especulares
+- "single isolated object centered in frame" — composição limpa
+
+### Se as placas persistirem
+
+1. Verificar com `--save-reference-image` se a imagem 2D tem sombras
+2. O pós-processo de mesh já remove placas na base (`--ground-shadow-aggressive` ou `--ground-shadow-very-aggressive`)
+3. Aumentar `--t2d-steps` para 8+ dá melhor aderência ao prompt de iluminação
+
 ## Parâmetros úteis
 
 - **VRAM baixa:** `--low-vram` (Hunyuan em CPU; **muito** mais lento), ou reduzir `--octree-resolution`, `--num-chunks`, `--steps`, ou usar `--preset fast`.
