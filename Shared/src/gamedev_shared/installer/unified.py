@@ -7,6 +7,7 @@ instalar qualquer ferramenta (Python ou Rust) registada no registry.
 from __future__ import annotations
 
 import argparse
+import os
 import platform
 import sys
 from pathlib import Path
@@ -46,20 +47,39 @@ class _ToolPythonInstaller(PythonProjectInstaller):
         )
         self.spec = spec
 
+    def check_python(self) -> bool:
+        return super().check_python(min_version=self.spec.min_python)
+
     def run(self) -> bool:
         if not super().run():
             return False
+
+        if self.spec.cli_name == "rigging3d":
+            from .rigging_inference import install_rigging_inference_extras
+
+            if not install_rigging_inference_extras(
+                venv_python=self.venv_python,
+                project_root=self.project_root,
+                logger=self.logger,
+            ):
+                return False
 
         aliases = list(self.spec.extra_aliases) if self.spec.extra_aliases else None
         self.create_cli_wrappers(extra_aliases=aliases)
         self.create_activate_wrapper()
 
-        self.show_summary(
-            commands=[
+        cmds = [
+            f"{self.cli_name} --help",
+            f"{self.cli_name} --version" if self.spec.kind == ToolKind.PYTHON else "",
+        ]
+        if self.spec.cli_name == "rigging3d":
+            cmds = [
                 f"{self.cli_name} --help",
-                f"{self.cli_name} --version" if self.spec.kind == ToolKind.PYTHON else "",
-            ],
-        )
+                f"{self.cli_name} pipeline -i mesh.glb -o rigged.glb",
+                f"{self.cli_name} --version",
+            ]
+
+        self.show_summary(commands=[c for c in cmds if c])
         return True
 
 

@@ -185,6 +185,14 @@ class BaseInstaller:
                                 **_kw,
                             )
                             return
+                else:
+                    # Driver/NVML em falta mas nvidia-smi existe — mesmo assim instalar CUDA wheels
+                    self.logger.warn(
+                        "nvidia-smi não mostrou 'CUDA Version' (p.ex. NVML/driver mismatch). "
+                        "A instalar PyTorch com CUDA a partir do índice PyPI (cu130)..."
+                    )
+                    subprocess.run([*pip_cmd, "torch", "torchvision"], check=True, **_kw)
+                    return
             except Exception:
                 pass
 
