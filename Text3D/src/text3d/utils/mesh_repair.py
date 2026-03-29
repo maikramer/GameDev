@@ -12,6 +12,7 @@ na faixa inferior), no mesmo espaço Y-up que o export GLB.
 from __future__ import annotations
 
 import contextlib
+from collections import deque
 from typing import Literal
 
 import numpy as np
@@ -223,6 +224,289 @@ def _remove_bottom_center_cylinder(
     return mesh_yup
 
 
+def _remove_connected_ground_plinth(
+    mesh_yup: trimesh.Trimesh,
+    *,
+    bottom_frac: float = 0.12,
+    min_normal_y: float = 0.35,
+    max_remove_frac: float = 0.35,
+    min_expansion: float = 1.15,
+) -> trimesh.Trimesh:
+    """
+    Remove pedestal/plataforma conectada ao mesh principal na base.
+
+    Diferente de `_remove_flat_bottom_islands`, esta função lida com pedestais
+    que estão conectados aos pés do modelo (não são componentes separadas).
+
+    Heurística:
+    1. Identifica faces na base do modelo (próximas ao Y mínimo)
+    2. Detecta faces com normais predominantemente horizontais (|ny| alto)
+    3. Analisa a silhueta em XZ: se houver uma expansão repentina na base,
+       provavelmente é um pedestal (usa raio E médio + percentil 90)
+    4. Usa flood-fill para marcar faces conectadas que parecem pedestal
+    5. Remove faces marcadas se estiverem na base e forem "planas"
+
+    ``bottom_frac``: altura da zona inferior a considerar (fracção do bbox).
+    ``min_normal_y``: mínimo |normal_y| para considerar face "horizontal".
+    ``max_remove_frac``: máximo de faces que pode remover (protecção).
+    ``min_expansion``: factor de expansão mínimo (área/raio) para considerar pedestal.
+    """
+    if len(mesh_yup.faces) == 0:
+        return mesh_yup
+
+    bounds = mesh_yup.bounds
+    ymin = float(bounds[0, 1])
+    ymax = float(bounds[1, 1])
+    h = ymax - ymin
+    if h < 1e-8:
+        return mesh_yup
+
+    # Altura de corte para a zona inferior (pedestal)
+    y_cut = ymin + bottom_frac * h
+
+    # Centros das faces
+    centers = mesh_yup.triangles_center
+    normals = mesh_yup.face_normals
+
+    # Faces na zona inferior
+    in_bottom = centers[:, 1] <= y_cut
+
+    # Faces com normais horizontais (|ny| alto = face plana horizontal)
+    ny = np.abs(normals[:, 1])
+    is_horizontal = ny >= min_normal_y
+
+    # Candidate faces: na base E horizontais
+    candidate_mask = in_bottom & is_horizontal
+
+    if np.count_nonzero(candidate_mask) == 0:
+        return mesh_yup
+
+    # Análise de silhueta: comparar raio efetivo na base vs no topo da zona
+    # Usamos múltiplas métricas para ser mais robusto
+    cx = 0.5 * (bounds[0, 0] + bounds[1, 0])
+    cz = 0.5 * (bounds[0, 2] + bounds[1, 2])
+
+    # Raio efetivo na base (zona inferior) - usamos percentil 90 para ser robusto a outliers
+    bottom_faces_idx = np.where(in_bottom)[0]
+    if len(bottom_faces_idx) == 0:
+        return mesh_yup
+
+    bottom_centers = centers[bottom_faces_idx]
+    dx_bottom = bottom_centers[:, 0] - cx
+    dz_bottom = bottom_centers[:, 2] - cz
+    r_bottom_max = np.sqrt(dx_bottom**2 + dz_bottom**2).max()
+    r_bottom_p90 = np.percentile(np.sqrt(dx_bottom**2 + dz_bottom**2), 90)
+    r_bottom_mean = np.sqrt(dx_bottom**2 + dz_bottom**2).mean()
+
+    # Raio efetivo acima da zona de pedestal
+    upper_y = ymin + 0.35 * h
+    upper_mask = (centers[:, 1] > y_cut) & (centers[:, 1] <= upper_y)
+    upper_faces_idx = np.where(upper_mask)[0]
+
+    if len(upper_faces_idx) == 0:
+        # Se não há faces no nível superior, assume que pode haver pedestal
+        # e usa uma estimativa conservadora baseada no bbox
+        r_upper_p90 = min(bounds[1, 0] - bounds[0, 0], bounds[1, 2] - bounds[0, 2]) * 0.25
+        r_upper_mean = r_upper_p90 * 0.8
+    else:
+        upper_centers = centers[upper_faces_idx]
+        dx_upper = upper_centers[:, 0] - cx
+        dz_upper = upper_centers[:, 2] - cz
+        r_upper_p90 = np.percentile(np.sqrt(dx_upper**2 + dz_upper**2), 90)
+        r_upper_mean = np.sqrt(dx_upper**2 + dz_upper**2).mean()
+
+    if r_upper_p90 < 1e-9:
+        return mesh_yup
+
+    # Múltiplas métricas de expansão
+    expansion_max = r_bottom_max / r_upper_p90 if r_upper_p90 > 0 else 1.0
+    expansion_p90 = r_bottom_p90 / r_upper_p90 if r_upper_p90 > 0 else 1.0
+    expansion_mean = r_bottom_mean / r_upper_mean if r_upper_mean > 0 else 1.0
+
+    # Usa a maior expansão entre p90 e mean (max pode ser muito sensível a outliers)
+    expansion_ratio = max(expansion_p90, expansion_mean)
+
+    # Se a base não é significativamente mais larga, provavelmente não há pedestal
+    if expansion_ratio < min_expansion and expansion_max < min_expansion * 1.3:
+        return mesh_yup
+
+    # Flood-fill: partir das faces candidatas horizontais na base
+    # e expandir para faces conectadas que também estão na zona inferior
+    visited = np.zeros(len(mesh_yup.faces), dtype=bool)
+    to_remove = np.zeros(len(mesh_yup.faces), dtype=bool)
+
+    # Criar mapeamento de face -> faces adjacentes
+    face_to_faces = [set() for _ in range(len(mesh_yup.faces))]
+
+    # Usar face_adjacency para conectividade (mais robusto)
+    try:
+        adjacency = mesh_yup.face_adjacency
+        for f1, f2 in adjacency:
+            face_to_faces[f1].add(f2)
+            face_to_faces[f2].add(f1)
+    except Exception:
+        # Fallback: usar edges
+        try:
+            edges = mesh_yup.edges_unique
+            edge_faces = mesh_yup.edges_face
+            edge_to_faces = {}
+            for i, edge in enumerate(edges):
+                f = edge_faces[i]
+                if edge not in edge_to_faces:
+                    edge_to_faces[edge] = []
+                edge_to_faces[edge].append(f)
+            for edge, faces in edge_to_faces.items():
+                if len(faces) == 2:
+                    f1, f2 = faces
+                    face_to_faces[f1].add(f2)
+                    face_to_faces[f2].add(f1)
+        except Exception:
+            pass  # Sem conectividade, flood-fill não funcionará
+
+    # BFS a partir de cada face candidata
+    from collections import deque
+
+    seed_faces = np.where(candidate_mask)[0]
+    for seed in seed_faces:
+        if visited[seed]:
+            continue
+
+        # BFS para encontrar componente conectada de faces na zona inferior
+        component = []
+        queue = deque([seed])
+        visited[seed] = True
+
+        while queue:
+            face_idx = queue.popleft()
+            component.append(face_idx)
+
+            # Expandir para faces vizinhas
+            for neighbor in face_to_faces[face_idx]:
+                if not visited[neighbor] and in_bottom[neighbor]:
+                    # Só expande se a face vizinha também estiver na base
+                    visited[neighbor] = True
+                    queue.append(neighbor)
+
+        # Analisar componente: se for predominantemente horizontal, é pedestal
+        if len(component) == 0:
+            continue
+
+        component_arr = np.array(component)
+        component_horizontal = is_horizontal[component_arr]
+        horizontal_ratio = np.count_nonzero(component_horizontal) / len(component)
+
+        # Se mais de 55% das faces são horizontais, considera pedestal
+        # (threshold mais baixo que antes para pegar mais casos)
+        if horizontal_ratio > 0.55:
+            to_remove[component_arr] = True
+
+    n_remove = int(np.count_nonzero(to_remove))
+    if n_remove == 0:
+        return mesh_yup
+
+    if n_remove > max_remove_frac * len(mesh_yup.faces):
+        return mesh_yup
+
+    keep = ~to_remove
+    try:
+        sub = mesh_yup.submesh([np.where(keep)[0]], append=True, only_watertight=False)
+        if isinstance(sub, trimesh.Trimesh) and len(sub.faces) > 0:
+            return sub
+    except Exception:
+        pass
+
+    return mesh_yup
+
+
+def _remove_pedestal_by_layers(
+    mesh_yup: trimesh.Trimesh,
+    *,
+    layer_depth_frac: float = 0.015,
+    min_horizontal_pct: float = 0.80,
+    normal_threshold: float = 0.95,
+    max_layers: int = 5,
+    max_remove_frac: float = 0.35,
+    cleanup_small_components: int = 2000,
+) -> trimesh.Trimesh:
+    """
+    Remove pedestal removendo camadas finas da base onde >80% das faces são
+    puramente horizontais (normal alinhada com eixo Y).
+
+    Esta abordagem preserva partes anatômicas (pés, cauda) que têm geometria
+    curva/variada, removendo apenas o plano horizontal do pedestal.
+    """
+    if len(mesh_yup.faces) == 0:
+        return mesh_yup
+
+    # Usa eixo Y (Y-up space)
+    axis = 1
+    coords_all = mesh_yup.vertices[:, axis]
+    height = coords_all.max() - coords_all.min()
+    base_value = coords_all.min()
+
+    if height < 1e-8:
+        return mesh_yup
+
+    layer_depth = layer_depth_frac * height
+    centers = mesh_yup.triangles_center
+    normals = mesh_yup.face_normals
+    n_axis = np.abs(normals[:, axis])
+    is_very_horizontal = n_axis >= normal_threshold
+
+    to_remove = np.zeros(len(mesh_yup.faces), dtype=bool)
+
+    for layer in range(max_layers):
+        layer_start = base_value + (layer * layer_depth)
+        layer_end = base_value + ((layer + 1) * layer_depth)
+        in_layer = (centers[:, axis] >= layer_start) & (centers[:, axis] < layer_end)
+
+        n_in_layer = np.count_nonzero(in_layer)
+        if n_in_layer == 0:
+            break
+
+        n_horizontal = np.count_nonzero(in_layer & is_very_horizontal)
+        horizontal_pct = n_horizontal / n_in_layer if n_in_layer > 0 else 0
+
+        if horizontal_pct >= min_horizontal_pct:
+            layer_remove_mask = in_layer & is_very_horizontal
+            to_remove[layer_remove_mask] = True
+        else:
+            break
+
+    n_remove = int(np.count_nonzero(to_remove))
+    if n_remove == 0:
+        return mesh_yup
+
+    if n_remove > max_remove_frac * len(mesh_yup.faces):
+        return mesh_yup
+
+    keep = ~to_remove
+    try:
+        sub = mesh_yup.submesh([np.where(keep)[0]], append=True, only_watertight=False)
+        if isinstance(sub, trimesh.Trimesh) and len(sub.faces) > 0:
+            sub.remove_unreferenced_vertices()
+
+            # Limpeza: remover componentes pequenas/isoladas (artefatos)
+            if cleanup_small_components > 0:
+                try:
+                    components = sub.split(only_watertight=False)
+                    if len(components) > 1:
+                        main_size = max(len(c.faces) for c in components)
+                        min_size = max(cleanup_small_components, int(main_size * 0.05))
+                        significant = [c for c in components if len(c.faces) >= min_size]
+                        if len(significant) > 0 and len(significant) < len(components):
+                            sub = trimesh.util.concatenate(significant)
+                            sub.remove_unreferenced_vertices()
+                except Exception:
+                    pass
+
+            return sub
+    except Exception:
+        pass
+
+    return mesh_yup
+
+
 def remove_small_islands(
     mesh: trimesh.Trimesh,
     *,
@@ -344,6 +628,7 @@ def remove_ground_shadow_artifacts(
     mesh_space: Literal["hunyuan", "y_up"] = "hunyuan",
     y_up_flip_x_rad: float = 0.0,
     aggressive: bool = False,
+    very_aggressive: bool = False,
 ) -> trimesh.Trimesh:
     """
     Remove disco/placa de sombra na base.
@@ -359,13 +644,54 @@ def remove_ground_shadow_artifacts(
     ``aggressive``: opt-in — cilindro estreito sob o centro + peel mais forte (só para
     cascas enormes na base; pode comer geometria lateral se estiver no cone).
     O defeito é conservador (placa fina + peel leve).
+
+    ``very_aggressive``: modo extremo para pedestais muito grudados ao modelo.
+    Usa flood-fill para detectar e remover geometria conectada na base que parece
+    pedestal/plataforma. Pode remover mais geometria — use com cuidado.
     """
     m = mesh.copy()
     if mesh_space == "y_up" and y_up_flip_x_rad != 0.0:
         m = _rotate_mesh_x(m, float(y_up_flip_x_rad))
     yup = _to_export_y_up(m) if mesh_space == "hunyuan" else m
-    yup = _remove_flat_bottom_islands(yup, aggressive=aggressive)
-    if aggressive:
+    yup = _remove_flat_bottom_islands(yup, aggressive=aggressive or very_aggressive)
+
+    if very_aggressive:
+        # NOVO: Remoção por camadas - remove pedestal plano preservando anatomia
+        # Este algoritmo remove camadas finas da base onde >80% das faces são
+        # puramente horizontais, parando quando encontra geometria curva (pés, cauda)
+        yup = _remove_pedestal_by_layers(
+            yup,
+            layer_depth_frac=0.015,
+            min_horizontal_pct=0.80,
+            normal_threshold=0.95,
+            max_layers=5,
+            max_remove_frac=0.35,
+            cleanup_small_components=2000,
+        )
+        # Fallback: modo antigo para casos onde o novo não removeu nada
+        yup = _remove_connected_ground_plinth(
+            yup,
+            bottom_frac=0.15,
+            min_normal_y=0.25,
+            max_remove_frac=0.40,
+            min_expansion=1.08,
+        )
+        # Cilindro mais agressivo
+        yup = _remove_bottom_center_cylinder(
+            yup,
+            height_frac=0.18,
+            radius_frac=0.75,
+            min_normal_y=0.45,
+            max_remove_frac=0.40,
+        )
+        # Peel mais forte
+        yup = _peel_bottom_upward_faces(
+            yup,
+            band_frac=0.065,
+            min_normal_y=0.55,
+            max_remove_frac=0.30,
+        )
+    elif aggressive:
         # Cilindro mais estreito e normais mais horizontais — menos risco nas laterais.
         yup = _remove_bottom_center_cylinder(
             yup,
@@ -413,6 +739,479 @@ def keep_largest_component(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
     if len(parts) <= 1:
         return mesh
     return max(parts, key=_bbox_volume)
+
+
+def _boundary_edge_count(mesh: trimesh.Trimesh) -> int:
+    """Conta arestas de fronteira (buracos abertos)."""
+    try:
+        return len(group_rows(mesh.edges_sorted, require_count=1))
+    except Exception:
+        return -1
+
+
+def _detect_base_axis_mesh(mesh: trimesh.Trimesh) -> tuple[int, int]:
+    """Qual eixo parece ser a base (solo) e se é no mínimo (-1) ou máximo (+1) do eixo."""
+    best_axis = 1
+    best_direction = -1
+    best_score = 0
+    for axis in range(3):
+        coords = mesh.vertices[:, axis]
+        min_c, max_c = float(coords.min()), float(coords.max())
+        range_c = max_c - min_c
+        if range_c < 1e-6:
+            continue
+        lower_zone = coords <= (min_c + 0.05 * range_c)
+        upper_zone = coords >= (max_c - 0.05 * range_c)
+        n_lower = int(np.count_nonzero(lower_zone))
+        n_upper = int(np.count_nonzero(upper_zone))
+        score = abs(n_lower - n_upper)
+        if score > best_score:
+            best_score = score
+            best_axis = axis
+            best_direction = -1 if n_lower > n_upper else 1
+    return best_axis, best_direction
+
+
+def _bottom_zone_face_mask(
+    mesh: trimesh.Trimesh, axis: int, direction: int, band_frac: float
+) -> np.ndarray:
+    """Faces cujo centroide está na faixa inferior (ou superior) ao longo do eixo de suporte."""
+    coords = mesh.vertices[:, axis]
+    h = float(coords.max() - coords.min())
+    if h < 1e-8:
+        return np.zeros(len(mesh.faces), dtype=bool)
+    base_min, base_max = float(coords.min()), float(coords.max())
+    centers = mesh.triangles_center
+    if direction == -1:
+        return centers[:, axis] <= base_min + band_frac * h
+    return centers[:, axis] >= base_max - band_frac * h
+
+
+def _repair_holes_after_cut(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
+    """Repara non-manifold e fecha buracos após remoção topológica de faces."""
+    m = mesh
+    if _boundary_edge_count(m) <= 0:
+        return m
+    try:
+        import pymeshlab as _pml
+        import tempfile as _tf
+        from pathlib import Path as _Path
+
+        with _tf.TemporaryDirectory(prefix="cut_repair_") as tmpdir:
+            in_ply = str(_Path(tmpdir) / "in.ply")
+            out_ply = str(_Path(tmpdir) / "out.ply")
+            m.export(in_ply)
+            ms = _pml.MeshSet()
+            ms.load_new_mesh(in_ply)
+            ms.meshing_repair_non_manifold_edges()
+            ms.meshing_repair_non_manifold_vertices()
+            ms.meshing_close_holes(maxholesize=120)
+            ms.save_current_mesh(out_ply)
+            m_new = trimesh.load(out_ply, force="mesh")
+            if len(m_new.faces) > 0:
+                m = m_new
+    except Exception:
+        pass
+    if _boundary_edge_count(m) > 0:
+        try:
+            from pymeshfix import PyTMesh
+
+            verts = np.asarray(m.vertices, dtype=np.float64)
+            faces = np.asarray(m.faces, dtype=np.int64)
+            mfix = PyTMesh()
+            mfix.load_array(verts, faces)
+            mfix.fill_small_boundaries(nbe=0, refine=True)
+            v, f = mfix.return_arrays()
+            m = trimesh.Trimesh(vertices=np.asarray(v), faces=np.asarray(f), process=True)
+        except Exception:
+            pass
+    return m
+
+
+def _remove_planar_webs_at_base(
+    mesh: trimesh.Trimesh,
+    axis: int,
+    direction: int,
+    *,
+    bottom_frac: float = 0.10,
+    normal_dot: float = 0.88,
+    thin_ratio_max: float = 0.182,
+    edge_aspect_min: float = 4.0,
+    max_remove_frac: float = 0.12,
+) -> trimesh.Trimesh:
+    """
+    Remove "teias" planas entre garras/pés: triângulos quase horizontais, muito chatos
+    no eixo de suporte ou excessivamente alongados no plano perpendicular.
+    """
+    try:
+        m = mesh.copy()
+        h = float(m.vertices[:, axis].max() - m.vertices[:, axis].min())
+        if h < 1e-8:
+            return mesh
+
+        bottom = _bottom_zone_face_mask(m, axis, direction, bottom_frac)
+        normals = m.face_normals
+        n_axis = np.abs(normals[:, axis])
+        horizontal = n_axis >= normal_dot
+
+        ax1 = (axis + 1) % 3
+        ax2 = (axis + 2) % 3
+        remove = np.zeros(len(m.faces), dtype=bool)
+
+        for i in range(len(m.faces)):
+            if not bottom[i] or not horizontal[i]:
+                continue
+            tri = m.vertices[m.faces[i]]
+            ext_axis = float(tri[:, axis].max() - tri[:, axis].min())
+            dx = float(tri[:, ax1].max() - tri[:, ax1].min())
+            dy = float(tri[:, ax2].max() - tri[:, ax2].min())
+            span_perp = float(np.hypot(dx, dy))
+            thin_ratio = ext_axis / max(span_perp, 1e-9)
+
+            e0 = tri[1] - tri[0]
+            e1 = tri[2] - tri[0]
+            e2 = tri[2] - tri[1]
+            l0 = float(np.linalg.norm(e0))
+            l1 = float(np.linalg.norm(e1))
+            l2 = float(np.linalg.norm(e2))
+            le = max(l0, l1, l2)
+            se = min(l0, l1, l2)
+            aspect = le / max(se, 1e-9)
+
+            v0, v1, v2 = tri[0], tri[1], tri[2]
+            ev0_a, ev0_b = v1 - v0, v2 - v0
+            ev1_a, ev1_b = v0 - v1, v2 - v1
+            ev2_a, ev2_b = v0 - v2, v1 - v2
+            n0 = float(np.linalg.norm(ev0_a) * np.linalg.norm(ev0_b))
+            n1 = float(np.linalg.norm(ev1_a) * np.linalg.norm(ev1_b))
+            n2 = float(np.linalg.norm(ev2_a) * np.linalg.norm(ev2_b))
+            a0 = float(np.degrees(np.arccos(np.clip(float(np.dot(ev0_a, ev0_b)) / max(n0, 1e-9), -1.0, 1.0))))
+            a1 = float(np.degrees(np.arccos(np.clip(float(np.dot(ev1_a, ev1_b)) / max(n1, 1e-9), -1.0, 1.0))))
+            a2 = float(np.degrees(np.arccos(np.clip(float(np.dot(ev2_a, ev2_b)) / max(n2, 1e-9), -1.0, 1.0))))
+            amin, amax = min(a0, a1, a2), max(a0, a1, a2)
+
+            # Chapa finíssima no eixo OU agulha longa no plano OU triângulo obtuso muito alongado
+            is_pancake = thin_ratio <= thin_ratio_max and span_perp >= 0.004 * h
+            is_needle = aspect >= edge_aspect_min
+            is_obtuse_slab = amin >= 52.0 and amax >= 108.0 and aspect >= 2.8
+
+            if is_pancake or is_needle or is_obtuse_slab:
+                remove[i] = True
+
+        n_rm = int(np.count_nonzero(remove))
+        if n_rm == 0 or n_rm > max_remove_frac * len(m.faces):
+            return mesh
+
+        keep = ~remove
+        sub = m.submesh([np.where(keep)[0]], append=True, only_watertight=False)
+        if isinstance(sub, trimesh.Trimesh) and len(sub.faces) > 0:
+            sub.remove_unreferenced_vertices()
+            return sub
+    except Exception:
+        pass
+    return mesh
+
+
+def _remove_thin_plaque_clusters_at_base(
+    mesh: trimesh.Trimesh,
+    axis: int,
+    direction: int,
+    *,
+    band_frac: float = 0.155,
+    normal_dot: float = 0.86,
+    max_thickness_ratio: float = 0.108,
+    min_faces: int = 16,
+    max_cluster_frac: float = 0.22,
+    max_remove_frac: float = 0.25,
+    min_dot_ref_normal: float = 0.72,
+) -> trimesh.Trimesh:
+    """Remove placas horizontais finas conexas na base (pedestal grudado)."""
+    try:
+        m = mesh.copy()
+        h = float(m.vertices[:, axis].max() - m.vertices[:, axis].min())
+        if h < 1e-8 or len(m.faces) == 0:
+            return mesh
+
+        bottom = _bottom_zone_face_mask(m, axis, direction, band_frac)
+        normals = m.face_normals
+        n_axis = np.abs(normals[:, axis])
+        horizontal = bottom & (n_axis >= normal_dot)
+        if not np.any(horizontal):
+            return mesh
+
+        adj = m.face_adjacency
+        nbr: list[list[int]] = [[] for _ in range(len(m.faces))]
+        for a, b in adj:
+            a, b = int(a), int(b)
+            if horizontal[a] and horizontal[b]:
+                nbr[a].append(b)
+                nbr[b].append(a)
+
+        visited = np.zeros(len(m.faces), dtype=bool)
+        to_remove = np.zeros(len(m.faces), dtype=bool)
+        ax1 = (axis + 1) % 3
+        ax2 = (axis + 2) % 3
+        n_face = len(m.faces)
+
+        for seed in range(n_face):
+            if not horizontal[seed] or visited[seed]:
+                continue
+            comp: list[int] = []
+            q = deque([seed])
+            visited[seed] = True
+            while q:
+                f = q.popleft()
+                comp.append(f)
+                for j in nbr[f]:
+                    if not visited[j]:
+                        visited[j] = True
+                        q.append(j)
+
+            n_c = len(comp)
+            if n_c < min_faces or n_c > max_cluster_frac * n_face:
+                continue
+
+            fi = np.array(comp, dtype=np.int64)
+            verts_idx = m.faces[fi].ravel()
+            pts = m.vertices[verts_idx]
+            ext_axis = float(pts[:, axis].max() - pts[:, axis].min())
+            span = float(
+                np.hypot(
+                    pts[:, ax1].max() - pts[:, ax1].min(),
+                    pts[:, ax2].max() - pts[:, ax2].min(),
+                )
+            )
+            ratio = ext_axis / max(span, 1e-9)
+            if ratio > max_thickness_ratio:
+                continue
+
+            nc = normals[fi]
+            ref = nc[0] / max(float(np.linalg.norm(nc[0])), 1e-9)
+            dots = np.abs(nc @ ref)
+            if float(np.min(dots)) < min_dot_ref_normal:
+                continue
+
+            to_remove[fi] = True
+
+        n_rm = int(np.count_nonzero(to_remove))
+        if n_rm == 0 or n_rm > max_remove_frac * n_face:
+            return mesh
+
+        keep = ~to_remove
+        sub = m.submesh([np.where(keep)[0]], append=True, only_watertight=False)
+        if isinstance(sub, trimesh.Trimesh) and len(sub.faces) > 0:
+            sub.remove_unreferenced_vertices()
+            return sub
+    except Exception:
+        pass
+    return mesh
+
+
+def advanced_fill_holes(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
+    """
+    Pipeline avançada multi-etapa de fechamento de buracos.
+
+    Primeiro a cascata de fecho; depois limpeza de base (spikes, teias, placas)
+    com reparo entre passos.
+
+    Cascata (para quando atinge watertight):
+    1. PyMeshLab: non-manifold repair + ``meshing_close_holes`` (Delaunay)
+    2. PyMeshFix: algoritmo MeshFix de Attene com refinamento
+    3. MeshLib: preenchimento com métrica universal otimizada
+
+    Requer ``pymeshlab``, ``pymeshfix`` e/ou ``meshlib`` (fallback gracioso).
+    """
+    m = mesh.copy()
+    boundary = _boundary_edge_count(m)
+    if boundary <= 0:
+        return m
+
+    # 1. PyMeshLab — non-manifold repair + close_holes
+    try:
+        import pymeshlab
+        import tempfile as _tf
+        from pathlib import Path as _Path
+
+        with _tf.TemporaryDirectory(prefix="meshlab_holes_") as tmpdir:
+            in_ply = str(_Path(tmpdir) / "in.ply")
+            out_ply = str(_Path(tmpdir) / "out.ply")
+            m.export(in_ply)
+
+            ms = pymeshlab.MeshSet()
+            ms.load_new_mesh(in_ply)
+            ms.meshing_repair_non_manifold_edges()
+            ms.meshing_repair_non_manifold_vertices()
+            ms.meshing_remove_duplicate_faces()
+            ms.meshing_remove_duplicate_vertices()
+            ms.meshing_remove_unreferenced_vertices()
+            ms.meshing_close_holes(maxholesize=500)
+            ms.save_current_mesh(out_ply)
+
+            m_new = trimesh.load(out_ply, force="mesh")
+            b_new = _boundary_edge_count(m_new)
+            if b_new < boundary:
+                m = m_new
+                boundary = b_new
+    except Exception:
+        pass
+
+    if boundary <= 0:
+        return m
+
+    # 2. PyMeshFix — MeshFix de Attene
+    try:
+        from pymeshfix import PyTMesh
+
+        verts = np.asarray(m.vertices, dtype=np.float64)
+        faces = np.asarray(m.faces, dtype=np.int64)
+        mfix = PyTMesh()
+        mfix.load_array(verts, faces)
+        mfix.fill_small_boundaries(nbe=0, refine=True)
+        v, f = mfix.return_arrays()
+        m_new = trimesh.Trimesh(
+            vertices=np.asarray(v, dtype=np.float64),
+            faces=np.asarray(f, dtype=np.int64),
+            process=True,
+        )
+        b_new = _boundary_edge_count(m_new)
+        if b_new < boundary:
+            m = m_new
+            boundary = b_new
+    except Exception:
+        pass
+
+    if boundary <= 0:
+        return m
+
+    # 3. MeshLib — universal metric fill
+    try:
+        import meshlib.mrmeshpy as mrmeshpy
+        import tempfile as _tf
+        from pathlib import Path as _Path
+
+        with _tf.TemporaryDirectory(prefix="meshlib_holes_") as tmpdir:
+            in_stl = str(_Path(tmpdir) / "in.stl")
+            out_stl = str(_Path(tmpdir) / "out.stl")
+            m.export(in_stl)
+
+            ml_mesh = mrmeshpy.loadMesh(in_stl)
+            hole_edges = ml_mesh.topology.findHoleRepresentiveEdges()
+            for e in hole_edges:
+                params = mrmeshpy.FillHoleParams()
+                params.metric = mrmeshpy.getUniversalMetric(ml_mesh)
+                mrmeshpy.fillHole(ml_mesh, e, params)
+            mrmeshpy.saveMesh(ml_mesh, out_stl)
+
+            m_new = trimesh.load(out_stl, force="mesh")
+            b_new = _boundary_edge_count(m_new)
+            if b_new < boundary:
+                m = m_new
+                boundary = b_new
+    except Exception:
+        pass
+
+    with contextlib.suppress(Exception):
+        trimesh_repair.fix_normals(m, multibody=True)
+
+    m = _remove_spikes_and_repair(m)
+    m = _remove_planar_webs_and_repair(m)
+    m = _remove_plaque_clusters_and_repair(m)
+
+    return m
+
+
+def _remove_spikes_and_repair(
+    mesh: trimesh.Trimesh,
+    *,
+    max_spike_angle: float = 10.0,
+    repair_holes: bool = True,
+) -> trimesh.Trimesh:
+    """
+    Remove "spikes" (pontas finas) na base e refecha buracos criados.
+
+    Detecta faces onde um vértice forma um ângulo muito pequeno,
+    criando uma ponta fina que geralmente é um artefato.
+    """
+    try:
+        m = mesh.copy()
+        axis, direction = _detect_base_axis_mesh(m)
+        bottom_zone = _bottom_zone_face_mask(m, axis, direction, 0.08)
+
+        spike_faces = []
+        for i, face in enumerate(m.faces):
+            if not bottom_zone[i]:
+                continue
+
+            v0, v1, v2 = m.vertices[face]
+
+            # Vetores das arestas
+            e0 = v1 - v0
+            e1 = v2 - v0
+            e2 = v2 - v1
+
+            # Comprimentos
+            l0 = float(np.linalg.norm(e0))
+            l1 = float(np.linalg.norm(e1))
+            l2 = float(np.linalg.norm(e2))
+
+            if l0 < 1e-10 or l1 < 1e-10 or l2 < 1e-10:
+                continue
+
+            # Calcular ângulos
+            cos_angle_0 = float(np.dot(e0, e1)) / (l0 * l1)
+            angle_0 = np.degrees(np.arccos(np.clip(cos_angle_0, -1.0, 1.0)))
+
+            e0_inv = v0 - v1
+            cos_angle_1 = float(np.dot(e0_inv, e2)) / (float(np.linalg.norm(e0_inv)) * l2)
+            angle_1 = np.degrees(np.arccos(np.clip(cos_angle_1, -1.0, 1.0)))
+
+            e1_inv = v0 - v2
+            e2_inv = v1 - v2
+            cos_angle_2 = float(np.dot(e1_inv, e2_inv)) / (float(np.linalg.norm(e1_inv)) * float(np.linalg.norm(e2_inv)))
+            angle_2 = np.degrees(np.arccos(np.clip(cos_angle_2, -1.0, 1.0)))
+
+            min_angle = min(angle_0, angle_1, angle_2)
+            if min_angle < max_spike_angle:
+                spike_faces.append(i)
+
+        if len(spike_faces) > 0 and len(spike_faces) < len(m.faces) * 0.2:
+            keep_mask = np.ones(len(m.faces), dtype=bool)
+            keep_mask[spike_faces] = False
+            sub = m.submesh([np.where(keep_mask)[0]], append=True, only_watertight=False)
+            if isinstance(sub, trimesh.Trimesh) and len(sub.faces) > 0:
+                sub.remove_unreferenced_vertices()
+                m = _repair_holes_after_cut(sub) if repair_holes else sub
+        return m
+    except Exception:
+        return mesh
+
+
+def _remove_planar_webs_and_repair(
+    mesh: trimesh.Trimesh, *, repair_holes: bool = True
+) -> trimesh.Trimesh:
+    """Remove teias planas entre garras na base e, por defeito, refecha buracos."""
+    try:
+        axis, direction = _detect_base_axis_mesh(mesh)
+        m = _remove_planar_webs_at_base(mesh, axis, direction)
+        if m is mesh or len(m.faces) == len(mesh.faces):
+            return mesh
+        return _repair_holes_after_cut(m) if repair_holes else m
+    except Exception:
+        return mesh
+
+
+def _remove_plaque_clusters_and_repair(
+    mesh: trimesh.Trimesh, *, repair_holes: bool = True
+) -> trimesh.Trimesh:
+    """Remove placas planas finas conexas e, por defeito, refecha buracos."""
+    try:
+        axis, direction = _detect_base_axis_mesh(mesh)
+        m = _remove_thin_plaque_clusters_at_base(mesh, axis, direction)
+        if m is mesh or len(m.faces) == len(mesh.faces):
+            return mesh
+        return _repair_holes_after_cut(m) if repair_holes else m
+    except Exception:
+        return mesh
 
 
 def laplacian_smooth(mesh: trimesh.Trimesh, iterations: int = 1, lamb: float = 0.5) -> trimesh.Trimesh:
@@ -508,6 +1307,7 @@ def repair_mesh(
     ground_artifact_mesh_space: Literal["hunyuan", "y_up"] = "hunyuan",
     ground_artifact_y_up_flip_x_rad: float = 0.0,
     ground_shadow_aggressive: bool = False,
+    ground_shadow_very_aggressive: bool = False,
     remove_small_island_fragments: bool = True,
     small_island_min_face_ratio: float = 0.0002,
     small_island_min_faces_abs: int = 48,
@@ -527,6 +1327,8 @@ def repair_mesh(
     ``ground_artifact_mesh_space``: ``hunyuan`` para saída do pipeline Text3D;
     ``y_up`` para GLB já orientado (ex.: Godot).
     ``ground_shadow_aggressive``: cilindro na base + peel forte (cascas 3D grandes).
+    ``ground_shadow_very_aggressive``: modo extremo para pedestais conectados ao modelo.
+    Usa análise de silhueta e flood-fill para detectar e remover pedestal grudado.
     ``remove_small_island_fragments``: apaga ilhas minúsculas (fragmentos flutuantes).
     ``fill_small_holes_max_edges``: fecha buracos com contorno até N arestas (0 = desliga).
     ``remesh``: isotropic remeshing — reconstrói topologia com triângulos uniformes,
@@ -540,14 +1342,15 @@ def repair_mesh(
                 m,
                 mesh_space=ground_artifact_mesh_space,
                 y_up_flip_x_rad=ground_artifact_y_up_flip_x_rad,
-                aggressive=ground_shadow_aggressive,
+                aggressive=ground_shadow_aggressive and not ground_shadow_very_aggressive,
+                very_aggressive=ground_shadow_very_aggressive,
             )
 
     if remove_small_island_fragments:
         try:
             ratio = float(small_island_min_face_ratio)
             abs_m = int(small_island_min_faces_abs)
-            if ground_shadow_aggressive:
+            if ground_shadow_aggressive or ground_shadow_very_aggressive:
                 ratio = max(ratio, 0.0018)
                 abs_m = max(abs_m, 256)
             m = remove_small_islands(
@@ -561,6 +1364,51 @@ def repair_mesh(
     if merge_vertices:
         with contextlib.suppress(Exception):
             m.merge_vertices()
+
+    # Pipeline avançada: fechamento de buracos + isotropic remesh + Taubin smoothing
+    if ground_shadow_very_aggressive:
+        with contextlib.suppress(Exception):
+            m = advanced_fill_holes(m)
+        # Pós-processamento: isotropic remesh + Taubin para suavizar patches reparados
+        try:
+            import pymeshlab
+            import tempfile as _tf
+            from pathlib import Path as _Path
+
+            with _tf.TemporaryDirectory(prefix="remesh_post_") as tmpdir:
+                in_ply = str(_Path(tmpdir) / "in.ply")
+                out_ply = str(_Path(tmpdir) / "out.ply")
+                m.export(in_ply)
+                ms = pymeshlab.MeshSet()
+                ms.load_new_mesh(in_ply)
+                ms.meshing_repair_non_manifold_edges()
+                ms.meshing_repair_non_manifold_vertices()
+                ms.meshing_remove_duplicate_faces()
+                ms.meshing_remove_duplicate_vertices()
+                ms.meshing_remove_unreferenced_vertices()
+                try:
+                    ms.meshing_close_holes(maxholesize=500)
+                except Exception:
+                    pass
+                diag = ms.current_mesh().bounding_box().diagonal()
+                target_edge = diag / 150
+                ms.meshing_isotropic_explicit_remeshing(
+                    iterations=3,
+                    targetlen=pymeshlab.PureValue(target_edge),
+                    adaptive=True,
+                    selectedonly=False,
+                    checksurfdist=True,
+                    maxsurfdist=pymeshlab.PureValue(target_edge * 0.5),
+                )
+                ms.apply_coord_taubin_smoothing(
+                    stepsmoothnum=5, lambda_=0.5, mu=-0.53,
+                )
+                ms.save_current_mesh(out_ply)
+                m_new = trimesh.load(out_ply, force="mesh")
+                if len(m_new.faces) > 0:
+                    m = m_new
+        except Exception:
+            pass
 
     if fill_small_holes_max_edges > 0:
         with contextlib.suppress(Exception):

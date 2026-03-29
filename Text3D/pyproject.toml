@@ -28,6 +28,7 @@ dependencies = [
     "pymeshlab>=2023.12",
     "text2d",
     "hy3dgen @ git+https://github.com/Tencent-Hunyuan/Hunyuan3D-2.git",
+    "nvdiffrast @ git+https://github.com/NVlabs/nvdiffrast.git",
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -42,6 +43,8 @@ classifiers = [
 [project.optional-dependencies]
 upscale = ["spandrel>=0.4.0"]
 dev = ["pytest>=7.4.0", "pytest-cov>=4.0.0", "ruff>=0.11.0"]
+# Fechamento de buracos pós-pedestal (remove_pedestal_layered, mesh_repair): PyMeshLab sozinho pode deixar fronteira residual
+mesh-repair = ["pymeshfix>=1.0.0"]
 
 [project.scripts]
 text3d = "text3d.cli:main"

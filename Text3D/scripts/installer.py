@@ -46,7 +46,7 @@ class Text3DInstaller(PythonProjectInstaller):
         if not super().run():
             return False
 
-        self.install_custom_rasterizer()
+        self.verify_nvdiffrast()
         self.setup_models()
         self.create_text3d_wrappers()
         self.setup_directories()
@@ -74,108 +74,39 @@ class Text3DInstaller(PythonProjectInstaller):
         super().install_system_wide()
 
     # ------------------------------------------------------------------
-    # custom_rasterizer (Hunyuan3D-Paint)
+    # nvdiffrast (rasterizador NVIDIA — substitui custom_rasterizer)
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _detect_cuda_home() -> str | None:
-        for candidate in (
-            os.environ.get("CUDA_HOME"),
-            os.environ.get("CUDA_PATH"),
-        ):
-            if candidate and Path(candidate).is_dir():
-                return candidate
-        for p in sorted(Path("/usr/local").glob("cuda-*"), reverse=True):
-            if (p / "bin" / "nvcc").is_file():
-                return str(p)
-        if (Path("/usr/lib/cuda") / "bin" / "nvcc").is_file():
-            return "/usr/lib/cuda"
-        return None
-
-    def install_custom_rasterizer(self) -> None:
-        """Compila e instala custom_rasterizer via sparse-clone do Hunyuan3D-2."""
-        self.logger.step("custom_rasterizer (Hunyuan3D-Paint)...")
+    def verify_nvdiffrast(self) -> None:
+        """Verifica se nvdiffrast está instalado (pip install, sem compilação manual)."""
+        self.logger.step("nvdiffrast (rasterizador NVIDIA para textura)...")
 
         python = str(self.venv_python) if self.venv_exists else self.python_cmd
         try:
             subprocess.run(
-                [python, "-c", "import torch; import custom_rasterizer"],
+                [python, "-c", "import nvdiffrast.torch; print('ok')"],
                 capture_output=True,
                 check=True,
             )
-            self.logger.info("custom_rasterizer já instalado — pulando.")
+            self.logger.success("nvdiffrast importável — textura Paint pronta.")
             return
         except subprocess.CalledProcessError:
             pass
 
-        if not shutil.which("nvcc"):
-            cuda_home = self._detect_cuda_home()
-            if cuda_home and (Path(cuda_home) / "bin" / "nvcc").is_file():
-                cuda_bin = str(Path(cuda_home) / "bin")
-                os.environ["PATH"] = cuda_bin + os.pathsep + os.environ.get("PATH", "")
-            else:
-                self.logger.warn(
-                    "nvcc não encontrado — custom_rasterizer não será compilado. "
-                    "Instale CUDA Toolkit e execute: bash scripts/install_custom_rasterizer.sh"
-                )
-                return
-
-        cuda_home = self._detect_cuda_home()
-        if not cuda_home:
-            self.logger.warn("CUDA_HOME não detectado — pulando custom_rasterizer.")
-            return
-
-        self.logger.info(f"CUDA_HOME={cuda_home}")
-        os.environ["CUDA_HOME"] = cuda_home
-
-        if not shutil.which("git"):
-            self.logger.warn(
-                "git não encontrado no PATH — necessário para sparse-clone do Hunyuan3D-2. "
-                "Linux: git; Windows: Git for Windows."
-            )
-            return
-
-        import tempfile
-
-        clone_dir = Path(tempfile.gettempdir()) / "Hunyuan3D-2"
-        cr_dir = clone_dir / "hy3dgen" / "texgen" / "custom_rasterizer"
-
-        if not cr_dir.is_dir():
-            self.logger.info("Sparse-clone do Hunyuan3D-2 (só custom_rasterizer)...")
-            if clone_dir.exists():
-                shutil.rmtree(clone_dir, ignore_errors=True)
-            subprocess.run(
-                [
-                    "git",
-                    "clone",
-                    "--depth",
-                    "1",
-                    "--filter=blob:none",
-                    "--sparse",
-                    "https://github.com/Tencent-Hunyuan/Hunyuan3D-2.git",
-                    str(clone_dir),
-                ],
-                check=True,
-            )
-            subprocess.run(
-                ["git", "sparse-checkout", "set", "hy3dgen/texgen/custom_rasterizer"],
-                check=True,
-                cwd=str(clone_dir),
-            )
-
-        self.logger.info("Compilando custom_rasterizer...")
-        pip_cmd = [python, "-m", "pip", "install", "-e", ".", "--no-build-isolation"]
-        subprocess.run(pip_cmd, check=True, cwd=str(cr_dir))
-
+        self.logger.info("Instalando nvdiffrast (NVIDIA differentiable rasterizer)...")
+        pip_cmd = [
+            python, "-m", "pip", "install",
+            "git+https://github.com/NVlabs/nvdiffrast.git",
+            "--no-build-isolation",
+        ]
         try:
-            subprocess.run(
-                [python, "-c", "import torch; import custom_rasterizer"],
-                capture_output=True,
-                check=True,
-            )
-            self.logger.success("custom_rasterizer compilado e importável.")
+            subprocess.run(pip_cmd, check=True)
+            self.logger.success("nvdiffrast instalado.")
         except subprocess.CalledProcessError:
-            self.logger.warn("custom_rasterizer compilou mas falhou na importação. Verifique nvcc/CUDA.")
+            self.logger.warn(
+                "Falha ao instalar nvdiffrast. Verifique que CUDA Toolkit "
+                "e PyTorch CUDA estão disponíveis."
+            )
 
     def setup_models(self) -> None:
         self.logger.step("Configurando modelos...")

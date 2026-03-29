@@ -107,6 +107,22 @@ DEFAULT_REMESH_RESOLUTION = 150
 # é aplicada automaticamente. Desligar com --no-texture.
 DEFAULT_TEXTURE = True
 
+
+def get_default_texture() -> bool:
+    """
+    Defeito do CLI ``generate``: textura Paint ligada.
+
+    Sobrescrever globalmente (CI, máquinas sem custom_rasterizer): ``TEXT3D_DEFAULT_TEXTURE=0``
+    para o defeito passar a geometria só (equivalente a ``--no-texture`` sem flag).
+    Valores aceites: 1/true/yes/on (ligado), 0/false/no/off (desligado); vazio = ``DEFAULT_TEXTURE``.
+    """
+    env = os.environ.get("TEXT3D_DEFAULT_TEXTURE", "").strip().lower()
+    if env in ("0", "false", "no", "off"):
+        return False
+    if env in ("1", "true", "yes", "on"):
+        return True
+    return bool(DEFAULT_TEXTURE)
+
 # Upscaling IA da textura (Real-ESRGAN via spandrel). Escala 1024→4096 (4x)
 # ou 1024→2048 (2x). Requer: pip install spandrel
 DEFAULT_UPSCALE = False

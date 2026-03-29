@@ -29,6 +29,9 @@ text2d @ file:../Text2D
 # Hunyuan3D (hy3dgen) — licença Tencent Hunyuan Community
 hy3dgen @ git+https://github.com/Tencent-Hunyuan/Hunyuan3D-2.git
 
+# Rasterizador NVIDIA (substitui custom_rasterizer — sem compilação manual)
+nvdiffrast @ git+https://github.com/NVlabs/nvdiffrast.git
+
 # diffusers export_to_gif ainda usado em save_gif
 # (Hunyuan devolve trimesh; GIF permanece utilitário opcional)
 

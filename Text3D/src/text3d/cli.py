@@ -60,6 +60,11 @@ def _gpu_kill_others_effective(cli_wants: bool) -> bool:
 DEFAULT_MESH_DIR = DEFAULT_OUTPUT_DIR / "meshes"
 
 
+def _default_texture_cli() -> bool:
+    """Valor por defeito de --texture (TEXT3D_DEFAULT_TEXTURE; Click chama sem ctx)."""
+    return _defaults.get_default_texture()
+
+
 def ensure_dirs():
     DEFAULT_MESH_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -262,6 +267,13 @@ def skill_install_cmd(target: Path, force: bool) -> None:
     help="Anti-sombra forte (cilindro na base + peel; só para cascas enormes).",
 )
 @click.option(
+    "--ground-shadow-very-aggressive",
+    "ground_shadow_very_aggressive",
+    is_flag=True,
+    default=False,
+    help="Anti-sombra EXTREMO — para pedestais grudados ao modelo. Usa flood-fill + análise de silhueta. Pode remover mais geometria.",
+)
+@click.option(
     "--mesh-smooth",
     default=_defaults.DEFAULT_MESH_SMOOTH,
     show_default=True,
@@ -284,10 +296,18 @@ def skill_install_cmd(target: Path, force: bool) -> None:
 @click.option(
     "--texture/--no-texture",
     "texture",
-    default=_defaults.DEFAULT_TEXTURE,
-    show_default=True,
-    help="Hunyuan3D-Paint (textura) após a mesh. Usa a imagem Text2D ou --from-image. "
-    "Desliga com --no-texture para obter só a geometria.",
+    default=_default_texture_cli,
+    show_default="ligado (Paint)",
+    help="Hunyuan3D-Paint (textura) após a mesh. Por defeito ligado; usa a imagem Text2D "
+    "ou --from-image. Desliga com --no-texture para obter só a geometria. "
+    "Defeito global: TEXT3D_DEFAULT_TEXTURE=0 só geometria.",
+)
+@click.option(
+    "--final",
+    "texture_final",
+    is_flag=True,
+    default=False,
+    help="Igual a forçar mesh + Paint (--texture). O defeito já inclui textura; útil em scripts.",
 )
 @click.option(
     "--model-subfolder",
@@ -421,10 +441,12 @@ def generate(
     no_mesh_repair,
     no_ground_shadow_removal,
     ground_shadow_aggressive,
+    ground_shadow_very_aggressive,
     mesh_smooth,
     remesh,
     remesh_resolution,
     texture,
+    texture_final,
     upscale,
     upscale_factor,
     paint_repo,
@@ -444,6 +466,11 @@ def generate(
 ):
     """Gera 3D: PROMPT (Text2D → Hunyuan) ou --from-image (só Hunyuan)."""
     verbose = bool(ctx.obj.get("VERBOSE")) or generate_verbose
+
+    if texture_final and not texture:
+        raise click.UsageError("--final/--texture incompatível com --no-texture.")
+    if texture_final:
+        texture = True
 
     if materialize and not texture:
         raise click.UsageError("--materialize requer textura ativa (remova --no-texture).")
@@ -502,7 +529,9 @@ def generate(
     rep = "desligado" if no_mesh_repair else "maior componente + merge"
     if not no_mesh_repair and not no_ground_shadow_removal:
         rep += ", anti-sombra base"
-        if ground_shadow_aggressive:
+        if ground_shadow_very_aggressive:
+            rep += " (EXTREMO)"
+        elif ground_shadow_aggressive:
             rep += " (agressivo)"
     if remesh and not no_mesh_repair:
         rep += f", remesh(res={remesh_resolution})"
@@ -631,7 +660,8 @@ def generate(
                     merge_vertices=True,
                     remove_ground_shadow=not no_ground_shadow_removal,
                     ground_artifact_mesh_space="hunyuan",
-                    ground_shadow_aggressive=ground_shadow_aggressive,
+                    ground_shadow_aggressive=ground_shadow_aggressive and not ground_shadow_very_aggressive,
+                    ground_shadow_very_aggressive=ground_shadow_very_aggressive,
                     smooth_iterations=max(0, mesh_smooth),
                     remesh=remesh,
                     remesh_resolution=remesh_resolution,
@@ -753,7 +783,10 @@ def doctor():
 
     try:
         check_paint_rasterizer_available()
-        table.add_row("Hunyuan3D-Paint", "[green]custom_rasterizer importável[/green]")
+        import custom_rasterizer  # noqa: F401
+
+        backend = "nvdiffrast (shim)" if getattr(custom_rasterizer, "IS_NVDIFFRAST_SHIM", False) else "nativo"
+        table.add_row("Hunyuan3D-Paint", f"[green]rasterizador OK — {backend}[/green]")
     except RuntimeError as e:
         msg = str(e).split("\n")[0][:120]
         table.add_row("Hunyuan3D-Paint", f"[yellow]{msg}…[/yellow]")
@@ -1166,6 +1199,13 @@ def materialize_pbr_cmd(
     help="Anti-sombra forte (cilindro + peel; cascas grandes na base).",
 )
 @click.option(
+    "--ground-shadow-very-aggressive",
+    "ground_shadow_very_aggressive",
+    is_flag=True,
+    default=False,
+    help="Anti-sombra EXTREMO — flood-fill + análise de silhueta para pedestais grudados.",
+)
+@click.option(
     "--remesh/--no-remesh",
     default=_defaults.DEFAULT_REMESH,
     show_default=True,
@@ -1187,6 +1227,7 @@ def repair_ground_cmd(
     no_small_islands: bool,
     fill_holes_max_edges: int,
     ground_shadow_aggressive: bool,
+    ground_shadow_very_aggressive: bool,
     remesh: bool,
     remesh_resolution: int,
 ):
@@ -1212,7 +1253,8 @@ def repair_ground_cmd(
             remove_ground_shadow=True,
             ground_artifact_mesh_space=mesh_space,
             ground_artifact_y_up_flip_x_rad=flip,
-            ground_shadow_aggressive=ground_shadow_aggressive,
+            ground_shadow_aggressive=ground_shadow_aggressive and not ground_shadow_very_aggressive,
+            ground_shadow_very_aggressive=ground_shadow_very_aggressive,
             remove_small_island_fragments=not no_small_islands,
             fill_small_holes_max_edges=max(0, int(fill_holes_max_edges)),
             smooth_iterations=0,

@@ -2,10 +2,15 @@
 Textura com Hunyuan3D-Paint (hy3dgen.texgen.Hunyuan3DPaintPipeline).
 
 Requer pesos em ``tencent/Hunyuan3D-2`` (subpastas delight + paint), descarregados na primeira execução.
+
+O rasterizador CUDA é fornecido por **nvdiffrast** (NVIDIA), registado como
+``custom_rasterizer`` em ``sys.modules`` antes de qualquer importação do texgen.
+Isto elimina a necessidade de compilar a extensão C++/CUDA manualmente.
 """
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -17,14 +22,20 @@ from PIL import Image
 from . import defaults as _defaults
 from .utils.memory import clear_cuda_memory
 
-_PAINT_RASTERIZER_HINT = (
-    "O Hunyuan3D-Paint precisa do módulo CUDA `custom_rasterizer` (extensão compilada). "
-    "Instala o CUDA Toolkit (nvcc), define CUDA_HOME, depois:\n"
-    "  git clone --depth 1 https://github.com/Tencent-Hunyuan/Hunyuan3D-2.git\n"
-    "  cd Hunyuan3D-2/hy3dgen/texgen/custom_rasterizer\n"
-    "  pip install -e . --no-build-isolation\n"
-    "Ver também: docs/PAINT_SETUP.md no repositório Text3D."
-)
+
+def _ensure_custom_rasterizer_shim() -> None:
+    """Regista o shim nvdiffrast como ``custom_rasterizer`` se o módulo nativo não existir."""
+    if "custom_rasterizer" in sys.modules:
+        return
+    try:
+        import custom_rasterizer  # noqa: F401 – extensão nativa já instalada
+        return
+    except (ImportError, ModuleNotFoundError, OSError):
+        pass
+
+    from text3d import custom_rasterizer_shim  # noqa: F811
+
+    sys.modules["custom_rasterizer"] = custom_rasterizer_shim  # type: ignore[assignment]
 
 # Steps originais da lib: delight=50, multiview=30.
 # Turbo (LCMScheduler) converge muito mais rápido.
@@ -143,12 +154,15 @@ def _patch_multiview_steps(pipe, steps: int) -> None:
 
 
 def check_paint_rasterizer_available() -> None:
-    """Falha cedo com mensagem clara se o rasterizador CUDA do texgen não estiver instalado."""
+    """Garante que ``custom_rasterizer`` está disponível (shim nvdiffrast ou extensão nativa)."""
+    _ensure_custom_rasterizer_shim()
     try:
         import custom_rasterizer  # noqa: F401
-        import torch  # noqa: F401
     except (ImportError, ModuleNotFoundError, OSError) as e:
-        raise RuntimeError(_PAINT_RASTERIZER_HINT) from e
+        raise RuntimeError(
+            "Rasterizador indisponível: nem nvdiffrast nem custom_rasterizer foram encontrados.\n"
+            "Instala nvdiffrast: pip install git+https://github.com/NVlabs/nvdiffrast.git --no-build-isolation"
+        ) from e
 
 
 def load_mesh_trimesh(path: str | Path) -> trimesh.Trimesh:

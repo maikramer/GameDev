@@ -45,7 +45,11 @@ pip install -e .
 | `text3d skill install` | Instala Agent Skill Cursor no projeto |
 
 ```bash
-text3d generate "um robô futurista" --output robo.glb
+# Por defeito: mesh + Hunyuan3D-Paint (textura). Só geometria: --no-texture
+text3d generate "um robô futurista" -o robo.glb
+
+# Explícito (equivalente ao defeito): --texture ou --final
+text3d generate "robô" --final -o robo_tex.glb
 
 # GPU com mais VRAM (equivalente ao trio HQ do model card)
 text3d generate "cadeira" --preset hq -W 1024 -H 1024
@@ -61,19 +65,22 @@ text3d info
 text3d models
 text3d convert mesh.ply --output mesh.glb
 
-# Textura (Hunyuan3D-Paint — pesos em tencent/Hunyuan3D-2, 1.ª vez: download grande)
-# --final = --texture: mesh + pintura no mesmo comando
-text3d generate "robô" --final -o robo_tex.glb
+# Só shape (sem Paint): CI ou sem custom_rasterizer
+text3d generate "espada" --no-texture -o espada_shape.glb
+
+# Textura num mesh já gerado (Hunyuan3D-Paint — 1.ª vez: download grande)
 text3d texture outputs/meshes/robo.glb -i minha_ref.png -o robo_tex.glb
 ```
 
 ### Textura (`Hunyuan3D-Paint`)
 
-O shape (**Hunyuan3D-2mini**) não inclui material; o **Paint** gera UV + textura a partir da **mesma imagem** que condiciona o 3D (no fluxo com prompt, é a imagem Text2D). Usa o repositório [`tencent/Hunyuan3D-2`](https://huggingface.co/tencent/Hunyuan3D-2) (subpastas `hunyuan3d-delight-v2-0` e `hunyuan3d-paint-v2-0-turbo`), não só o mini. Por defeito os modelos Paint usam **CPU offload**; em GPU grande experimenta `--paint-full-gpu` no `generate --texture` / `--final` ou no `text3d texture`.
+**Comportamento por defeito:** `text3d generate` corre o **Paint** depois do shape (GLB texturizado). Constante em [`defaults.py`](src/text3d/defaults.py): `DEFAULT_TEXTURE = True`. Para desligar o Paint no comando: `--no-texture`. Para desligar globalmente (ex.: CI): `TEXT3D_DEFAULT_TEXTURE=0`.
 
-**Dependência nativa:** o texgen precisa do módulo **`custom_rasterizer`** (compilar a partir do [Hunyuan3D-2](https://github.com/Tencent-Hunyuan/Hunyuan3D-2), pasta `hy3dgen/texgen/custom_rasterizer`, com `nvcc` e `CUDA_HOME`). Passo a passo: [`docs/PAINT_SETUP.md`](docs/PAINT_SETUP.md).
+O shape (**Hunyuan3D-2mini**) não inclui material; o **Paint** gera UV + textura a partir da **mesma imagem** que condiciona o 3D (no fluxo com prompt, é a imagem Text2D). Usa o repositório [`tencent/Hunyuan3D-2`](https://huggingface.co/tencent/Hunyuan3D-2) (subpastas `hunyuan3d-delight-v2-0` e `hunyuan3d-paint-v2-0-turbo`), não só o mini. Por defeito os modelos Paint usam **CPU offload**; em GPU grande experimenta `--paint-full-gpu` no `generate` ou no `text3d texture`.
 
-**Um comando (mesh + pintura):** `text3d generate "teu prompt" --final -o modelo.glb` (equivalente a `--texture`).
+**Rasterizador:** o texgen precisa de um rasterizador GPU. O Text3D inclui um **shim automático** que usa **[nvdiffrast](https://github.com/NVlabs/nvdiffrast)** (NVIDIA) — instala-se com `pip`, sem compilação manual de extensões CUDA. Se preferires a extensão nativa original, ver [`docs/PAINT_SETUP.md`](docs/PAINT_SETUP.md).
+
+**Aliases:** `--texture` (defeito) e `--final` forçam mesh + pintura; não combinar com `--no-texture`.
 
 ### PBR completo no GLB (Materialize)
 
@@ -102,8 +109,9 @@ Ver [`defaults.py`](src/text3d/defaults.py). Resumo:
 | `-W` / `-H` | 768 | 1024 |
 | `--steps` | 24 | 30 |
 | `--guidance` | 5.0 | 5.0 |
-| `--octree-resolution` | 128 | 380 |
-| `--num-chunks` | 4096 | 20000 |
+| `--texture` | **ligado** (Paint) | `--no-texture` só geometria |
+| `--octree-resolution` | 256 | 380 |
+| `--num-chunks` | 8000 | 20000 |
 | `--low-vram` | off | força Hunyuan em CPU se ainda OOM |
 | `--seed` | — | — |
 | `--preset` | — | `fast` / `balanced` / `hq` (substitui steps+octree+chunks) |
