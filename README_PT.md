@@ -18,7 +18,7 @@ Monorepo com ferramentas de **texto→imagem**, **texto→3D**, **texto→áudio
 | [**Text2D**](Text2D/) | CLI **text-to-image** com FLUX (quantização SDNQ), orientada a GPU modesta. |
 | [**Text3D**](Text3D/) | Pipeline **text-to-3D**: imagem 2D (via Text2D) → mesh GLB com Hunyuan3D-2mini. Textura via Paint3D (opcional). |
 | [**Part3D**](Part3D/) | **Partes semânticas 3D**: Hunyuan3D-Part (segmentação / partes em mesh). |
-| [**Paint3D**](Paint3D/) | **Texturização 3D**: Hunyuan3D-Paint (textura multivista) + Materialize PBR + Upscale IA (Real-ESRGAN). Standalone ou via Text3D. |
+| [**Paint3D**](Paint3D/) | **Texturização 3D**: Hunyuan3D-Paint 2.1 (PBR multivista) + Materialize PBR + Upscale IA (Real-ESRGAN). Standalone ou via Text3D. |
 | [**GameAssets**](GameAssets/) | **Batch de prompts/assets**: perfil + CSV → `text2d` ou `texture2d` (por perfil ou por linha) + opcional `text3d` / Materialize. |
 | [**Texture2D**](Texture2D/) | **Texturas 2D seamless** (tileable) via HF Inference API — sem GPU local. |
 | [**Skymap2D**](Skymap2D/) | **Skymaps equirectangular 360°** via HF Inference API — skyboxes para game dev, sem GPU local. |
@@ -37,7 +37,7 @@ GameDev/
   Text2D/           ← text2d (pip) — depende de Shared
   Text3D/           ← text3d (pip) — depende de Shared + Text2D; textura via Paint3D (opcional)
   Part3D/           ← part3d (pip) — Shared; Hunyuan3D-Part (torch-scatter/cluster)
-  Paint3D/           ← paint3d (pip) — depende de Shared; Hunyuan3D-Paint + Materialize PBR + Upscale
+  Paint3D/           ← paint3d (pip) — depende de Shared; Hunyuan3D-2.1 hy3dpaint + Materialize PBR + Upscale
   GameAssets/        ← gameassets (pip) — depende de Shared; chama text2d/texture2d/text3d via subprocess
   Texture2D/         ← texture2d (pip) — depende de Shared; inferência HF na cloud
   Skymap2D/          ← skymap2d (pip) — depende de Shared; skymaps equirectangular via HF
@@ -141,8 +141,8 @@ text3d --help
 # 4. Part3D (partes semânticas; torch-scatter/cluster após PyTorch — ver Part3D/README)
 cd ../Part3D && python -m venv .venv && source .venv/bin/activate && pip install -e . && part3d --help
 
-# 5. Paint3D (textura; depende de Shared; nvdiffrast requer --no-build-isolation)
-cd ../Paint3D
+# 5. Paint3D (Hunyuan3D-Paint 2.1; submodule + nvdiffrast — ver Paint3D/docs/PAINT_SETUP.md)
+cd .. && git submodule update --init third_party/Hunyuan3D-2.1 && cd Paint3D
 python -m venv .venv && source .venv/bin/activate
 pip install torch torchvision
 pip install -r config/requirements.txt && pip install -e .
@@ -182,7 +182,7 @@ Instruções completas: [docs/INSTALLING_PT.md](docs/INSTALLING_PT.md), [docs/NE
 | FLUX.2 Klein 4B (oficial, BF16) | Apache 2.0 | [black-forest-labs/FLUX.2-klein-4B](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B) — uso comercial permitido segundo o model card; mais VRAM que o SDNQ |
 | FLUX.2 Klein 4B SDNQ (default Text2D) | FLUX Non-Commercial (metadata HF) | [Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic](https://huggingface.co/Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic) declara `flux-non-commercial-license`; **não** é o mesmo regime que o checkpoint oficial Apache 2.0. Para produto comercial, prefira `TEXT2D_MODEL_ID=black-forest-labs/FLUX.2-klein-4B` ou acordo com a BFL |
 | Hunyuan3D-2mini (shape, Text3D) | Tencent Hunyuan 3D Community License | [tencent/Hunyuan3D-2mini](https://huggingface.co/tencent/Hunyuan3D-2mini) — lê o `LICENSE` no repositório: restrições de território (ex.: UE, Reino Unido, Coreia do Sul), política de uso aceitável e obrigações em cadeia |
-| Hunyuan3D-2 (paint, Paint3D) | Tencent Hunyuan 3D 2.0 Community License | [tencent/Hunyuan3D-2](https://huggingface.co/tencent/Hunyuan3D-2) — mesmo tipo de acordo comunitário; pesos de textura em subpasta do repo |
+| Hunyuan3D-2.1 (paint, Paint3D) | Tencent Hunyuan Community (ver repo) | [tencent/Hunyuan3D-2.1](https://huggingface.co/tencent/Hunyuan3D-2.1) — código [Hunyuan3D-2.1](https://github.com/Tencent-Hunyuan/Hunyuan3D-2.1); pesos `hunyuan3d-paintpbr-v2-1` |
 | Stable Audio Open 1.0 / Open Small (Text2Sound) | Stability AI Community License | [stabilityai/stable-audio-open-1.0](https://huggingface.co/stabilityai/stable-audio-open-1.0), [stabilityai/stable-audio-open-small](https://huggingface.co/stabilityai/stable-audio-open-small) — modelos **gated** (aceitar no Hub); uso comercial gratuito com teto de receita anual (ver `LICENSE.md` no repo, atualmente ~USD 1M; alterações: [stability.ai/license](https://stability.ai/license)) |
 | Flux-Seamless-Texture-LoRA (Texture2D) | Apache 2.0 (metadata HF) | [gokaygokay/Flux-Seamless-Texture-LoRA](https://huggingface.co/gokaygokay/Flux-Seamless-Texture-LoRA) — LoRA sobre FLUX.1-dev: cumpre também os termos do modelo base e da API de inferência |
 | Flux-LoRA-Equirectangular-v3 (Skymap2D) | Base FLUX.1 [dev] (NCL) + card HF | [MultiTrickFox/Flux-LoRA-Equirectangular-v3](https://huggingface.co/MultiTrickFox/Flux-LoRA-Equirectangular-v3) — sem SPDX no README; modelo base [FLUX.1-dev](https://huggingface.co/black-forest-labs/FLUX.1-dev) está sob licença não comercial BFL; origem Civitai no card |
@@ -213,6 +213,7 @@ O monorepo usa variáveis de ambiente para localizar binários e configurar comp
 | `TEXT3D_EXPORT_ROTATION_X_DEG` | Text3D | Rotação X ao exportar mesh (graus) |
 | `PAINT3D_ALLOW_SHARED_GPU` | Paint3D | Permitir GPU partilhada com outros processos |
 | `PAINT3D_GPU_KILL_OTHERS` | Paint3D | Controlar terminação de processos GPU concorrentes |
+| `HUNYUAN3D_21_ROOT` | Paint3D | Raiz do clone Hunyuan3D-2.1 (ou pasta `hy3dpaint`) se não usares `third_party/Hunyuan3D-2.1` |
 | `RIGGING3D_ROOT` | Rigging3D | Raiz da árvore de inferência (por defeito: pacote incluído) |
 | `RIGGING3D_PYTHON` | Rigging3D | Interpretador Python do ambiente de inferência |
 

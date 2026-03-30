@@ -7,7 +7,7 @@ Text3D generates 3D meshes from text in two phases: **Text2D** (text → image) 
 ## Index
 
 - [Installation](INSTALL.md) — may lag behind the Hunyuan flow; prefer the root README
-- [PBR + Materialize in GLB](PBR_MATERIALIZE.md) — full flow, requirements, CLI flags, findings on modest hardware
+- [PBR: GLB (Paint 2.1) vs diffuse maps (Materialize)](PBR_MATERIALIZE.md)
 - [Python API](API.md)
 - [Paint (custom_rasterizer)](PAINT_SETUP.md)
 - [Troubleshooting](TROUBLESHOOTING.md) — legacy Shap-E content
@@ -18,5 +18,5 @@ Text3D generates 3D meshes from text in two phases: **Text2D** (text → image) 
 - **Text-to-3D:** `HunyuanTextTo3DGenerator.generate(prompt)`
 - **Image-to-3D:** `generate_from_image(...)` (Hunyuan only)
 - **Texture (Paint):** mesh + UV + albedo — see [PAINT_SETUP.md](PAINT_SETUP.md)
-- **PBR in GLB (Materialize):** embedded normal, AO, metallic-roughness — see [PBR_MATERIALIZE.md](PBR_MATERIALIZE.md)
+- **PBR in GLB:** Hunyuan3D-Paint 2.1 output — see [PBR_MATERIALIZE.md](PBR_MATERIALIZE.md); **Materialize** is for image-based maps
 - **Low VRAM:** `--low-vram` on CLI; unload Text2D before Hunyuan; `enable_model_cpu_offload` on Hunyuan when using CUDA

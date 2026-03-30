@@ -38,7 +38,7 @@ Variável útil: `PYTHON_CMD` — interpretador a usar (por defeito `python3`, o
 | `rigging3d` | Rigging3D | Python | 3.11 | UniRig; extras de inferência **sempre** via unificado |
 | `animator3d` | Animator3D | Python | 3.13 | `bpy` 5.1 |
 | `part3d` | Part3D | Python | 3.10 | torch-scatter/cluster pós-venv |
-| `paint3d` | Paint3D | Python | 3.10 | nvdiffrast pós-venv |
+| `paint3d` | Paint3D | Python | 3.10 | Submodule Hunyuan3D-2.1 + patches + Real-ESRGAN; nvdiffrast pós-venv |
 | `materialize` | Materialize | Rust | — | Requer `cargo`; binário em `~/.local/bin` por defeito |
 
 Instalar tudo o que estiver presente no checkout: `./install.sh all`.

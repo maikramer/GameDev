@@ -1,30 +1,20 @@
-# PBR completo no GLB — Hunyuan3D-Paint + Materialize
+# PBR: GLB vs texturas
 
-> **Nota:** A funcionalidade de Paint e Materialize PBR foi movida para o pacote **Paint3D**.
-> Ver [Paint3D/docs/PBR_MATERIALIZE.md](../../Paint3D/docs/PBR_MATERIALIZE.md).
+## GLB (Text3D + Paint3D)
 
-## Uso rápido
+Com **Hunyuan3D-Paint 2.1**, o comando `paint3d texture` produz um **GLB com material PBR** (base color e propriedades glTF adequadas ao pipeline 2.1). Não é necessário correr o **Materialize CLI** em cima do mesh 3D.
 
-```bash
-# Instalar Paint3D
-pip install -e ../Paint3D
+Fluxo típico no monorepo:
 
-# Textura + PBR num comando
-paint3d texture mesh.glb -i ref.png -o mesh_pbr.glb --materialize
+1. `text3d generate --from-image …` (só geometria) **ou** batch em fases no GameAssets.
+2. `paint3d texture mesh.glb --image ref.png -o mesh_textured.glb`
 
-# Fluxo completo em batch: GameAssets com text3d.texture / materialize no game.yaml
+## Texturas 2D (Materialize)
 
-# Só PBR (mesh já texturizada)
-paint3d materialize-pbr mesh_textured.glb -o mesh_pbr.glb
-```
+O binário **[Materialize](../Materialize)** continua útil para **gerar mapas PBR a partir de uma imagem difusa** (PNG/JPG), por exemplo no fluxo **Texture2D** com `texture2d.materialize: true` no `game.yaml` do GameAssets.
 
-## API Python
+Ver [Materialize/README.md](../Materialize/README.md) e [GameAssets/README.md](../GameAssets/README.md).
 
-```python
-from paint3d import apply_hunyuan_paint, apply_materialize_pbr, load_mesh_trimesh, save_glb
+## Legado
 
-mesh = load_mesh_trimesh("mesh.glb")
-mesh_tex = apply_hunyuan_paint(mesh, "ref.png")
-mesh_pbr = apply_materialize_pbr(mesh_tex)
-save_glb(mesh_pbr, "out_pbr.glb")
-```
+Versões anteriores encadeavam `paint3d materialize-pbr` ou flags `--materialize` no Paint3D; isso foi removido em favor do PBR nativo do Paint 2.1.

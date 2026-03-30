@@ -8,7 +8,7 @@ Os **valores por defeito** do CLI/API estão em [`src/text3d/defaults.py`](src/t
 
 **Atalhos:** `--preset fast` (menos tempo/VRAM), `balanced` (igual aos defeitos), `hq` (alta qualidade, GPU grande) — ajusta `--steps`, `--octree-resolution` e `--num-chunks` em conjunto (se usares `--preset`, não esperes que `--steps`/`--octree-resolution`/`--num-chunks` “ganhem” ao perfil — o preset tem prioridade). **`text3d doctor`** verifica PyTorch e VRAM. O CLI define `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` se a variável ainda não existir (menos fragmentação de VRAM).
 
-**Textura e PBR** não fazem parte deste pacote: usa **[Paint3D](../Paint3D)** (`paint3d texture` / `materialize-pbr`) ou **[GameAssets](../GameAssets)** com `text3d.texture` no perfil.
+**Textura e PBR** não fazem parte deste pacote: usa **[Paint3D](../Paint3D)** (`paint3d texture` — GLB PBR com Hunyuan3D-Paint 2.1) ou **[GameAssets](../GameAssets)** com `text3d.texture` no perfil.
 
 > **Licença dos pesos Hunyuan:** [Tencent Hunyuan 3D Community License](https://huggingface.co/tencent/Hunyuan3D-2mini) — lê o ficheiro `LICENSE` nos repositórios ([2mini](https://huggingface.co/tencent/Hunyuan3D-2mini), [Hunyuan3D-2 / Paint](https://huggingface.co/tencent/Hunyuan3D-2)): restrições de território, política de uso aceitável e obrigações. **Text2D (FLUX):** o default SDNQ no monorepo não é o mesmo regime que o BF16 Apache 2.0 da BFL — ver [Text2D/README](../Text2D/README.md) e [GameDev/README_PT](../README_PT.md).
 
@@ -134,7 +134,7 @@ Text3D/
 │   └── utils/
 │       └── env.py         # PYTORCH_CUDA_ALLOC_CONF ao iniciar o CLI
 ├── docs/
-│   └── PBR_MATERIALIZE.md # → Paint3D
+│   └── PBR_MATERIALIZE.md # GLB (Paint 2.1) vs PBR em imagem (Materialize)
 ├── config/requirements.txt
 
 # Textura, Materialize PBR e Upscale IA → pacote Paint3D (../Paint3D)
@@ -164,14 +164,14 @@ text3d generate "objeto" --no-mesh-repair
 | [docs/EXAMPLES.md](docs/EXAMPLES.md) | Exemplos de uso avançado |
 | [docs/API.md](docs/API.md) | Referência da API Python |
 | [docs/PAINT_SETUP.md](docs/PAINT_SETUP.md) | Redireciona para Paint3D (textura Hunyuan) |
-| [docs/PBR_MATERIALIZE.md](docs/PBR_MATERIALIZE.md) | Redireciona para Paint3D + Materialize |
+| [docs/PBR_MATERIALIZE.md](docs/PBR_MATERIALIZE.md) | PBR no GLB (Paint 2.1) vs Materialize em textura |
 
 ## Variáveis de Ambiente
 
 | Variável | Descrição |
 |----------|-----------|
 | `TEXT2D_MODEL_ID` | Override do modelo HF para a fase Text2D |
-| `MATERIALIZE_BIN` | Usado pelo **paint3d** (materialize-pbr), não pelo `text3d` |
+| `MATERIALIZE_BIN` | Não usado pelo `text3d`; opcional para **[Materialize](../Materialize)** / fluxos Texture2D |
 | `HF_HOME` | Diretório de cache Hugging Face (defeito: `~/.cache/huggingface`) |
 | `PYTORCH_CUDA_ALLOC_CONF` | Configuração CUDA (auto-definida como `expandable_segments:True` se vazia) |
 | `TEXT3D_ALLOW_SHARED_GPU` | Permitir GPU partilhada com outros processos (`1` = sim) |

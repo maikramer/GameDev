@@ -6,7 +6,7 @@ Inspired by the original [Materialize](https://github.com/BoundingBoxSoftware/Ma
 
 **Who is this for?** Game developers, 3D artists, and anyone who needs PBR maps from diffuse textures — in engines like Unity, Unreal, Godot, or in Blender, without running a GUI or the Windows-only original.
 
-**GameDev monorepo — Text3D:** the **Text3D** package can call this CLI after **Hunyuan3D-Paint** to embed normal, occlusion, and metallic-roughness in a **GLB** (glTF 2.0). See [`Text3D/docs/PBR_MATERIALIZE.md`](../Text3D/docs/PBR_MATERIALIZE.md) (`text3d generate ... --texture --materialize`).
+**GameDev monorepo:** **Hunyuan3D-Paint 2.1** (`paint3d texture`) already outputs a **PBR GLB**. This CLI is for **PBR maps from a diffuse image** (e.g. **Texture2D** + `texture2d.materialize` in GameAssets). See [`Text3D/docs/PBR_MATERIALIZE.md`](../Text3D/docs/PBR_MATERIALIZE.md).
 
 ---
 

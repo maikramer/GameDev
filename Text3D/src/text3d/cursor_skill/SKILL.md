@@ -8,7 +8,7 @@ description: Gera meshes 3D a partir de texto ou imagem (Text2D + Hunyuan3D-2min
 ## Quando usar
 
 - **Texto → 3D** ou **imagem → 3D** (mesh GLB/PLY/OBJ), **só geometria**.
-- **Textura (Hunyuan3D-Paint)** ou **PBR**: encadear **`paint3d`** ou usar **GameAssets** com `text3d.texture` / `materialize` no perfil.
+- **Textura e PBR no GLB**: encadear **`paint3d texture`** (Hunyuan3D-Paint 2.1) ou **GameAssets** com `text3d.texture` no perfil.
 - Diagnosticar GPU/PyTorch (`doctor`, `info`), converter formatos, listar modelos.
 
 ## O que é
@@ -18,7 +18,7 @@ Pipeline **text-to-3D**: geração de imagem (**Text2D** / FLUX Klein) + **Hunyu
 ## Pré-requisitos
 
 - Python e dependências (ver `docs/INSTALL.md`).
-- Para textura/PBR: projeto **Paint3D** e, para materialização, binário **`materialize`** (`MATERIALIZE_BIN`) usado pelo `paint3d`.
+- Para textura/PBR no GLB: projeto **Paint3D**. O **`materialize`** (`MATERIALIZE_BIN`) é para mapas a partir de **imagem difusa** (Texture2D / GameAssets), não para o GLB 3D.
 
 ## Comandos principais
 
@@ -28,8 +28,7 @@ Pipeline **text-to-3D**: geração de imagem (**Text2D** / FLUX Klein) + **Hunyu
 | `text3d generate --from-image img.png -o mesh.glb` | Só Hunyuan (sem Text2D); alias `-i` |
 | `text3d generate … --preset fast\|balanced\|hq` | Perfis (substituem steps/octree/chunks por defeito) |
 | `text3d generate … --save-reference-image` | Guarda PNG de referência (útil antes de `paint3d texture`) |
-| `paint3d texture mesh.glb -i ref.png -o tex.glb` | Textura (pacote Paint3D) |
-| `paint3d materialize-pbr mesh_tex.glb -o mesh_pbr.glb` | PBR no GLB (Paint3D) |
+| `paint3d texture mesh.glb -i ref.png -o tex.glb` | Textura + material PBR no GLB (Paint3D 2.1) |
 | `text3d doctor` | PyTorch, CUDA |
 | `text3d info` | Sistema e GPU |
 | `text3d convert entrada.ply -o saida.glb` | Conversão PLY/OBJ/GLB |
@@ -90,7 +89,7 @@ O sistema aplica **prompt enhancement automático** (v2, framing positivo) que e
 |----------|--------|
 | `TEXT3D_BIN` | Caminho ao `text3d` se não estiver no `PATH` (útil para GameAssets) |
 | `PAINT3D_BIN` | Caminho ao `paint3d` (batch GameAssets com textura/PBR) |
-| `MATERIALIZE_BIN` | Caminho ao `materialize` quando o `paint3d` precisa dele |
+| `MATERIALIZE_BIN` | Caminho ao `materialize` para fluxos com imagem difusa (não usado pelo `text3d` em si) |
 | `HF_HOME` | Cache Hugging Face |
 
 ## Licenças e pesos
@@ -102,9 +101,9 @@ O sistema aplica **prompt enhancement automático** (v2, framing positivo) que e
 
 | Ferramenta | Ligação |
 |------------|---------|
-| **Paint3D** | Textura Hunyuan3D-Paint e `materialize-pbr` após o shape. |
-| **GameAssets** | `game.yaml` com `text3d` + `texture` / `materialize` orquestra `text3d` + `paint3d`. |
-| **Materialize** | CLI invocada pelo `paint3d` para mapas PBR no GLB. |
+| **Paint3D** | `paint3d texture` após o shape; GLB com PBR do pipeline 2.1. |
+| **GameAssets** | `game.yaml` com `text3d` + `texture` orquestra shape + `paint3d texture`. |
+| **Materialize** | Mapas PBR a partir de difusa (ex. `texture2d.materialize` no GameAssets). |
 
 ## Documentação no repositório
 

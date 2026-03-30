@@ -11,7 +11,7 @@ from text3d import HunyuanTextTo3DGenerator, defaults
 from text3d.utils import save_mesh
 ```
 
-**Textura e PBR** não fazem parte deste pacote: usa o projeto **[Paint3D](../../Paint3D)** (`paint3d` CLI ou `from paint3d import …`). Ver [Paint3D/README.md](../../Paint3D/README.md) e [Paint3D/docs/PBR_MATERIALIZE.md](../../Paint3D/docs/PBR_MATERIALIZE.md).
+**Textura e PBR no GLB** não fazem parte deste pacote: usa o projeto **[Paint3D](../../Paint3D)** (`paint3d texture` — saída PBR com Hunyuan3D-Paint 2.1). Ver [Paint3D/README.md](../../Paint3D/README.md), [Paint3D/docs/PAINT_SETUP.md](../../Paint3D/docs/PAINT_SETUP.md) e [PBR_MATERIALIZE.md](PBR_MATERIALIZE.md) (GLB vs textura difusa).
 
 Padrões de qualidade/memória: módulo `text3d.defaults` (perfil ~6GB; `HUNYUAN_HQ_*` para GPU grande). O dicionário `defaults.PRESET_HUNYUAN` espelha o CLI `--preset fast|balanced|hq`.
 
@@ -58,10 +58,11 @@ Depois de `generate` ou `generate_from_image`, grava o GLB e chama o CLI ou a AP
 
 ```bash
 paint3d texture mesh.glb -i ref.png -o mesh_tex.glb
-paint3d materialize-pbr mesh_tex.glb -o mesh_pbr.glb
 ```
 
-**Pré-requisitos do Paint:** rasterizador GPU, pesos Hunyuan3D-Paint — ver [Paint3D/docs/PAINT_SETUP.md](../../Paint3D/docs/PAINT_SETUP.md).
+O ficheiro de saída inclui material PBR do pipeline 2.1. Para **mapas PBR a partir de uma imagem difusa**, usa o CLI **[Materialize](../../Materialize)** (não o fluxo GLB).
+
+**Pré-requisitos do Paint:** código Hunyuan3D-2.1 (`hy3dpaint`), rasterizador GPU, Real-ESRGAN — ver [Paint3D/docs/PAINT_SETUP.md](../../Paint3D/docs/PAINT_SETUP.md).
 
 ### Pós-processo de malha (`repair_mesh`)
 

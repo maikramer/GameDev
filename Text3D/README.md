@@ -8,7 +8,7 @@
 
 **Shortcuts:** `--preset fast` (less time/VRAM), `balanced` (same as defaults), `hq` (high quality, large GPU) — adjusts `--steps`, `--octree-resolution`, and `--num-chunks` together (if you use `--preset`, do not expect `--steps` / `--octree-resolution` / `--num-chunks` to override the preset — preset wins). **`text3d doctor`** checks PyTorch and VRAM. The CLI sets `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` if the variable is unset (less VRAM fragmentation).
 
-**Texturing and PBR** are not part of this package: use **[Paint3D](../Paint3D)** (`paint3d texture` / `materialize-pbr`) or **[GameAssets](../GameAssets)** with `text3d.texture` in the profile.
+**Texturing and PBR** are not part of this package: use **[Paint3D](../Paint3D)** (`paint3d texture` — GLB is PBR from Hunyuan3D-Paint 2.1) or **[GameAssets](../GameAssets)** with `text3d.texture` in the profile.
 
 > **Hunyuan weight license:** [Tencent Hunyuan 3D Community License](https://huggingface.co/tencent/Hunyuan3D-2mini) — read `LICENSE` in the repos ([2mini](https://huggingface.co/tencent/Hunyuan3D-2mini), [Hunyuan3D-2 / Paint](https://huggingface.co/tencent/Hunyuan3D-2)): territory restrictions, acceptable use, obligations. **Text2D (FLUX):** default SDNQ in the monorepo is not the same regime as BFL BF16 Apache 2.0 — see [Text2D/README](../Text2D/README.md) and [GameDev/README](../README.md).
 
@@ -90,7 +90,7 @@ paint3d texture outputs/meshes/robot.glb -i my_ref.png -o robot_tex.glb
 
 ### Texture and PBR
 
-Full text → mesh → texture → PBR maps: **[GameAssets](../GameAssets)** (`gameassets batch` with `text3d.texture` / `materialize`) or chain manually `text3d generate` → `paint3d texture` → `paint3d materialize-pbr`. Materialize details: **[docs/PBR_MATERIALIZE.md](docs/PBR_MATERIALIZE.md)** and **[Paint3D/docs/PAINT_SETUP.md](../Paint3D/docs/PAINT_SETUP.md)**.
+Full text → mesh → textured PBR GLB: **[GameAssets](../GameAssets)** (`gameassets batch` with `text3d.texture`) or chain manually `text3d generate` → `paint3d texture`. For **PBR maps from a diffuse image** (not the GLB path), use **[Materialize](../Materialize)** / `texture2d.materialize` — **[docs/PBR_MATERIALIZE.md](docs/PBR_MATERIALIZE.md)** and **[Paint3D/docs/PAINT_SETUP.md](../Paint3D/docs/PAINT_SETUP.md)**.
 
 ### Main parameters (defaults = ~6 GB profile, validated)
 
@@ -134,10 +134,10 @@ Text3D/
 │   └── utils/
 │       └── env.py         # PYTORCH_CUDA_ALLOC_CONF at CLI startup
 ├── docs/
-│   └── PBR_MATERIALIZE.md # → Paint3D
+│   └── PBR_MATERIALIZE.md # GLB (Paint 2.1) vs PBR em imagem (Materialize)
 ├── config/requirements.txt
 
-# Texture, Materialize PBR, AI upscale → Paint3D package (../Paint3D)
+# Texture + AI upscale → Paint3D package (../Paint3D); Materialize só para mapas a partir de difusa
 ```
 
 ## Image-to-3D limitations and post-processing
@@ -171,7 +171,7 @@ text3d generate "object" --no-mesh-repair
 | Variable | Description |
 |----------|-------------|
 | `TEXT2D_MODEL_ID` | HF model override for Text2D phase |
-| `MATERIALIZE_BIN` | Used by **paint3d** (materialize-pbr), not by `text3d` |
+| `MATERIALIZE_BIN` | Not used by `text3d`; optional for **[Materialize](../Materialize)** / Texture2D pipelines |
 | `HF_HOME` | Hugging Face cache directory (default: `~/.cache/huggingface`) |
 | `PYTORCH_CUDA_ALLOC_CONF` | CUDA config (auto-set to `expandable_segments:True` if empty) |
 | `TEXT3D_ALLOW_SHARED_GPU` | Allow GPU sharing with other processes (`1` = yes) |

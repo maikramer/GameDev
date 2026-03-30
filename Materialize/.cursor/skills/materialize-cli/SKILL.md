@@ -1,6 +1,6 @@
 ---
 name: materialize-cli
-description: Gera mapas PBR (height, normal, metallic, smoothness, edge, AO) a partir de texturas difusas via compute shaders wgpu. Use com Materialize CLI, baking PBR, pipeline diffuse→material, WGSL, ou quando o utilizador mencionar materialize-cli, mapas PBR, Text3D --materialize.
+description: Gera mapas PBR (height, normal, metallic, smoothness, edge, AO) a partir de texturas difusas via compute shaders wgpu. Use com Materialize CLI, baking PBR, pipeline diffuse→material, WGSL, texture2d.materialize no GameAssets, ou quando o utilizador mencionar materialize-cli ou mapas PBR a partir de imagem.
 ---
 
 # Materialize CLI
@@ -37,9 +37,10 @@ materialize diffuse.png --format png --quiet
 materialize skill install   # instala esta skill em .cursor/skills/ do projeto atual
 ```
 
-## Integração com Text3D / GameAssets
+## Integração com GameAssets / Texture2D
 
-- O **Text3D** pode chamar o binário `materialize` após o **Hunyuan3D-Paint** quando usas `text3d generate … --texture --materialize` (ou equivalente no `game.yaml` do GameAssets: `text3d.materialize: true`).
+- **GLB 3D:** **Hunyuan3D-Paint 2.1** (`paint3d texture`) já exporta GLB PBR; não uses Materialize no mesh.
+- **Imagem difusa:** com **`texture2d.materialize: true`** no `game.yaml`, o GameAssets chama `materialize <png> -o …` após `texture2d generate`.
 - Variável de ambiente: **`MATERIALIZE_BIN`** se o executável não estiver no `PATH`.
 
 ## Layout do código (referência para contribuidores)
@@ -92,5 +93,5 @@ Manter docs alinhados ao adicionar mapas ou opções CLI.
 
 | Ferramenta | Ligação |
 |------------|---------|
-| **Text3D** | Encadeamento Paint → Materialize no GLB; ver `Text3D/docs/PBR_MATERIALIZE.md` no monorepo GameDev. |
-| **GameAssets** | `text3d.materialize` no perfil delega no Text3D (e portanto no Materialize CLI). |
+| **Text3D / Paint3D** | PBR no GLB vem do Paint 2.1; ver `Text3D/docs/PBR_MATERIALIZE.md`. |
+| **GameAssets** | Materialize só com **`texture2d.materialize`** (mapas a partir da difusa). |
