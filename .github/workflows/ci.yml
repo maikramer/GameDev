@@ -1,5 +1,5 @@
 # CI for the GameDev monorepo.
-# Text2D, Text3D, and Text2Sound are intentionally not tested here: they depend on
+# Text2D, Text3D, Paint3D, and Text2Sound are intentionally not tested here: they depend on
 # PyTorch/CUDA and large model downloads, which are too heavy for default GitHub-hosted runners.
 
 name: CI

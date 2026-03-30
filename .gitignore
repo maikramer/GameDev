@@ -57,6 +57,12 @@ Thumbs.db
 # PyTorch Lightning
 **/lightning_logs/
 
-# Rigging3D temp/runtime
+# Testes e Demos
 **/tmp/
 **/_*/
+*_test_*/
+*test_*/
+*_test*/
+*_demo_*/
+*_demo*/
+*demo_*/
