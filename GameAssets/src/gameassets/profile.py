@@ -41,6 +41,7 @@ class Text3DProfile:
     # Subpasta do modelo Hunyuan3D shape (ex.: hunyuan3d-dit-v2-mini-turbo para modo turbo)
     model_subfolder: str | None = None
 
+
 @dataclass
 class Text2DProfile:
     """Opções passadas ao CLI text2d generate (subconjunto)."""

@@ -869,9 +869,7 @@ def batch_cmd(
             try:
                 paint3d_bin = resolve_binary("PAINT3D_BIN", "paint3d")
             except FileNotFoundError as e:
-                raise click.ClickException(
-                    "Perfil com text3d.texture requer paint3d no PATH ou PAINT3D_BIN."
-                ) from e
+                raise click.ClickException("Perfil com text3d.texture requer paint3d no PATH ou PAINT3D_BIN.") from e
 
     rigging3d_bin: str | None = None
     if with_rig and any(r.generate_rig for r in rows):

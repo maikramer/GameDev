@@ -14,6 +14,7 @@ def fix_torchvision_functional_tensor():
     try:
         # Check if the module exists in the expected location
         import torchvision.transforms.functional_tensor
+
         print("torchvision.transforms.functional_tensor is available")
         return True
     except ImportError:
@@ -47,7 +48,7 @@ def fix_torchvision_functional_tensor():
                 @staticmethod
                 def rgb_to_grayscale(img, num_output_channels=1):
                     """Convert RGB image to grayscale"""
-                    if hasattr(F, 'rgb_to_grayscale'):
+                    if hasattr(F, "rgb_to_grayscale"):
                         return F.rgb_to_grayscale(img, num_output_channels)
 
                     # Fallback implementation
@@ -64,10 +65,9 @@ def fix_torchvision_functional_tensor():
                 def resize(img, size, interpolation=2, antialias=None):
                     """Resize function wrapper"""
                     # Try v2.functional first, then regular functional, then torch.nn.functional
-                    resize_func = FunctionalTensorMock._try_import_fallback([
-                        'torchvision.transforms.v2.functional',
-                        'torchvision.transforms.functional'
-                    ], 'resize')
+                    resize_func = FunctionalTensorMock._try_import_fallback(
+                        ["torchvision.transforms.v2.functional", "torchvision.transforms.functional"], "resize"
+                    )
 
                     if resize_func:
                         try:
@@ -78,16 +78,16 @@ def fix_torchvision_functional_tensor():
 
                     # Final fallback using torch.nn.functional
                     import torch.nn.functional as torch_F
+
                     size = (size, size) if isinstance(size, int) else size
                     img_input = img.unsqueeze(0) if len(img.shape) == 3 else img
-                    return torch_F.interpolate(img_input, size=size, mode='bilinear', align_corners=False)
+                    return torch_F.interpolate(img_input, size=size, mode="bilinear", align_corners=False)
 
                 def __getattr__(self, name):
                     """Fallback to regular functional module"""
-                    func = self._try_import_fallback([
-                        'torchvision.transforms.functional',
-                        'torchvision.transforms.v2.functional'
-                    ], name)
+                    func = self._try_import_fallback(
+                        ["torchvision.transforms.functional", "torchvision.transforms.v2.functional"], name
+                    )
 
                     if func:
                         return func
@@ -95,7 +95,7 @@ def fix_torchvision_functional_tensor():
                     raise AttributeError(f"'{name}' not found in functional_tensor mock")
 
             # Create the mock module instance and monkey patch
-            sys.modules['torchvision.transforms.functional_tensor'] = FunctionalTensorMock()
+            sys.modules["torchvision.transforms.functional_tensor"] = FunctionalTensorMock()
             print("Applied compatibility fix: created functional_tensor mock module")
             return True
 
@@ -103,10 +103,12 @@ def fix_torchvision_functional_tensor():
             print(f"Failed to create functional_tensor mock: {e}")
             return False
 
+
 def apply_fix():
     """Apply the torchvision compatibility fix"""
     print(f"Torchvision version: {torchvision.__version__}")
     return fix_torchvision_functional_tensor()
+
 
 if __name__ == "__main__":
     apply_fix()

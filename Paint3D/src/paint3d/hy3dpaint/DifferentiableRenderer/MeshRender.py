@@ -42,6 +42,7 @@ except:
 
 class RenderMode(Enum):
     """Rendering mode enumeration."""
+
     NORMAL = "normal"
     POSITION = "position"
     ALPHA = "alpha"
@@ -50,6 +51,7 @@ class RenderMode(Enum):
 
 class ReturnType(Enum):
     """Return type enumeration."""
+
     TENSOR = "th"
     NUMPY = "np"
     PIL = "pl"
@@ -57,6 +59,7 @@ class ReturnType(Enum):
 
 class TextureType(Enum):
     """Texture type enumeration."""
+
     DIFFUSE = "diffuse"
     METALLIC_ROUGHNESS = "mr"
     NORMAL = "normal"
@@ -65,6 +68,7 @@ class TextureType(Enum):
 @dataclass
 class RenderConfig:
     """Unified rendering configuration."""
+
     elev: float = 0
     azim: float = 0
     camera_distance: float | None = None
@@ -81,6 +85,7 @@ class RenderConfig:
 @dataclass
 class ViewState:
     """Camera view state for rendering pipeline."""
+
     proj_mat: torch.Tensor
     mv_mat: torch.Tensor
     pos_camera: torch.Tensor
@@ -230,7 +235,6 @@ def mipmap_linear_grid_put_2d(H, W, coords, values, min_resolution=128, return_c
     cur_H, cur_W = H, W
 
     while min(cur_H, cur_W) > min_resolution:
-
         # try to fill the holes
         mask = count.squeeze(-1) == 0
         if not mask.any():
@@ -266,6 +270,7 @@ def mipmap_linear_grid_put_2d(H, W, coords, values, min_resolution=128, return_c
 
 # ============ Core utility functions for reducing duplication ============
 
+
 def _normalize_image_input(image: np.ndarray | torch.Tensor | Image.Image) -> np.ndarray | torch.Tensor:
     """Normalize image input to consistent format."""
     if isinstance(image, Image.Image):
@@ -275,8 +280,9 @@ def _normalize_image_input(image: np.ndarray | torch.Tensor | Image.Image) -> np
     return image
 
 
-def _convert_texture_format(tex: np.ndarray | torch.Tensor | Image.Image,
-                          texture_size: tuple[int, int], device: str, force_set: bool = False) -> torch.Tensor:
+def _convert_texture_format(
+    tex: np.ndarray | torch.Tensor | Image.Image, texture_size: tuple[int, int], device: str, force_set: bool = False
+) -> torch.Tensor:
     """Unified texture format conversion logic."""
     if not force_set:
         if isinstance(tex, np.ndarray):
@@ -304,8 +310,7 @@ def _format_output(image: torch.Tensor, return_type: str) -> torch.Tensor | np.n
     return image
 
 
-def _ensure_resolution_format(resolution: int | tuple[int, int] | None,
-                             default: tuple[int, int]) -> tuple[int, int]:
+def _ensure_resolution_format(resolution: int | tuple[int, int] | None, default: tuple[int, int]) -> tuple[int, int]:
     """Ensure resolution is in (height, width) format."""
     if resolution is None:
         return default
@@ -314,8 +319,9 @@ def _ensure_resolution_format(resolution: int | tuple[int, int] | None,
     return tuple(resolution)
 
 
-def _apply_background_mask(content: torch.Tensor, visible_mask: torch.Tensor,
-                          bg_color: list[float], device: str) -> torch.Tensor:
+def _apply_background_mask(
+    content: torch.Tensor, visible_mask: torch.Tensor, bg_color: list[float], device: str
+) -> torch.Tensor:
     """Apply background color to masked regions."""
     bg_tensor = torch.tensor(bg_color, dtype=torch.float32, device=device)
     return content * visible_mask + bg_tensor * (1 - visible_mask)
@@ -458,8 +464,8 @@ class MeshRender:
             return self.uv_feature_map(self.vtx_pos * 0.5 + 0.5)
 
         elif mode == RenderMode.NORMAL:
-            use_abs_coor = kwargs.get('use_abs_coor', False)
-            normalize_rgb = kwargs.get('normalize_rgb', True)
+            use_abs_coor = kwargs.get("use_abs_coor", False)
+            normalize_rgb = kwargs.get("normalize_rgb", True)
 
             normal, rast_out = self._get_normals_for_shading(view_state, use_abs_coor)
             visible_mask = torch.clamp(rast_out[..., -1:], 0, 1)
@@ -724,8 +730,9 @@ class MeshRender:
         if uv_idx is not None:
             self.extract_textiles()
 
-    def _set_texture_unified(self, tex: np.ndarray | torch.Tensor | Image.Image,
-                           texture_type: TextureType, force_set: bool = False):
+    def _set_texture_unified(
+        self, tex: np.ndarray | torch.Tensor | Image.Image, texture_type: TextureType, force_set: bool = False
+    ):
         """Unified texture setting method."""
         converted_tex = _convert_texture_format(tex, self.texture_size, self.device, force_set)
 
@@ -979,14 +986,25 @@ class MeshRender:
         self.tex_grid = grid
         self.texture_indices = texture_indices
 
-    def render_normal(self, elev, azim, camera_distance=None, center=None, resolution=None,
-                     bg_color=None, use_abs_coor=False, normalize_rgb=True, return_type="th"):
+    def render_normal(
+        self,
+        elev,
+        azim,
+        camera_distance=None,
+        center=None,
+        resolution=None,
+        bg_color=None,
+        use_abs_coor=False,
+        normalize_rgb=True,
+        return_type="th",
+    ):
         """Render surface normals of the mesh from specified viewpoint."""
         if bg_color is None:
             bg_color = [1, 1, 1]
         config = RenderConfig(elev, azim, camera_distance, center, resolution, bg_color, return_type)
-        image = self._unified_render_pipeline(config, RenderMode.NORMAL,
-                                            use_abs_coor=use_abs_coor, normalize_rgb=normalize_rgb)
+        image = self._unified_render_pipeline(
+            config, RenderMode.NORMAL, use_abs_coor=use_abs_coor, normalize_rgb=normalize_rgb
+        )
         return _format_output(image, return_type)
 
     def convert_normal_map(self, image):
@@ -1018,8 +1036,9 @@ class MeshRender:
 
         return Image.fromarray(image)
 
-    def render_position(self, elev, azim, camera_distance=None, center=None, resolution=None,
-                       bg_color=None, return_type="th"):
+    def render_position(
+        self, elev, azim, camera_distance=None, center=None, resolution=None, bg_color=None, return_type="th"
+    ):
         """Render world-space positions of visible mesh surface points."""
         if bg_color is None:
             bg_color = [1, 1, 1]
@@ -1251,7 +1270,6 @@ class MeshRender:
             # cos_map = torch.min(cos_map, cos_map_uv)
             cos_map[cos_map_uv < cos_thres] = 0
         elif method == "back_sample":
-
             img_proj = torch.from_numpy(
                 np.array(((proj[0, 0], 0, 0, 0), (0, proj[1, 1], 0, 0), (0, 0, 1, 0), (0, 0, 0, 1)))
             ).to(self.tex_position)

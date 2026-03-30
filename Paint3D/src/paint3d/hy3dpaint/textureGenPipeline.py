@@ -70,7 +70,6 @@ class Hunyuan3DPaintConfig:
 
 
 class Hunyuan3DPaintPipeline:
-
     def __init__(self, config=None) -> None:
         self.config = config if config is not None else Hunyuan3DPaintConfig()
         self.models = {}

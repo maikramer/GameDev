@@ -189,7 +189,7 @@ def cmd_submit(args: argparse.Namespace) -> int:
     job_type = body.get("type")
     params = body.get("params")
     if not job_type or not isinstance(params, dict):
-        print("Ficheiro deve ser JSON: {\"type\": \"...\", \"params\": {...}}", file=sys.stderr)
+        print('Ficheiro deve ser JSON: {"type": "...", "params": {...}}', file=sys.stderr)
         return 1
     headers = _headers(args.api_key)
     with httpx.Client() as client:

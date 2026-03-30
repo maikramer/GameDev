@@ -27,13 +27,13 @@ from .unet.modules import (
 )
 
 __all__ = [
-    'Basic2p5DTransformerBlock',
-    'Dino_v2',
-    'HunyuanPaint',
-    'HunyuanPaintPipeline',
-    'ImageProjModel',
-    'PoseRoPEAttnProcessor2_0',
-    'RefAttnProcessor2_0',
-    'SelfAttnProcessor2_0',
-    'UNet2p5DConditionModel',
+    "Basic2p5DTransformerBlock",
+    "Dino_v2",
+    "HunyuanPaint",
+    "HunyuanPaintPipeline",
+    "ImageProjModel",
+    "PoseRoPEAttnProcessor2_0",
+    "RefAttnProcessor2_0",
+    "SelfAttnProcessor2_0",
+    "UNet2p5DConditionModel",
 ]

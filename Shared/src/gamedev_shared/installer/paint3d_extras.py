@@ -7,9 +7,7 @@ from pathlib import Path
 
 from ..logging import Logger
 
-_REALESRGAN_URL = (
-    "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth"
-)
+_REALESRGAN_URL = "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth"
 
 
 def run_paint3d_post_install(monorepo_root: Path, logger: Logger) -> bool:
@@ -25,11 +23,7 @@ def run_paint3d_post_install(monorepo_root: Path, logger: Logger) -> bool:
             logger.success("RealESRGAN_x4plus.pth instalado")
         except OSError as e:
             logger.error(f"Falha ao descarregar Real-ESRGAN: {e}")
-            logger.info(
-                "Descarrega manualmente:\n"
-                f"  {_REALESRGAN_URL}\n"
-                f"  → {ckpt}"
-            )
+            logger.info(f"Descarrega manualmente:\n  {_REALESRGAN_URL}\n  → {ckpt}")
             return False
     else:
         logger.success("RealESRGAN_x4plus.pth já existe")

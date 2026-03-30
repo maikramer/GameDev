@@ -67,9 +67,7 @@ class multiviewDiffusionNet:
         self.cfg = cfg
         self.mode = self.cfg.model.params.stable_diffusion_config.custom_pipeline[2:]
 
-        weights_subfolder = getattr(
-            config, "multiview_weights_subfolder", "hunyuan3d-paintpbr-v2-1"
-        )
+        weights_subfolder = getattr(config, "multiview_weights_subfolder", "hunyuan3d-paintpbr-v2-1")
         model_path = huggingface_hub.snapshot_download(
             repo_id=config.multiview_pretrained_path,
             allow_patterns=[f"{weights_subfolder}/*"],
@@ -82,9 +80,7 @@ class multiviewDiffusionNet:
             torch_dtype=torch.float16,
         )
 
-        pipeline.scheduler = UniPCMultistepScheduler.from_config(
-            pipeline.scheduler.config, timestep_spacing="trailing"
-        )
+        pipeline.scheduler = UniPCMultistepScheduler.from_config(pipeline.scheduler.config, timestep_spacing="trailing")
         pipeline.set_progress_bar_config(disable=True)
         pipeline.eval()
         pipeline.view_size = cfg.model.params.get("view_size", 320)

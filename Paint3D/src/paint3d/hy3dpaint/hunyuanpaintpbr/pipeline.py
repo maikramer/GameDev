@@ -66,7 +66,6 @@ def to_rgb_image(maybe_rgba: Image.Image):
 
 
 class HunyuanPaintPipeline(StableDiffusionPipeline):
-
     """Custom pipeline for multiview PBR texture generation.
 
     Extends Stable Diffusion with:
@@ -114,7 +113,6 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
         self.pbr_settings = pbr_settings
 
     def set_learned_parameters(self):
-
         """Configures parameter freezing strategy.
 
         Freezes:
@@ -143,7 +141,6 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
 
     @torch.no_grad()
     def encode_images(self, images):
-
         """Encodes multiview image batches into latent space.
 
         Args:
@@ -181,7 +178,6 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
         sync_condition=None,
         **cached_condition,
     ):
-
         """Main generation method for multiview PBR textures.
 
         Steps:
@@ -252,7 +248,6 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
             cached_condition["embeds_normal"] = self.encode_images(cached_condition["images_normal"])
 
         if "images_position" in cached_condition:
-
             if isinstance(cached_condition["images_position"], list):
                 cached_condition["images_position"] = convert_pil_list_to_tensor(cached_condition["images_position"])
 
@@ -260,7 +255,6 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
             cached_condition["embeds_position"] = self.encode_images(cached_condition["images_position"])
 
         if self.unet.use_learned_text_clip:
-
             all_shading_tokens = []
             for token in self.unet.pbr_setting:
                 all_shading_tokens.append(
@@ -362,7 +356,10 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
         cross_attention_kwargs: dict[str, Any] | None = None,
         guidance_rescale: float = 0.0,
         clip_skip: int | None = None,
-        callback_on_step_end: Callable[[int, int, dict], None] | PipelineCallback | MultiPipelineCallbacks | None = None,
+        callback_on_step_end: Callable[[int, int, dict], None]
+        | PipelineCallback
+        | MultiPipelineCallbacks
+        | None = None,
         callback_on_step_end_tensor_inputs: list[str] | None = None,
         **kwargs,
     ):

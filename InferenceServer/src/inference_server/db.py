@@ -135,9 +135,7 @@ class JobStore:
 
         now = time_mod.time()
         with self._write() as c:
-            cur = c.execute(
-                "SELECT id FROM jobs WHERE status = 'queued' ORDER BY created_at ASC LIMIT 1"
-            )
+            cur = c.execute("SELECT id FROM jobs WHERE status = 'queued' ORDER BY created_at ASC LIMIT 1")
             row = cur.fetchone()
             if row is None:
                 return None

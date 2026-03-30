@@ -35,7 +35,6 @@ from .attn_processor import PoseRoPEAttnProcessor2_0, RefAttnProcessor2_0, SelfA
 
 
 class Dino_v2(nn.Module):
-
     """Wrapper for DINOv2 vision transformer (frozen weights).
 
     Provides feature extraction for reference images.
@@ -43,7 +42,6 @@ class Dino_v2(nn.Module):
     Args:
         dino_v2_path: Custom path to DINOv2 model weights (uses default if None)
     """
-
 
     def __init__(self, dino_v2_path):
         super().__init__()
@@ -56,7 +54,6 @@ class Dino_v2(nn.Module):
         self.dino_v2.eval()
 
     def forward(self, images):
-
         """Processes input images through DINOv2 ViT.
 
         Handles both tensor input (B, N, C, H, W) and PIL image lists.
@@ -119,7 +116,6 @@ def _chunked_feed_forward(ff: nn.Module, hidden_states: torch.Tensor, chunk_dim:
 
 @torch.no_grad()
 def compute_voxel_grid_mask(position, grid_resolution=8):
-
     """Generates view-to-view attention mask based on 3D position similarity.
 
     Uses voxel grid downsampling to determine spatially adjacent regions.
@@ -177,7 +173,6 @@ def compute_voxel_grid_mask(position, grid_resolution=8):
 
 
 def compute_multi_resolution_mask(position_maps, grid_resolutions=None):
-
     """Generates attention masks at multiple spatial resolutions.
 
     Creates pyramid of position-based masks for hierarchical attention.
@@ -203,7 +198,6 @@ def compute_multi_resolution_mask(position_maps, grid_resolutions=None):
 
 @torch.no_grad()
 def compute_discrete_voxel_indice(position, grid_resolution=8, voxel_resolution=128):
-
     """Quantizes position maps to discrete voxel indices.
 
     Creates sparse 3D coordinate representations for efficient hashing.
@@ -252,7 +246,6 @@ def compute_discrete_voxel_indice(position, grid_resolution=8, voxel_resolution=
 
 
 def calc_multires_voxel_idxs(position_maps, grid_resolutions=None, voxel_resolutions=None):
-
     """Generates multi-resolution voxel indices for position encoding.
 
     Creates pyramid of quantized position representations.
@@ -280,8 +273,6 @@ def calc_multires_voxel_idxs(position_maps, grid_resolutions=None, voxel_resolut
 
 
 class Basic2p5DTransformerBlock(torch.nn.Module):
-
-
     """Enhanced transformer block for multiview 2.5D image generation.
 
     Extends standard transformer blocks with:
@@ -310,7 +301,6 @@ class Basic2p5DTransformerBlock(torch.nn.Module):
         use_dino=True,
         pbr_setting=None,
     ) -> None:
-
         """
         Initialization:
         1. Material-Dimension Attention (MDA):
@@ -408,7 +398,6 @@ class Basic2p5DTransformerBlock(torch.nn.Module):
         self._initialize_attn_weights()
 
     def _initialize_attn_weights(self):
-
         """Initializes specialized attention heads with base weights.
 
         Uses weight sharing strategy:
@@ -485,7 +474,6 @@ class Basic2p5DTransformerBlock(torch.nn.Module):
         class_labels: torch.LongTensor | None = None,
         added_cond_kwargs: dict[str, torch.Tensor] | None = None,
     ) -> torch.Tensor:
-
         """Forward pass with multi-mechanism attention.
 
         Processing stages:
@@ -713,7 +701,6 @@ class Basic2p5DTransformerBlock(torch.nn.Module):
 
 
 class ImageProjModel(torch.nn.Module):
-
     """Projects image embeddings into cross-attention space.
 
     Transforms CLIP embeddings into additional context tokens for conditioning.
@@ -734,7 +721,6 @@ class ImageProjModel(torch.nn.Module):
         self.norm = torch.nn.LayerNorm(cross_attention_dim)
 
     def forward(self, image_embeds):
-
         """Projects image embeddings to cross-attention context tokens.
 
         Args:
@@ -761,7 +747,6 @@ class ImageProjModel(torch.nn.Module):
 
 
 class UNet2p5DConditionModel(torch.nn.Module):
-
     """2.5D UNet extension for multiview PBR generation.
 
     Enhances standard 2D UNet with:
@@ -836,7 +821,6 @@ class UNet2p5DConditionModel(torch.nn.Module):
         return unet_2p5d
 
     def init_condition(self, use_dino):
-
         """Initializes conditioning mechanisms for multiview PBR generation.
 
         Sets up:
@@ -862,7 +846,6 @@ class UNet2p5DConditionModel(torch.nn.Module):
             )
 
     def init_attention(self, unet, use_ma=False, use_ra=False, use_mda=False, use_dino=False, pbr_setting=None):
-
         """Recursively replaces standard transformers with enhanced 2.5D blocks.
 
         Processes UNet architecture:
@@ -936,7 +919,6 @@ class UNet2p5DConditionModel(torch.nn.Module):
         mid_block_res_sample=None,
         **cached_condition,
     ):
-
         """Forward pass with multiview/material conditioning.
 
         Key stages:

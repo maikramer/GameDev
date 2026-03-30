@@ -13,9 +13,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-_REALESRGAN_URL = (
-    "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth"
-)
+_REALESRGAN_URL = "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth"
 
 
 def resolve_hy3dpaint_root() -> Path:
@@ -44,6 +42,7 @@ def ensure_realesrgan_ckpt() -> Path:
         return ckpt
     ckpt.parent.mkdir(parents=True, exist_ok=True)
     import urllib.request
+
     print(f"[Paint3D] A descarregar RealESRGAN_x4plus.pth → {ckpt}")
     urllib.request.urlretrieve(_REALESRGAN_URL, ckpt)
     return ckpt

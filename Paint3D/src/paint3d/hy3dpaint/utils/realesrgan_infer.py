@@ -21,7 +21,9 @@ _PKG_DIR = os.path.dirname(os.path.abspath(__file__))
 _WEIGHTS_DIR = os.path.join(_PKG_DIR, "realesrgan_weights")
 
 
-def load_file_from_url(url: str, model_dir: str | None = None, progress: bool = True, file_name: str | None = None) -> str:
+def load_file_from_url(
+    url: str, model_dir: str | None = None, progress: bool = True, file_name: str | None = None
+) -> str:
     if model_dir is None:
         hub_dir = get_dir()
         model_dir = os.path.join(hub_dir, "checkpoints")
@@ -71,9 +73,7 @@ class RealESRGANer:
 
         if gpu_id:
             self.device = (
-                torch.device(f"cuda:{gpu_id}" if torch.cuda.is_available() else "cpu")
-                if device is None
-                else device
+                torch.device(f"cuda:{gpu_id}" if torch.cuda.is_available() else "cpu") if device is None else device
             )
         else:
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu") if device is None else device

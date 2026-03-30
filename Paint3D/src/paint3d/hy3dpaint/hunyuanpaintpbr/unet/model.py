@@ -369,9 +369,7 @@ class HunyuanPaint(pl.LightningModule):
 
             prob = np.random.rand()
             if prob < self.drop_cond_prob and "position_maps" in cached_condition:
-                cached_condition["position_maps"][b, ...] = torch.zeros_like(
-                    cached_condition["position_maps"][b, ...]
-                )
+                cached_condition["position_maps"][b, ...] = torch.zeros_like(cached_condition["position_maps"][b, ...])
 
             prob = np.random.rand()
             if prob < self.drop_cond_prob:
@@ -397,7 +395,6 @@ class HunyuanPaint(pl.LightningModule):
             pass
 
         if self.train_scheduler.config.prediction_type == "v_prediction":
-
             cached_condition["shading_embeds"] = shading_embeds
             cached_condition["ref_latents"] = ref_latents
             cached_condition["dino_hidden_states"] = dino_hidden_states

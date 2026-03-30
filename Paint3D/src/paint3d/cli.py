@@ -165,8 +165,7 @@ def texture(
     info_table.add_row("[bold]Saída[/bold]", f"[cyan]{output}[/cyan]")
     info_table.add_row(
         "[bold]Paint 2.1[/bold]",
-        f"{paint_repo} / {paint_subfolder} — "
-        f"{'VRAM alta' if paint_full_gpu else 'modo económico (UNet 8-bit)'}",
+        f"{paint_repo} / {paint_subfolder} — {'VRAM alta' if paint_full_gpu else 'modo económico (UNet 8-bit)'}",
     )
     if upscale:
         info_table.add_row("[bold]Upscale[/bold]", f"Real-ESRGAN {upscale_factor}x")
