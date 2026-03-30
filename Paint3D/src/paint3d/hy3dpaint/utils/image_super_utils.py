@@ -13,15 +13,18 @@
 # by Tencent in accordance with TENCENT HUNYUAN COMMUNITY LICENSE AGREEMENT.
 
 import numpy as np
+import torch
 from PIL import Image
 
 
 class imageSuperNet:
     def __init__(self, config) -> None:
-        from realesrgan import RealESRGANer
-        from basicsr.archs.rrdbnet_arch import RRDBNet
+        from paint3d.hy3dpaint.utils.realesrgan_infer import RealESRGANer
+        from paint3d.hy3dpaint.utils.rrdbnet_arch_standalone import RRDBNet
 
         model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=4)
+        low = getattr(config, "low_vram", False)
+        dev = torch.device("cpu") if low else None
         upsampler = RealESRGANer(
             scale=4,
             model_path=config.realesrgan_ckpt_path,
@@ -30,7 +33,8 @@ class imageSuperNet:
             tile=0,
             tile_pad=10,
             pre_pad=0,
-            half=True,
+            half=not low,
+            device=dev,
             gpu_id=None,
         )
         self.upsampler = upsampler

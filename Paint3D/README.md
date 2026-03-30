@@ -55,7 +55,7 @@ textured = apply_hunyuan_paint(mesh, "reference.png")
 
 - **gamedev-shared** (GameDev monorepo — GPU, logging)
 - **Hunyuan3D-2.1 `hy3dpaint`** (vendored in `src/paint3d/hy3dpaint/`) — texture pipeline; HF weights on demand
-- **pymeshlab**, **xatlas**, **omegaconf**, **basicsr**, **realesrgan** (super-resolution inside paint)
+- **pymeshlab**, **xatlas**, **omegaconf**; Real-ESRGAN super-resolution is vendored (no PyPI `basicsr` / `realesrgan` packages)
 - **nvdiffrast** (NVIDIA — differentiable rasterizer shim)
 - **spandrel** (optional — AI upscale on exported GLB)
 

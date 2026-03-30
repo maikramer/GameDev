@@ -3,15 +3,18 @@
 
 torch>=2.1.0
 torchvision>=0.16.0
+pytorch-lightning>=2.1.0
 
 diffusers>=0.37.0
 transformers>=4.48.0
 accelerate>=0.24.0
 huggingface-hub>=0.20.0
 
-numpy>=1.24.0
+# bpy 5.1 exige numpy<2; manter compatível com opencv-headless<4.12 (4.12+ pede numpy>=2)
+numpy>=1.26,<2.0
 Pillow>=10.0.0
 trimesh>=4.0.0
+fast-simplification>=0.1.0
 imageio>=2.31.0
 
 click>=8.1.0
@@ -20,12 +23,14 @@ rich-click>=1.8.0
 tqdm>=4.66.0
 
 omegaconf>=2.3.0
-opencv-python-headless>=4.8.0
+opencv-python-headless>=4.8.0,<4.12
 pymeshlab>=2022.2
 xatlas>=0.0.9
 scipy>=1.10.0
-basicsr>=1.4.2
-realesrgan>=0.3.0
+# API Blender (conversão OBJ→GLB em mesh_utils); PyPI alinha com Blender 5.1
+bpy==5.1.0
+# basicsr / realesrgan PyPI: build quebrado no Python 3.13 (basicsr setup KeyError __version__);
+# Real-ESRGANer + RRDBNet vendidos em paint3d/hy3dpaint/utils/
 
 # Monorepo: gamedev-shared (GPU, logging, CLI rich)
 gamedev-shared @ file:../Shared

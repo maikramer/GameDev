@@ -53,12 +53,21 @@ class multiviewDiffusionNet:
         pipeline.set_progress_bar_config(disable=True)
         pipeline.eval()
         setattr(pipeline, "view_size", cfg.model.params.get("view_size", 320))
+        low_vram = getattr(config, "low_vram", False)
         self.pipeline = pipeline.to(self.device)
+        if low_vram:
+            if hasattr(self.pipeline, "enable_vae_slicing"):
+                self.pipeline.enable_vae_slicing()
+            if hasattr(self.pipeline, "enable_vae_tiling"):
+                self.pipeline.enable_vae_tiling()
+            if hasattr(self.pipeline, "enable_attention_slicing"):
+                self.pipeline.enable_attention_slicing()
 
         if hasattr(self.pipeline.unet, "use_dino") and self.pipeline.unet.use_dino:
             from ..hunyuanpaintpbr.unet.modules import Dino_v2
+
             self.dino_v2 = Dino_v2(config.dino_ckpt_path).to(torch.float16)
-            self.dino_v2 = self.dino_v2.to(self.device)
+            self.dino_v2 = self.dino_v2.to("cpu" if low_vram else self.device)
 
     def seed_everything(self, seed):
         random.seed(seed)
@@ -88,7 +97,12 @@ class multiviewDiffusionNet:
             control_images[i] = control_images[i].resize((custom_view_size, custom_view_size))
             if control_images[i].mode == "L":
                 control_images[i] = control_images[i].point(lambda x: 255 if x > 1 else 0, mode="1")
-        kwargs = dict(generator=torch.Generator(device=self.pipeline.device).manual_seed(0))
+        _gen_dev = (
+            torch.device("cuda")
+            if self.device == "cuda" and torch.cuda.is_available()
+            else self.pipeline.device
+        )
+        kwargs = dict(generator=torch.Generator(device=_gen_dev).manual_seed(0))
 
         num_view = len(control_images) // 2
         normal_image = [[control_images[i] for i in range(num_view)]]
@@ -102,6 +116,8 @@ class multiviewDiffusionNet:
 
         if hasattr(self.pipeline.unet, "use_dino") and self.pipeline.unet.use_dino:
             dino_hidden_states = self.dino_v2(input_images[0])
+            if isinstance(dino_hidden_states, torch.Tensor) and self.device != "cpu":
+                dino_hidden_states = dino_hidden_states.to(torch.device(self.device))
             kwargs["dino_hidden_states"] = dino_hidden_states
 
         sync_condition = None

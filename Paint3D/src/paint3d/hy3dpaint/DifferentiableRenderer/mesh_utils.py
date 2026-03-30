@@ -14,9 +14,13 @@
 
 import os
 import cv2
-import bpy
 import math
 import numpy as np
+
+try:
+    import bpy  # Blender embutido; opcional (conversão OBJ→GLB usa trimesh se ausente)
+except ImportError:
+    bpy = None  # type: ignore[misc, assignment]
 from io import StringIO
 from typing import Optional, Tuple, Dict, Any
 
@@ -257,6 +261,24 @@ def _apply_auto_smooth(auto_smooth_angle: float):
         bpy.ops.object.shade_auto_smooth(angle=angle_rad)
 
 
+def _convert_obj_to_glb_trimesh(obj_path: str, glb_path: str) -> bool:
+    """Conversão OBJ→GLB sem Blender (trimesh + materiais em MTL)."""
+    import trimesh
+
+    try:
+        loaded = trimesh.load(obj_path, process=False)
+    except Exception:
+        loaded = trimesh.load(obj_path)
+    try:
+        if isinstance(loaded, trimesh.Scene):
+            loaded.export(glb_path, file_type="glb")
+        else:
+            loaded.export(glb_path, file_type="glb")
+    except Exception:
+        return False
+    return os.path.isfile(glb_path)
+
+
 def convert_obj_to_glb(
     obj_path: str,
     glb_path: str,
@@ -264,21 +286,17 @@ def convert_obj_to_glb(
     auto_smooth_angle: float = 60,
     merge_vertices: bool = False,
 ) -> bool:
-    """Convert OBJ file to GLB format using Blender."""
-    try:
-        _setup_blender_scene()
-        _clear_scene_objects()
-
-        # Import OBJ file
-        bpy.ops.wm.obj_import(filepath=obj_path)
-        _select_mesh_objects()
-
-        # Process meshes
-        _merge_vertices_if_needed(merge_vertices)
-        _apply_shading(shade_type, auto_smooth_angle)
-
-        # Export to GLB
-        bpy.ops.export_scene.gltf(filepath=glb_path, use_active_scene=True)
-        return True
-    except Exception:
-        return False
+    """Converte OBJ para GLB: Blender (se ``bpy`` disponível) ou trimesh."""
+    if bpy is not None:
+        try:
+            _setup_blender_scene()
+            _clear_scene_objects()
+            bpy.ops.wm.obj_import(filepath=obj_path)
+            _select_mesh_objects()
+            _merge_vertices_if_needed(merge_vertices)
+            _apply_shading(shade_type, auto_smooth_angle)
+            bpy.ops.export_scene.gltf(filepath=glb_path, use_active_scene=True)
+            return True
+        except Exception:
+            pass
+    return _convert_obj_to_glb_trimesh(obj_path, glb_path)

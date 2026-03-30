@@ -52,6 +52,7 @@ class Hunyuan3DPaintConfig:
         self.resolution = resolution
         self.bake_exp = 4
         self.merge_method = "fast"
+        self.low_vram = False
 
         # view selection
         self.candidate_camera_azims = [0, 90, 180, 270, 0, 180]
@@ -85,8 +86,9 @@ class Hunyuan3DPaintPipeline:
 
     def load_models(self):
         torch.cuda.empty_cache()
-        self.models["super_model"] = imageSuperNet(self.config)
+        # Multiview (diffusers) primeiro: pico de VRAM; Real-ESRGAN depois (ou CPU se low_vram).
         self.models["multiview_model"] = multiviewDiffusionNet(self.config)
+        self.models["super_model"] = imageSuperNet(self.config)
         print("Models Loaded.")
 
     @torch.no_grad()

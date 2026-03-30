@@ -220,4 +220,7 @@ def get_tool(name: str) -> ToolSpec:
     for k, spec in TOOLS.items():
         if k == key or spec.cli_name == key or spec.name.lower().replace(" ", "") == key:
             return spec
+        for alias in spec.extra_aliases:
+            if alias.lower().replace("-", "").replace("_", "") == key:
+                return spec
     raise KeyError(f"Ferramenta desconhecida: {name!r}. Disponíveis: {', '.join(TOOLS.keys())}")

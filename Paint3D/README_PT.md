@@ -55,7 +55,7 @@ textured = apply_hunyuan_paint(mesh, "reference.png")
 
 - **gamedev-shared** (monorepo GameDev — GPU, logging)
 - **Hunyuan3D-2.1 `hy3dpaint`** (incluído em `src/paint3d/hy3dpaint/`; pesos HF sob demanda)
-- **pymeshlab**, **xatlas**, **omegaconf**, **basicsr**, **realesrgan**
+- **pymeshlab**, **xatlas**, **omegaconf**; Real-ESRGAN (RRDBNet + inferência) vendido em código (sem pacotes PyPI basicsr/realesrgan)
 - **nvdiffrast** (NVIDIA — shim do rasterizador)
 - **spandrel** (opcional — upscale IA no GLB exportado)
 

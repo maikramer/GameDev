@@ -115,6 +115,12 @@ def cli(ctx, verbose):
     help="Resoluções internas máximas (VRAM alta; recomendado para Paint 2.1).",
 )
 @click.option(
+    "--low-vram",
+    "low_vram",
+    is_flag=True,
+    help="GPU com pouca VRAM (ex. ≤8 GiB): menos vistas, resolução interna reduzida. Ou PAINT3D_LOW_VRAM=1.",
+)
+@click.option(
     "--upscale/--no-upscale",
     "upscale",
     default=_defaults.DEFAULT_UPSCALE,
@@ -145,6 +151,7 @@ def texture(
     paint_repo,
     paint_subfolder,
     paint_full_gpu,
+    low_vram,
     upscale,
     upscale_factor,
     texture_verbose,
@@ -165,7 +172,9 @@ def texture(
     info_table.add_row("[bold]Saída[/bold]", f"[cyan]{output}[/cyan]")
     info_table.add_row(
         "[bold]Paint 2.1[/bold]",
-        f"{paint_repo} / {paint_subfolder} — {'VRAM alta' if paint_full_gpu else 'modo económico'}",
+        f"{paint_repo} / {paint_subfolder} — "
+        f"{'VRAM alta' if paint_full_gpu else 'modo económico'}"
+        f"{' + baixa VRAM' if low_vram else ''}",
     )
     if upscale:
         info_table.add_row("[bold]Upscale[/bold]", f"Real-ESRGAN {upscale_factor}x")
@@ -183,6 +192,7 @@ def texture(
                 model_repo=paint_repo,
                 subfolder=paint_subfolder,
                 paint_cpu_offload=not paint_full_gpu,
+                low_vram=low_vram,
                 verbose=verbose,
             )
 
