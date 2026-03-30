@@ -14,14 +14,14 @@ def test_enforce_noop_when_allow_shared() -> None:
 
 
 def test_enforce_noop_when_mem_unknown() -> None:
-    with patch("text3d.utils.memory.gpu_bytes_in_use", return_value=None):
+    with patch("gamedev_shared.gpu.gpu_bytes_in_use", return_value=None):
         enforce_exclusive_gpu(allow_shared=False, max_used_mib=1)
 
 
 def test_enforce_ok_when_under_limit() -> None:
     mib = DEFAULT_EXCLUSIVE_GPU_MAX_USED_MIB - 50
     with patch(
-        "text3d.utils.memory.gpu_bytes_in_use",
+        "gamedev_shared.gpu.gpu_bytes_in_use",
         return_value=mib * 1024 * 1024,
     ):
         enforce_exclusive_gpu(allow_shared=False)
@@ -31,7 +31,7 @@ def test_enforce_raises_when_over_limit() -> None:
     mib = DEFAULT_EXCLUSIVE_GPU_MAX_USED_MIB + 50
     with (
         patch(
-            "text3d.utils.memory.gpu_bytes_in_use",
+            "gamedev_shared.gpu.gpu_bytes_in_use",
             return_value=mib * 1024 * 1024,
         ),
         pytest.raises(RuntimeError, match="GPU com"),

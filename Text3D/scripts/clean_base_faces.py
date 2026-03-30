@@ -3,10 +3,11 @@
 Script para limpar faces pequenas na base do mesh após repair.
 Remove faces degeneradas e faz simplificação localizada na base.
 """
-import sys
+
 import argparse
+import sys
+
 import trimesh
-import numpy as np
 
 
 def clean_base_faces(mesh_path: str, output_path: str) -> int:
@@ -16,9 +17,10 @@ def clean_base_faces(mesh_path: str, output_path: str) -> int:
     print(f"  Entrada: {len(mesh.vertices):,} verts, {len(mesh.faces):,} faces")
 
     try:
-        import pymeshlab
         import tempfile
         from pathlib import Path
+
+        import pymeshlab
 
         with tempfile.TemporaryDirectory(prefix="clean_base_") as tmpdir:
             in_ply = str(Path(tmpdir) / "in.ply")
@@ -66,6 +68,7 @@ def clean_base_faces(mesh_path: str, output_path: str) -> int:
     except Exception as e:
         print(f"Erro: {e}")
         import traceback
+
         traceback.print_exc()
         return 1
 

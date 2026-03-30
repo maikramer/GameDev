@@ -75,11 +75,6 @@ def test_default_subfolder_string() -> None:
     assert "hunyuan" in d.DEFAULT_SUBFOLDER.lower()
 
 
-def test_paint_hf_constants() -> None:
-    assert "Hunyuan3D" in d.DEFAULT_PAINT_HF_REPO
-    assert "paint" in d.DEFAULT_PAINT_SUBFOLDER.lower()
-
-
 def test_hq_constants_match_preset() -> None:
     hq = d.PRESET_HUNYUAN["hq"]
     assert hq["steps"] == d.HUNYUAN_HQ_STEPS
@@ -98,7 +93,6 @@ def test_default_t2d_guidance() -> None:
 
 def test_cpu_offload_defaults_are_bool() -> None:
     assert isinstance(d.DEFAULT_T2D_CPU_OFFLOAD, bool)
-    assert isinstance(d.DEFAULT_PAINT_CPU_OFFLOAD, bool)
 
 
 def test_mesh_smooth_default() -> None:

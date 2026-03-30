@@ -6,6 +6,8 @@ build-backend = "setuptools.build_meta"
 name = "text3d"
 version = "0.1.0"
 description = "Text-to-3D com Text2D + Hunyuan3D-2mini (pouca VRAM)"
+readme = "README.md"
+authors = [{ name = "Text3D Project" }]
 requires-python = ">=3.10"
 license = "MIT"
 dependencies = [
@@ -26,14 +28,13 @@ dependencies = [
     "tqdm>=4.66.0",
     "pydantic>=2.0.0",
     "pymeshlab>=2023.12",
-    "text2d",
+    "gamedev-shared @ file:../Shared",
+    "text2d @ file:../Text2D",
     "hy3dgen @ git+https://github.com/Tencent-Hunyuan/Hunyuan3D-2.git",
-    "nvdiffrast @ git+https://github.com/NVlabs/nvdiffrast.git",
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Topic :: Multimedia :: Graphics :: 3D Modeling",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -41,9 +42,7 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-upscale = ["spandrel>=0.4.0"]
 dev = ["pytest>=7.4.0", "pytest-cov>=4.0.0", "ruff>=0.11.0"]
-# Fechamento de buracos pós-pedestal (remove_pedestal_layered, mesh_repair): PyMeshLab sozinho pode deixar fronteira residual
 mesh-repair = ["pymeshfix>=1.0.0"]
 
 [project.scripts]

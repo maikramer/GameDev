@@ -34,16 +34,6 @@ def test_generate_requires_prompt_or_image() -> None:
     assert r.exit_code != 0
 
 
-def test_generate_final_conflicts_with_no_texture() -> None:
-    runner = CliRunner()
-    r = runner.invoke(
-        cli,
-        ["generate", "--no-texture", "--final", "x", "-o", "/tmp/t.glb"],
-    )
-    assert r.exit_code != 0
-    assert "incompat" in r.output.lower()
-
-
 def test_info() -> None:
     runner = CliRunner()
     r = runner.invoke(cli, ["info"])

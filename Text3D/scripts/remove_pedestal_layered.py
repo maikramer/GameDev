@@ -18,15 +18,16 @@ import numpy as np
 import trimesh
 import trimesh.repair as trimesh_repair
 
-
 # ---------------------------------------------------------------------------
 #  Utilitários de conversão trimesh <-> arrays
 # ---------------------------------------------------------------------------
+
 
 def _boundary_edge_count(mesh: trimesh.Trimesh) -> int:
     """Conta arestas de fronteira (buracos abertos)."""
     try:
         from trimesh.grouping import group_rows
+
         return len(group_rows(mesh.edges_sorted, require_count=1))
     except Exception:
         return -1
@@ -37,9 +38,10 @@ def _repair_open_holes_trimesh(m: trimesh.Trimesh) -> trimesh.Trimesh:
     if _boundary_edge_count(m) <= 0:
         return m
     try:
-        import pymeshlab as _pml
         import tempfile as _tf
         from pathlib import Path as _Path
+
+        import pymeshlab as _pml
 
         with _tf.TemporaryDirectory(prefix="holefix_") as tmpdir:
             in_ply = str(_Path(tmpdir) / "in.ply")
@@ -99,6 +101,7 @@ def _arrays_to_trimesh(verts: np.ndarray, faces: np.ndarray) -> trimesh.Trimesh:
 #  ETAPA 1: PyMeshFix — reparo robusto baseado no algoritmo MeshFix de Attene
 # ---------------------------------------------------------------------------
 
+
 def _repair_pymeshfix(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
     """
     PyMeshFix: wrapper C++ do MeshFix (Marco Attene).
@@ -107,6 +110,7 @@ def _repair_pymeshfix(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
     """
     try:
         from pymeshfix import PyTMesh
+
         verts, faces = _trimesh_to_arrays(mesh)
         mfix = PyTMesh()
         mfix.load_array(verts, faces)
@@ -125,6 +129,7 @@ def _repair_pymeshfix(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
 #  ETAPA 2: PyMeshLab — topologia opcionalmente com close_holes
 # ---------------------------------------------------------------------------
 
+
 def _pymeshlab_topology_and_optional_close(
     mesh: trimesh.Trimesh,
     *,
@@ -136,9 +141,10 @@ def _pymeshlab_topology_and_optional_close(
     Se ``close_holes`` for True, aplica também ``meshing_close_holes``.
     """
     try:
-        import pymeshlab
         import tempfile
         from pathlib import Path
+
+        import pymeshlab
 
         prefix = "meshlab_repair_" if close_holes else "meshlab_clean_"
         with tempfile.TemporaryDirectory(prefix=prefix) as tmpdir:
@@ -185,14 +191,13 @@ def _pymeshlab_clean_topology(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
 
 def _repair_pymeshlab(mesh: trimesh.Trimesh, *, max_hole_size: int = 500) -> trimesh.Trimesh:
     """PyMeshLab: limpeza + ``meshing_close_holes``."""
-    return _pymeshlab_topology_and_optional_close(
-        mesh, close_holes=True, max_hole_size=max_hole_size
-    )
+    return _pymeshlab_topology_and_optional_close(mesh, close_holes=True, max_hole_size=max_hole_size)
 
 
 # ---------------------------------------------------------------------------
 #  ETAPA 3: Liepa hole-filling (triangulate + refine + fairing)
 # ---------------------------------------------------------------------------
+
 
 def _repair_liepa(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
     """
@@ -202,7 +207,7 @@ def _repair_liepa(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
     """
     try:
         import igl
-        from hole_filling import close_hole, triangulation_refine_leipa, mesh_fair_laplacian_energy
+        from hole_filling import close_hole
 
         verts, faces = _trimesh_to_arrays(mesh)
 
@@ -229,15 +234,17 @@ def _repair_liepa(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
 #  ETAPA 4: MeshLib — universal metric hole filling
 # ---------------------------------------------------------------------------
 
+
 def _repair_meshlib(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
     """
     MeshLib: preenchimento de buracos com métrica universal otimizada.
     Detecta cada buraco e preenche com geometria que minimiza distorção.
     """
     try:
-        import meshlib.mrmeshpy as mrmeshpy
         import tempfile
         from pathlib import Path
+
+        import meshlib.mrmeshpy as mrmeshpy
 
         with tempfile.TemporaryDirectory(prefix="meshlib_repair_") as tmpdir:
             in_stl = str(Path(tmpdir) / "in.stl")
@@ -388,10 +395,7 @@ def _dissolve_fill_plate_triangles(
         sub = m.submesh([np.where(keep)[0]], append=True, only_watertight=False)
         if isinstance(sub, trimesh.Trimesh) and len(sub.faces) > 0:
             sub.remove_unreferenced_vertices()
-            print(
-                f"    [Dissolver] Removendo {n_rm:,} faces de placas de fecho "
-                f"(banda base + outliers globais)"
-            )
+            print(f"    [Dissolver] Removendo {n_rm:,} faces de placas de fecho (banda base + outliers globais)")
             return sub
     except Exception as e:
         print(f"    [Dissolver] falhou: {e}")
@@ -401,6 +405,7 @@ def _dissolve_fill_plate_triangles(
 # ---------------------------------------------------------------------------
 #  Pipeline completa de repair
 # ---------------------------------------------------------------------------
+
 
 def repair_mesh_complete(
     mesh: trimesh.Trimesh,
@@ -552,14 +557,13 @@ def repair_mesh_complete(
         if not post_remesh:
             residual_boundary = _boundary_edge_count(m)
             if residual_boundary > 0:
-                print(
-                    "    [Pós] Remesh desativado; fechando fronteira restante sem re-mesh..."
-                )
+                print("    [Pós] Remesh desativado; fechando fronteira restante sem re-mesh...")
                 m = _seal_residual_boundary(m)
         else:
-            import pymeshlab
             import tempfile
             from pathlib import Path
+
+            import pymeshlab
 
             print("    [Pós] PyMeshLab remesh localizado + smoothing...")
             with tempfile.TemporaryDirectory(prefix="remesh_post_") as tmpdir:
@@ -655,7 +659,9 @@ def _clean_small_faces(mesh: trimesh.Trimesh, *, area_threshold: float = 1e-6, i
     return m
 
 
-def _remove_thin_faces_at_base(mesh: trimesh.Trimesh, base_axis: int, *, min_edge_ratio: float = 0.1) -> trimesh.Trimesh:
+def _remove_thin_faces_at_base(
+    mesh: trimesh.Trimesh, base_axis: int, *, min_edge_ratio: float = 0.1
+) -> trimesh.Trimesh:
     """
     Remove faces "finas" na base - faces onde a aresta na direção do eixo é
     desproporcionalmente curta em relação às outras arestas (indica artefato).
@@ -683,11 +689,13 @@ def _remove_thin_faces_at_base(mesh: trimesh.Trimesh, base_axis: int, *, min_edg
                 abs(v1[base_axis] - v2[base_axis]),
                 abs(v2[base_axis] - v0[base_axis]),
             ]
+
             # Comprimentos das arestas no plano perpendicular
             def perp_len(v_a, v_b):
                 diff = v_a - v_b
                 diff[base_axis] = 0  # Ignorar componente do eixo base
                 return np.linalg.norm(diff)
+
             edges_perp = [
                 perp_len(v0, v1),
                 perp_len(v1, v2),
@@ -807,9 +815,7 @@ def detect_base_axis(mesh: trimesh.Trimesh) -> tuple[int, int]:
     return best_axis, best_direction
 
 
-def _bottom_zone_face_mask(
-    mesh: trimesh.Trimesh, axis: int, direction: int, band_frac: float
-) -> np.ndarray:
+def _bottom_zone_face_mask(mesh: trimesh.Trimesh, axis: int, direction: int, band_frac: float) -> np.ndarray:
     coords = mesh.vertices[:, axis]
     h = float(coords.max() - coords.min())
     if h < 1e-8:
@@ -1052,7 +1058,7 @@ def remove_pedestal_layers(
         n_horizontal = np.count_nonzero(in_layer & is_very_horizontal)
         horizontal_pct = n_horizontal / n_in_layer if n_in_layer > 0 else 0
 
-        print(f"    Camada {layer + 1}: {n_in_layer:,} faces, {horizontal_pct*100:.0f}% puramente horizontais")
+        print(f"    Camada {layer + 1}: {n_in_layer:,} faces, {horizontal_pct * 100:.0f}% puramente horizontais")
 
         # Só remove se >80% são horizontais puras
         if horizontal_pct >= min_horizontal_pct:
@@ -1062,7 +1068,7 @@ def remove_pedestal_layers(
             removed_total += n_to_remove
             print(f"      -> Removendo {n_to_remove:,} faces")
         else:
-            print(f"      -> Parando (ratio insuficiente)")
+            print("      -> Parando (ratio insuficiente)")
             break
 
     n_remove = int(np.count_nonzero(to_remove))
@@ -1071,10 +1077,10 @@ def remove_pedestal_layers(
         return mesh
 
     if n_remove > max_remove_frac * len(mesh.faces):
-        print(f"    Aviso: remoção ({n_remove} faces) excede {max_remove_frac*100:.0f}% — abortando")
+        print(f"    Aviso: remoção ({n_remove} faces) excede {max_remove_frac * 100:.0f}% — abortando")
         return mesh
 
-    print(f"    Total removido: {n_remove:,} faces ({n_remove/len(mesh.faces)*100:.1f}%)")
+    print(f"    Total removido: {n_remove:,} faces ({n_remove / len(mesh.faces) * 100:.1f}%)")
 
     keep = ~to_remove
     try:
@@ -1095,9 +1101,10 @@ def remove_pedestal_layers(
 
             # PyMeshLab: limpeza adicional de componentes pequenas e faces null
             try:
-                import pymeshlab
                 import tempfile
                 from pathlib import Path
+
+                import pymeshlab
 
                 with tempfile.TemporaryDirectory(prefix="clean_") as tmpdir:
                     in_ply = str(Path(tmpdir) / "in.ply")
@@ -1145,12 +1152,16 @@ Exemplos:
     parser.add_argument("input", type=Path, help="Arquivo de entrada (.glb, .obj)")
     parser.add_argument("-o", "--output", type=Path, help="Arquivo de saída")
     parser.add_argument(
-        "--threshold", type=float, default=0.95,
-        help="Alinhamento mínimo com eixo para 'horizontal puro' (default: 0.95)"
+        "--threshold",
+        type=float,
+        default=0.95,
+        help="Alinhamento mínimo com eixo para 'horizontal puro' (default: 0.95)",
     )
     parser.add_argument(
-        "--min-pct", type=float, default=0.80,
-        help="Porcentagem mínima de horizontais para remover camada (default: 0.80)"
+        "--min-pct",
+        type=float,
+        default=0.80,
+        help="Porcentagem mínima de horizontais para remover camada (default: 0.80)",
     )
     parser.add_argument(
         "--post-remesh",
@@ -1183,11 +1194,11 @@ Exemplos:
 
     print("\nDetectando orientação...")
     axis, direction = detect_base_axis(mesh)
-    axis_names = ['X', 'Y', 'Z']
-    dir_str = 'mínimo' if direction == -1 else 'máximo'
+    axis_names = ["X", "Y", "Z"]
+    dir_str = "mínimo" if direction == -1 else "máximo"
     print(f"  Base detetada no eixo {axis_names[axis]} ({dir_str})")
 
-    print(f"\nRemovendo camadas puramente horizontais...")
+    print("\nRemovendo camadas puramente horizontais...")
     try:
         cleaned = remove_pedestal_layers(
             mesh,
@@ -1199,15 +1210,16 @@ Exemplos:
     except Exception as e:
         print(f"Erro durante remoção: {e}", file=sys.stderr)
         import traceback
+
         traceback.print_exc()
         return 1
 
-    print(f"\nResultado da remoção:")
+    print("\nResultado da remoção:")
     print(f"  Vértices: {len(cleaned.vertices):,} (antes: {len(mesh.vertices):,})")
     print(f"  Faces: {len(cleaned.faces):,} (antes: {len(mesh.faces):,})")
 
     # REPAIR COMPLETO: fechar buracos e limpar artefatos
-    print(f"\nExecutando repair completo (fechamento de buracos)...")
+    print("\nExecutando repair completo (fechamento de buracos)...")
     try:
         cleaned = repair_mesh_complete(cleaned, post_remesh=args.post_remesh)
         print(f"  Após repair: {len(cleaned.vertices):,} vértices, {len(cleaned.faces):,} faces")

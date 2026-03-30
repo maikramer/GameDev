@@ -15,7 +15,6 @@ import argparse
 import sys
 from collections import deque
 from pathlib import Path
-from typing import Literal
 
 import numpy as np
 import trimesh
@@ -202,10 +201,7 @@ def _remove_flat_bottom_islands(
         e = p.extents
         return float(e[0] * e[1] * e[2])
 
-    has_non_plaque = any(
-        not _is_thin_plaque(p, thin_ratio=thin_ratio) or not touches_bottom(p)
-        for p in parts
-    )
+    has_non_plaque = any(not _is_thin_plaque(p, thin_ratio=thin_ratio) or not touches_bottom(p) for p in parts)
     if not has_non_plaque:
         return mesh
 
@@ -215,11 +211,7 @@ def _remove_flat_bottom_islands(
 
     kept: list[trimesh.Trimesh] = []
     for p in parts:
-        if (
-            touches_bottom(p)
-            and _is_thin_plaque(p, thin_ratio=thin_ratio)
-            and bbox_volume(p) < vol_ratio_max * max_vol
-        ):
+        if touches_bottom(p) and _is_thin_plaque(p, thin_ratio=thin_ratio) and bbox_volume(p) < vol_ratio_max * max_vol:
             continue
         kept.append(p)
 
@@ -469,9 +461,7 @@ Exemplos:
         """,
     )
     parser.add_argument("input", type=Path, help="Arquivo de entrada (.glb, .obj)")
-    parser.add_argument(
-        "-o", "--output", type=Path, help="Arquivo de saída (defeito: input_clean.glb)"
-    )
+    parser.add_argument("-o", "--output", type=Path, help="Arquivo de saída (defeito: input_clean.glb)")
     parser.add_argument(
         "--aggressive",
         action="store_true",
@@ -537,7 +527,7 @@ Exemplos:
     if args.keep_largest and not args.no_keep_largest:
         print("  - Manter maior componente")
     if args.fill_holes > 0:
-        print(f"  - Fechar buracos")
+        print("  - Fechar buracos")
 
     try:
         cleaned = repair_mesh(
@@ -553,7 +543,7 @@ Exemplos:
         print(f"Erro durante reparo: {e}", file=sys.stderr)
         return 1
 
-    print(f"\nResultado:")
+    print("\nResultado:")
     print(f"  Vértices: {len(cleaned.vertices):,} (antes: {len(mesh.vertices):,})")
     print(f"  Faces: {len(cleaned.faces):,} (antes: {len(mesh.faces):,})")
 

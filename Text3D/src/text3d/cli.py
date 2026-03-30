@@ -60,11 +60,6 @@ def _gpu_kill_others_effective(cli_wants: bool) -> bool:
 DEFAULT_MESH_DIR = DEFAULT_OUTPUT_DIR / "meshes"
 
 
-def _default_texture_cli() -> bool:
-    """Valor por defeito de --texture (TEXT3D_DEFAULT_TEXTURE; Click chama sem ctx)."""
-    return _defaults.get_default_texture()
-
-
 def ensure_dirs():
     DEFAULT_MESH_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -75,23 +70,18 @@ def ensure_dirs():
 @click.pass_context
 def cli(ctx, verbose):
     """
-    Text3D — mesh 3D texturizada a partir de texto.
+    Text3D — mesh 3D a partir de texto (só geometria: Text2D → Hunyuan3D-2mini → repair → remesh).
 
-    Pipeline padrão: Text2D → Hunyuan3D-2mini (shape) → repair → remesh → Paint (textura).
+    Textura e PBR: usa o CLI **paint3d** ou um batch **gameassets** com perfil text3d.texture.
 
     \b
         text3d generate "um robô futurista" -o robo.glb
         text3d generate "carro" --preset hq -o carro.glb
-        text3d generate "espada" --no-texture -o espada.glb
-        text3d texture mesh.glb -i ref.png -o mesh_tex.glb
-        text3d texture mesh.glb -i ref.png -o mesh_pbr.glb --materialize
+        text3d generate -i ref.png -o mesh.glb
         text3d doctor
         text3d repair-ground modelo.glb --y-up-flip-x-180 --no-keep-largest
         text3d -v generate "prompt"
         text3d info
-
-    Na primeira execução pode parecer parado: download dos pesos (HF) e fases
-    (Text2D + Hunyuan shape + Paint). Use -v para ver o progresso no log.
     """
     ensure_pytorch_cuda_alloc_conf()
     ctx.ensure_object(dict)
@@ -294,88 +284,10 @@ def skill_install_cmd(target: Path, force: bool) -> None:
     help="Resolução do remeshing (~nº subdivisões na diagonal). Maior = mais detalhe.",
 )
 @click.option(
-    "--texture/--no-texture",
-    "texture",
-    default=_default_texture_cli,
-    show_default="ligado (Paint)",
-    help="Hunyuan3D-Paint (textura) após a mesh. Por defeito ligado; usa a imagem Text2D "
-    "ou --from-image. Desliga com --no-texture para obter só a geometria. "
-    "Defeito global: TEXT3D_DEFAULT_TEXTURE=0 só geometria.",
-)
-@click.option(
-    "--final",
-    "texture_final",
-    is_flag=True,
-    default=False,
-    help="Igual a forçar mesh + Paint (--texture). O defeito já inclui textura; útil em scripts.",
-)
-@click.option(
     "--model-subfolder",
     default=_defaults.DEFAULT_SUBFOLDER,
     show_default=True,
     help="Subpasta do modelo Hunyuan3D shape (ex.: hunyuan3d-dit-v2-mini-turbo).",
-)
-@click.option(
-    "--paint-repo",
-    default=_defaults.DEFAULT_PAINT_HF_REPO,
-    show_default=True,
-    help="Repo HF com delight + paint (subpastas hunyuan3d-*).",
-)
-@click.option(
-    "--paint-subfolder",
-    default=_defaults.DEFAULT_PAINT_SUBFOLDER,
-    show_default=True,
-    help="Subpasta Paint (ex.: hunyuan3d-paint-v2-0-turbo).",
-)
-@click.option(
-    "--paint-full-gpu",
-    is_flag=True,
-    help="Mantém modelos Paint na GPU (VRAM alta). O defeito usa CPU offload.",
-)
-@click.option(
-    "--upscale/--no-upscale",
-    "upscale",
-    default=_defaults.DEFAULT_UPSCALE,
-    show_default=True,
-    help="Upscale IA da textura (Real-ESRGAN 4x via spandrel). "
-    "Escala 1024→4096 ou conforme --upscale-factor. Requer: pip install spandrel.",
-)
-@click.option(
-    "--upscale-factor",
-    default=_defaults.DEFAULT_UPSCALE_FACTOR,
-    show_default=True,
-    type=click.Choice(["2", "4"], case_sensitive=False),
-    help="Factor de upscale (2 = 1024→2048, 4 = 1024→4096).",
-)
-@click.option(
-    "--materialize",
-    is_flag=True,
-    help="Após Paint, gera mapas PBR (Materialize CLI) e embute no GLB (normal, AO, metallic-roughness).",
-)
-@click.option(
-    "--materialize-preset",
-    "materialize_preset",
-    default="default",
-    show_default=True,
-    type=click.Choice(["default", "skin", "floor", "metal", "fabric", "wood", "stone"]),
-    help="Preset Materialize: ajusta parâmetros PBR ao tipo de superfície.",
-)
-@click.option(
-    "--materialize-output-dir",
-    type=click.Path(file_okay=False, path_type=Path),
-    default=None,
-    help="Guarda PNGs (mapas Materialize + baseColor/metallicRoughness/occlusion) nesta pasta.",
-)
-@click.option(
-    "--materialize-bin",
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    default=None,
-    help="Binário materialize (defeito: PATH ou MATERIALIZE_BIN).",
-)
-@click.option(
-    "--materialize-no-invert",
-    is_flag=True,
-    help="Roughness = smoothness (sem 1-smoothness).",
 )
 @click.option(
     "-v",
@@ -438,6 +350,17 @@ def skill_install_cmd(target: Path, force: bool) -> None:
         "Use esta flag para controlo total do prompt (prompts avançados)."
     ),
 )
+@click.option(
+    "--max-retries",
+    "max_retries",
+    default=3,
+    show_default=True,
+    type=int,
+    help=(
+        "Tentativas máximas de geração. Verifica qualidade da mesh (backing plates, "
+        "flat cutouts) e regenera com seed aleatória se falhar. 1 = sem retry."
+    ),
+)
 @click.pass_context
 def generate(
     ctx,
@@ -467,18 +390,6 @@ def generate(
     mesh_smooth,
     remesh,
     remesh_resolution,
-    texture,
-    texture_final,
-    upscale,
-    upscale_factor,
-    paint_repo,
-    paint_subfolder,
-    paint_full_gpu,
-    materialize,
-    materialize_preset,
-    materialize_output_dir,
-    materialize_bin,
-    materialize_no_invert,
     generate_verbose,
     allow_shared_gpu,
     gpu_kill_others,
@@ -487,26 +398,16 @@ def generate(
     export_rotation_x_deg,
     save_reference_image,
     no_prompt_optimize,
+    max_retries,
 ):
     """Gera 3D: PROMPT (Text2D → Hunyuan) ou --from-image (só Hunyuan)."""
     verbose = bool(ctx.obj.get("VERBOSE")) or generate_verbose
-
-    if texture_final and not texture:
-        raise click.UsageError("--final/--texture incompatível com --no-texture.")
-    if texture_final:
-        texture = True
-
-    if materialize and not texture:
-        raise click.UsageError("--materialize requer textura ativa (remova --no-texture).")
 
     if preset is not None:
         pv = _defaults.PRESET_HUNYUAN[preset]
         steps = pv["steps"]
         octree_resolution = pv["octree"]
         num_chunks = pv["chunks"]
-
-    if texture:
-        output_format = "glb"
 
     if not from_image and not (prompt and str(prompt).strip()):
         raise click.UsageError("Indica um PROMPT em texto ou --from-image /path/to.png")
@@ -553,6 +454,8 @@ def generate(
     if not from_image:
         opt_label = "desligada" if no_prompt_optimize else "ativa (anti-placa)"
         info_table.add_row("[bold]Otimização prompt[/bold]", opt_label)
+    if max_retries > 1 and not from_image:
+        info_table.add_row("[bold]Auto-retry[/bold]", f"até {max_retries}x (verifica placas/flat)")
     rep = "desligado" if no_mesh_repair else "maior componente + merge"
     if not no_mesh_repair and not no_ground_shadow_removal:
         rep += ", anti-sombra base"
@@ -569,25 +472,9 @@ def generate(
     info_table.add_row(
         "[bold]Export[/bold]",
         f"origem={export_origin}"
-        + (
-            f", rotação X={export_rotation_x_deg}°"
-            if export_rotation_x_deg is not None
-            else ""
-        ),
+        + (f", rotação X={export_rotation_x_deg}°" if export_rotation_x_deg is not None else ""),
     )
     info_table.add_row("[bold]Modo[/bold]", "economia VRAM" if low_vram else "normal")
-    if texture:
-        info_table.add_row(
-            "[bold]Textura[/bold]",
-            f"Hunyuan3D-Paint ({paint_subfolder}) {'GPU' if paint_full_gpu else 'CPU offload'}",
-        )
-        if upscale:
-            info_table.add_row("[bold]Upscale[/bold]", f"Real-ESRGAN {upscale_factor}x")
-        if materialize:
-            info_table.add_row(
-                "[bold]Materialize PBR[/bold]",
-                "sim" + (f" → [cyan]{materialize_output_dir}[/cyan]" if materialize_output_dir else ""),
-            )
 
     console.print(Panel(info_table, title="[bold green]Configuração", border_style="green"))
 
@@ -614,10 +501,7 @@ def generate(
                 output = DEFAULT_MESH_DIR / f"{safe}_{timestamp}.{output_format}"
             else:
                 output = Path(output)
-                if texture and output.suffix.lower() in (".ply", ".obj"):
-                    output = output.with_suffix(".glb")
 
-            ref_for_paint = None
             start_time = time.time()
 
             with Progress(
@@ -636,58 +520,58 @@ def generate(
                         hy_seed=seed,
                         mc_level=mc_level,
                     )
-                    if texture:
-                        ref_for_paint = Path(from_image)
                 else:
-                    task = progress.add_task("[cyan]Text2D → Hunyuan3D...", total=None)
-                    need_t2d_image = bool(texture or save_reference_image)
-                    if need_t2d_image:
+                    _gen_kwargs = dict(
+                        t2d_width=image_width,
+                        t2d_height=image_height,
+                        t2d_steps=t2d_steps,
+                        t2d_guidance=t2d_guidance,
+                        text2d_model_id=text2d_model_id,
+                        num_inference_steps=steps,
+                        guidance_scale=guidance,
+                        octree_resolution=octree_resolution,
+                        num_chunks=num_chunks,
+                        hy_seed=seed,
+                        mc_level=mc_level,
+                        t2d_full_gpu=t2d_full_gpu,
+                        optimize_prompt=not no_prompt_optimize,
+                    )
+
+                    if max_retries > 1:
+                        task = progress.add_task(
+                            f"[cyan]Text2D → Hunyuan3D (até {max_retries} tentativas)...",
+                            total=None,
+                        )
+
+                        def _on_retry(attempt, new_seed, quality):
+                            issues = ", ".join(quality.get("issues", []))
+                            console.print(
+                                f"[yellow]  Tentativa {attempt} falhou: {issues}. Retry com seed {new_seed}...[/yellow]"
+                            )
+
+                        result, ref_img = generator.generate_with_quality_check(
+                            prompt=prompt,
+                            max_retries=max_retries,
+                            t2d_seed=seed,
+                            return_reference_image=True,
+                            on_retry=_on_retry,
+                            **_gen_kwargs,
+                        )
+                    else:
+                        task = progress.add_task("[cyan]Text2D → Hunyuan3D...", total=None)
                         result, ref_img = generator.generate(
                             prompt=prompt,
-                            t2d_width=image_width,
-                            t2d_height=image_height,
-                            t2d_steps=t2d_steps,
-                            t2d_guidance=t2d_guidance,
-                            text2d_model_id=text2d_model_id,
                             t2d_seed=seed,
-                            num_inference_steps=steps,
-                            guidance_scale=guidance,
-                            octree_resolution=octree_resolution,
-                            num_chunks=num_chunks,
-                            hy_seed=seed,
-                            mc_level=mc_level,
-                            t2d_full_gpu=t2d_full_gpu,
                             return_reference_image=True,
-                            optimize_prompt=not no_prompt_optimize,
+                            **_gen_kwargs,
                         )
-                        if texture:
-                            ref_for_paint = ref_img
-                        if save_reference_image:
-                            out_png = output.parent / f"{output.stem}_text2d.png"
-                            out_png.parent.mkdir(parents=True, exist_ok=True)
-                            ref_img.save(str(out_png), format="PNG")
-                            console.print(
-                                f"[dim]Imagem Text2D (rede Hunyuan): [cyan]{out_png.resolve()}[/cyan][/dim]"
-                            )
-                    else:
-                        result = generator.generate(
-                            prompt=prompt,
-                            t2d_width=image_width,
-                            t2d_height=image_height,
-                            t2d_steps=t2d_steps,
-                            t2d_guidance=t2d_guidance,
-                            text2d_model_id=text2d_model_id,
-                            t2d_seed=seed,
-                            num_inference_steps=steps,
-                            guidance_scale=guidance,
-                            octree_resolution=octree_resolution,
-                            num_chunks=num_chunks,
-                            hy_seed=seed,
-                            mc_level=mc_level,
-                            t2d_full_gpu=t2d_full_gpu,
-                            return_reference_image=False,
-                            optimize_prompt=not no_prompt_optimize,
-                        )
+
+                    if save_reference_image:
+                        out_png = output.parent / f"{output.stem}_text2d.png"
+                        out_png.parent.mkdir(parents=True, exist_ok=True)
+                        ref_img.save(str(out_png), format="PNG")
+                        console.print(f"[dim]Imagem Text2D (rede Hunyuan): [cyan]{out_png.resolve()}[/cyan][/dim]")
+
                 progress.update(task, description="[green]Concluído")
 
             if save_reference_image and from_image:
@@ -697,9 +581,7 @@ def generate(
                 out_copy = output.parent / f"{output.stem}_input{src.suffix.lower() or '.png'}"
                 out_copy.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(from_image, out_copy)
-                console.print(
-                    f"[dim]Imagem de entrada copiada: [cyan]{out_copy.resolve()}[/cyan][/dim]"
-                )
+                console.print(f"[dim]Imagem de entrada copiada: [cyan]{out_copy.resolve()}[/cyan][/dim]")
 
             if not no_mesh_repair:
                 from .utils.mesh_repair import repair_mesh
@@ -716,52 +598,6 @@ def generate(
                     remesh=remesh,
                     remesh_resolution=remesh_resolution,
                 )
-
-            if texture:
-                if ref_for_paint is None:
-                    raise click.UsageError("Estado interno: referência para Paint em falta.")
-                from .painter import apply_hunyuan_paint
-
-                generator.unload_hunyuan()
-                clear_cuda_memory()
-                with console.status("[bold yellow]Hunyuan3D-Paint (textura)...", spinner="dots"):
-                    result = apply_hunyuan_paint(
-                        result,
-                        ref_for_paint,
-                        model_repo=paint_repo,
-                        subfolder=paint_subfolder,
-                        paint_cpu_offload=not paint_full_gpu,
-                        verbose=verbose,
-                    )
-                if upscale:
-                    from .texture_upscale import upscale_trimesh_texture
-
-                    clear_cuda_memory()
-                    with console.status(
-                        f"[bold yellow]Upscale textura (Real-ESRGAN {upscale_factor}x)...",
-                        spinner="dots",
-                    ):
-                        result = upscale_trimesh_texture(
-                            result,
-                            scale=int(upscale_factor),
-                            device="cpu" if cpu else None,
-                            verbose=verbose,
-                        )
-                if materialize:
-                    from .materialize_pbr import apply_materialize_pbr
-
-                    with console.status(
-                        f"[bold yellow]Materialize PBR (preset={materialize_preset})...",
-                        spinner="dots",
-                    ):
-                        result = apply_materialize_pbr(
-                            result,
-                            materialize_bin=materialize_bin,
-                            save_sidecar_maps_dir=materialize_output_dir,
-                            roughness_from_one_minus_smoothness=not materialize_no_invert,
-                            preset=materialize_preset,
-                            verbose=verbose,
-                        )
 
             from .utils.export import save_mesh
 
@@ -789,8 +625,7 @@ def generate(
 
 @cli.command("doctor")
 def doctor():
-    """Verifica ambiente: PyTorch, CUDA, VRAM e extensão Hunyuan3D-Paint (custom_rasterizer)."""
-    from .painter import check_paint_rasterizer_available
+    """Verifica ambiente: PyTorch, CUDA e VRAM."""
     from .utils.memory import (
         DEFAULT_EXCLUSIVE_GPU_MAX_USED_MIB,
         get_system_info,
@@ -799,7 +634,7 @@ def doctor():
 
     console.print(
         Panel.fit(
-            "[bold]text3d doctor[/bold] — PyTorch, CUDA, Paint (custom_rasterizer)",
+            "[bold]text3d doctor[/bold] — PyTorch, CUDA",
             border_style="blue",
         )
     )
@@ -827,26 +662,16 @@ def doctor():
             table.add_row(
                 "Política GPU exclusiva",
                 f"~{used / (1024**2):.0f} MiB em uso agora — "
-                f"generate/texture recusam se > {DEFAULT_EXCLUSIVE_GPU_MAX_USED_MIB} MiB "
+                f"generate recusa se > {DEFAULT_EXCLUSIVE_GPU_MAX_USED_MIB} MiB "
                 f"(ou TEXT3D_ALLOW_SHARED_GPU=1 / --allow-shared-gpu)",
             )
-
-    try:
-        check_paint_rasterizer_available()
-        import custom_rasterizer  # noqa: F401
-
-        backend = "nvdiffrast (shim)" if getattr(custom_rasterizer, "IS_NVDIFFRAST_SHIM", False) else "nativo"
-        table.add_row("Hunyuan3D-Paint", f"[green]rasterizador OK — {backend}[/green]")
-    except RuntimeError as e:
-        msg = str(e).split("\n")[0][:120]
-        table.add_row("Hunyuan3D-Paint", f"[yellow]{msg}…[/yellow]")
 
     console.print(table)
     console.print(
         Panel(
             "[dim]Perfis: --preset fast | balanced | hq. "
             "Desempenho: o CLI define PYTORCH_CUDA_ALLOC_CONF se estiver vazio. "
-            "Paint: ver docs/PAINT_SETUP.md[/dim]",
+            "Textura/PBR: [bold]paint3d[/bold] ou [bold]gameassets batch[/bold] com text3d.texture.[/dim]",
             border_style="dim",
         )
     )
@@ -896,308 +721,6 @@ def info():
                     border_style="yellow",
                 )
             )
-
-
-@cli.command()
-@click.argument("mesh_file", type=click.Path(exists=True, dir_okay=False))
-@click.option(
-    "--image",
-    "-i",
-    "image_file",
-    required=True,
-    type=click.Path(exists=True, dir_okay=False),
-    help="Imagem de referência (alinhada com a mesh).",
-)
-@click.option(
-    "--output",
-    "-o",
-    type=click.Path(),
-    help="Ficheiro GLB de saída (textura embutida).",
-)
-@click.option(
-    "--paint-repo",
-    default=_defaults.DEFAULT_PAINT_HF_REPO,
-    show_default=True,
-)
-@click.option(
-    "--paint-subfolder",
-    default=_defaults.DEFAULT_PAINT_SUBFOLDER,
-    show_default=True,
-)
-@click.option(
-    "--paint-full-gpu",
-    is_flag=True,
-    help="Mantém modelos Paint na GPU (VRAM alta).",
-)
-@click.option(
-    "--materialize",
-    is_flag=True,
-    help="Após Paint, gera mapas PBR (Materialize CLI) e embute no GLB.",
-)
-@click.option(
-    "--materialize-output-dir",
-    type=click.Path(file_okay=False, path_type=Path),
-    default=None,
-    help="Guarda PNGs dos mapas nesta pasta.",
-)
-@click.option(
-    "--materialize-bin",
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    default=None,
-    help="Binário materialize (defeito: PATH ou MATERIALIZE_BIN).",
-)
-@click.option(
-    "--materialize-no-invert",
-    is_flag=True,
-    help="Roughness = smoothness (sem 1-smoothness).",
-)
-@click.option(
-    "-v",
-    "--verbose",
-    "texture_verbose",
-    is_flag=True,
-    help="Logs detalhados.",
-)
-@click.option(
-    "--allow-shared-gpu",
-    "allow_shared_gpu",
-    is_flag=True,
-    help="Permite GPU com outros processos (desliga verificação: ~300 MiB máx. já ocupados).",
-)
-@click.option(
-    "--gpu-kill-others/--no-gpu-kill-others",
-    "gpu_kill_others",
-    default=True,
-    help="Termina outros processos GPU (nvidia-smi) antes de inferir; defeito: ligado.",
-)
-@click.pass_context
-def texture(
-    ctx,
-    mesh_file,
-    image_file,
-    output,
-    paint_repo,
-    paint_subfolder,
-    paint_full_gpu,
-    materialize,
-    materialize_output_dir,
-    materialize_bin,
-    materialize_no_invert,
-    texture_verbose,
-    allow_shared_gpu,
-    gpu_kill_others,
-):
-    """Aplica Hunyuan3D-Paint a uma mesh GLB/OBJ + imagem de referência → GLB texturizado."""
-    from .painter import paint_file_to_file
-
-    verbose = bool(ctx.obj.get("VERBOSE")) or texture_verbose
-    mesh_path = Path(mesh_file)
-    if output is None:
-        output = mesh_path.with_name(f"{mesh_path.stem}_textured.glb")
-
-    console.print(
-        Panel(
-            f"Mesh: [cyan]{mesh_path}[/cyan]\nImagem: [cyan]{image_file}[/cyan]\nSaída: [cyan]{output}[/cyan]",
-            title="[bold green]Hunyuan3D-Paint",
-            border_style="green",
-        )
-    )
-    allow_shared = bool(allow_shared_gpu) or _env_allow_shared_gpu()
-    gpu_kill = _gpu_kill_others_effective(bool(gpu_kill_others))
-    if gpu_kill:
-        console.print(
-            Panel(
-                "[bold]Terminar processos GPU alvo[/bold] antes do Paint\n"
-                "[dim]Desliga com [bold]--no-gpu-kill-others[/bold] ou TEXT3D_GPU_KILL_OTHERS=0[/dim]",
-                border_style="yellow",
-            )
-        )
-        for line in kill_gpu_compute_processes_aggressive(exclude_pid=os.getpid()):
-            console.print(f"[dim]{line}[/dim]")
-        clear_cuda_memory()
-        time.sleep(0.5)
-    try:
-        enforce_exclusive_gpu(allow_shared=allow_shared)
-    except RuntimeError as e:
-        raise click.ClickException(str(e)) from e
-
-    try:
-        start = time.time()
-        with console.status("[bold yellow]A carregar modelos Paint (1ª vez: download HF)...", spinner="dots"):
-            out = paint_file_to_file(
-                mesh_path,
-                image_file,
-                output,
-                model_repo=paint_repo,
-                subfolder=paint_subfolder,
-                paint_cpu_offload=not paint_full_gpu,
-                verbose=verbose,
-                materialize=materialize,
-                materialize_output_dir=materialize_output_dir,
-                materialize_bin=materialize_bin,
-                materialize_no_invert=materialize_no_invert,
-            )
-        out_p = Path(out).resolve()
-        try:
-            sz = format_bytes(out_p.stat().st_size)
-        except OSError:
-            sz = "?"
-        console.print(Rule("[bold green]Resultado", style="green"))
-        console.print(f"[bold green]✓[/bold green] GLB texturizado: [cyan]{out_p}[/cyan] [dim]({sz})[/dim]")
-        console.print(f"\n[dim]Tempo: {time.time() - start:.1f}s[/dim]")
-    except Exception as e:
-        console.print(f"\n[bold red]✗ Erro:[/bold red] {e!s}")
-        if verbose:
-            console.print_exception()
-        sys.exit(1)
-
-
-@cli.command("materialize-pbr")
-@click.argument(
-    "mesh_file",
-    type=click.Path(exists=True, dir_okay=False),
-)
-@click.option(
-    "--output",
-    "-o",
-    type=click.Path(),
-    required=True,
-    help="GLB de saída (PBR embutido).",
-)
-@click.option(
-    "--materialize-output-dir",
-    type=click.Path(file_okay=False, path_type=Path),
-    default=None,
-    help="Guarda PNGs dos mapas nesta pasta.",
-)
-@click.option(
-    "--materialize-bin",
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    default=None,
-)
-@click.option(
-    "--materialize-no-invert",
-    is_flag=True,
-    help="Roughness = smoothness (sem 1-smoothness).",
-)
-@click.option(
-    "--preset",
-    "-p",
-    "mat_preset",
-    default="default",
-    show_default=True,
-    type=click.Choice(["default", "skin", "floor", "metal", "fabric", "wood", "stone"]),
-    help="Preset Materialize: ajusta parâmetros PBR ao tipo de superfície.",
-)
-@click.option(
-    "--export-origin",
-    "mat_export_origin",
-    type=click.Choice(["feet", "center", "none"]),
-    default=_defaults.DEFAULT_EXPORT_ORIGIN,
-    show_default=True,
-    help="Origem ao gravar GLB (após qualquer rotação de export).",
-)
-@click.option(
-    "-v",
-    "--verbose",
-    "mat_verbose",
-    is_flag=True,
-)
-@click.option(
-    "--allow-shared-gpu",
-    "allow_shared_gpu",
-    is_flag=True,
-)
-@click.option(
-    "--gpu-kill-others/--no-gpu-kill-others",
-    "gpu_kill_others",
-    default=True,
-)
-@click.pass_context
-def materialize_pbr_cmd(
-    ctx,
-    mesh_file,
-    output,
-    materialize_output_dir,
-    materialize_bin,
-    materialize_no_invert,
-    mat_preset,
-    mat_export_origin,
-    mat_verbose,
-    allow_shared_gpu,
-    gpu_kill_others,
-):
-    """Só Materialize PBR: GLB já texturizado (Paint) → mapas + GLB PBR (sem re-correr Paint)."""
-    from .materialize_pbr import apply_materialize_pbr
-    from .painter import load_mesh_trimesh
-    from .utils.export import save_mesh
-
-    verbose = bool(ctx.obj.get("VERBOSE")) or mat_verbose
-    mesh_path = Path(mesh_file)
-    out_path = Path(output)
-    if out_path.suffix.lower() not in (".glb",):
-        raise click.UsageError("Saída deve ser .glb")
-
-    console.print(
-        Panel(
-            f"Entrada: [cyan]{mesh_path}[/cyan]\nSaída: [cyan]{out_path}[/cyan]",
-            title="[bold green]Materialize PBR",
-            border_style="green",
-        )
-    )
-    allow_shared = bool(allow_shared_gpu) or _env_allow_shared_gpu()
-    gpu_kill = _gpu_kill_others_effective(bool(gpu_kill_others))
-    if gpu_kill:
-        console.print(
-            Panel(
-                "[bold]Terminar processos GPU alvo[/bold] antes do Materialize\n"
-                "[dim]Desliga com [bold]--no-gpu-kill-others[/bold] ou TEXT3D_GPU_KILL_OTHERS=0[/dim]",
-                border_style="yellow",
-            )
-        )
-        for line in kill_gpu_compute_processes_aggressive(exclude_pid=os.getpid()):
-            console.print(f"[dim]{line}[/dim]")
-        clear_cuda_memory()
-        time.sleep(0.5)
-    try:
-        enforce_exclusive_gpu(allow_shared=allow_shared)
-    except RuntimeError as e:
-        raise click.ClickException(str(e)) from e
-
-    try:
-        start = time.time()
-        with console.status(
-            f"[bold yellow]Materialize PBR (preset={mat_preset})...", spinner="dots"
-        ):
-            mesh = load_mesh_trimesh(mesh_path)
-            result = apply_materialize_pbr(
-                mesh,
-                materialize_bin=materialize_bin,
-                save_sidecar_maps_dir=materialize_output_dir,
-                roughness_from_one_minus_smoothness=not materialize_no_invert,
-                preset=mat_preset,
-                verbose=verbose,
-            )
-            mp = save_mesh(
-                result,
-                out_path,
-                format="glb",
-                rotate=False,
-                origin_mode=mat_export_origin,
-            )
-        out_p = Path(mp).resolve()
-        try:
-            sz = format_bytes(out_p.stat().st_size)
-        except OSError:
-            sz = "?"
-        console.print(Rule("[bold green]Resultado", style="green"))
-        console.print(f"[bold green]✓[/bold green] GLB PBR: [cyan]{out_p}[/cyan] [dim]({sz})[/dim]")
-        console.print(f"\n[dim]Tempo: {time.time() - start:.1f}s[/dim]")
-    except Exception as e:
-        console.print(f"\n[bold red]✗ Erro:[/bold red] {e!s}")
-        if verbose:
-            console.print_exception()
-        sys.exit(1)
 
 
 @cli.command("repair-ground")
@@ -1399,7 +922,7 @@ def gpu_processes_cmd() -> None:
             "• Sessões antigas de Python/Text2D/Text3D: [bold]pgrep -af 'text2d|text3d'[/bold] "
             "e [bold]pgrep -af python[/bold] (cuidado a não matar o que precisas).\n"
             "• Godot, browsers (WebGPU), outros modelos IA: fecha a app em vez de kill se possível.\n"
-            "[dim]Em [bold]text3d generate/texture[/bold], por defeito [bold]--gpu-kill-others[/bold] "
+            "[dim]Em [bold]text3d generate[/bold], por defeito [bold]--gpu-kill-others[/bold] "
             "termina processos listados aqui (exceto display). Desliga com [bold]--no-gpu-kill-others[/bold].\n"
             "Se a VRAM continua alta sem processos na lista, reiniciar o PC limpa o driver; "
             "ou [bold]TEXT3D_ALLOW_SHARED_GPU=1[/bold] só se aceitares OOM.[/dim]",
@@ -1429,8 +952,8 @@ def models():
     )
     table.add_row(
         "Hunyuan3D-Paint",
-        "Textura multivista (tencent/Hunyuan3D-2, delight + paint)",
-        "Comando: text3d texture ou generate --texture",
+        "Textura multivista (delight + paint)",
+        "CLI [bold]paint3d[/bold] ou [bold]gameassets[/bold] (não faz parte do text3d)",
     )
 
     console.print(table)

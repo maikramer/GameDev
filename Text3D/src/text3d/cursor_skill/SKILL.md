@@ -1,24 +1,24 @@
 ---
 name: text3d
-description: Gera meshes 3D a partir de texto ou imagem (Text2D + Hunyuan3D-2mini), Hunyuan3D-Paint, Materialize PBR opcional, conversão de formatos. Use quando o utilizador pedir 3D, GLB/PLY/OBJ, Hunyuan, text-to-3D, image-to-3D, --texture, --materialize, TEXT3D_BIN, MATERIALIZE_BIN, ou integração com GameAssets.
+description: Gera meshes 3D a partir de texto ou imagem (Text2D + Hunyuan3D-2mini), só geometria; textura/PBR via Paint3D ou GameAssets. Use quando o utilizador pedir 3D, GLB/PLY/OBJ, Hunyuan, text-to-3D, image-to-3D, TEXT3D_BIN, PAINT3D_BIN, ou integração com GameAssets.
 ---
 
 # Text3D — Text2D + Hunyuan3D-2mini
 
 ## Quando usar
 
-- **Texto → 3D** ou **imagem → 3D** (mesh GLB/PLY/OBJ).
-- Ativar **textura** (**Hunyuan3D-Paint**) ou **PBR completo** (**Materialize** embutido no fluxo `generate`).
-- Diagnosticar GPU/PyTorch/Paint (`doctor`, `info`), converter formatos, listar modelos.
+- **Texto → 3D** ou **imagem → 3D** (mesh GLB/PLY/OBJ), **só geometria**.
+- **Textura (Hunyuan3D-Paint)** ou **PBR**: encadear **`paint3d`** ou usar **GameAssets** com `text3d.texture` / `materialize` no perfil.
+- Diagnosticar GPU/PyTorch (`doctor`, `info`), converter formatos, listar modelos.
 
 ## O que é
 
-Pipeline **text-to-3D**: geração de imagem (**Text2D** / FLUX Klein) + **Hunyuan3D-2mini** (imagem → mesh). Opcional: **Hunyuan3D-Paint** para GLB texturizado; opcional: **Materialize** para mapas PBR no GLB (`--materialize`, ver `docs/PBR_MATERIALIZE.md`). Entrada **só por imagem** (`--from-image` / `-i`) sem correr Text2D.
+Pipeline **text-to-3D**: geração de imagem (**Text2D** / FLUX Klein) + **Hunyuan3D-2mini** (imagem → mesh). Entrada **só por imagem** (`--from-image` / `-i`) sem correr Text2D.
 
 ## Pré-requisitos
 
-- Python e dependências (ver `docs/INSTALL.md`, `docs/PAINT_SETUP.md` se usares Paint).
-- Para **Materialize** embutido: binário `materialize` no `PATH` ou `MATERIALIZE_BIN`.
+- Python e dependências (ver `docs/INSTALL.md`).
+- Para textura/PBR: projeto **Paint3D** e, para materialização, binário **`materialize`** (`MATERIALIZE_BIN`) usado pelo `paint3d`.
 
 ## Comandos principais
 
@@ -27,22 +27,22 @@ Pipeline **text-to-3D**: geração de imagem (**Text2D** / FLUX Klein) + **Hunyu
 | `text3d generate "prompt" [-o mesh.glb]` | Texto → imagem → mesh |
 | `text3d generate --from-image img.png -o mesh.glb` | Só Hunyuan (sem Text2D); alias `-i` |
 | `text3d generate … --preset fast\|balanced\|hq` | Perfis (substituem steps/octree/chunks por defeito) |
-| `text3d generate … --texture` (ou `--final`, `--with-texture`) | Mesh + Paint |
-| `text3d generate … --texture --materialize [--materialize-output-dir …]` | Paint + PBR (Materialize CLI) |
-| `text3d texture mesh.glb -i ref.png -o tex.glb` | Textura em mesh existente |
-| `text3d doctor` | PyTorch, CUDA, Paint rasterizer |
+| `text3d generate … --save-reference-image` | Guarda PNG de referência (útil antes de `paint3d texture`) |
+| `paint3d texture mesh.glb -i ref.png -o tex.glb` | Textura (pacote Paint3D) |
+| `paint3d materialize-pbr mesh_tex.glb -o mesh_pbr.glb` | PBR no GLB (Paint3D) |
+| `text3d doctor` | PyTorch, CUDA |
 | `text3d info` | Sistema e GPU |
 | `text3d convert entrada.ply -o saida.glb` | Conversão PLY/OBJ/GLB |
-| `text3d models` | Lista componentes (Text2D, Hunyuan, Paint) |
+| `text3d models` | Lista componentes (Text2D, Hunyuan) |
 | `text3d skill install` | Instala esta skill em `.cursor/skills/text3d/` do projeto alvo |
 
 ## Exemplos
 
 ```bash
 text3d generate "uma cadeira de madeira" -o cadeira.glb
-text3d generate "robô" --preset hq --texture -o robo_tex.glb
+text3d generate "robô" --preset hq -o robo_shape.glb --save-reference-image
+paint3d texture robo_shape.glb -i robo_shape_text2d.png -o robo_tex.glb
 text3d generate --from-image referencia.png -o so_mesh.glb
-text3d texture modelo.glb -i ref.png -o modelo_tex.glb
 text3d doctor
 ```
 
@@ -83,14 +83,14 @@ O sistema aplica **prompt enhancement automático** (v2, framing positivo) que e
 - **Qualidade:** `--preset hq` ou valores altos de steps/octree/chunks (ver `src/text3d/defaults.py`).
 - **Text2D (quando aplicável):** `-W`/`-H`, `--t2d-steps`, `--t2d-guidance`, `--t2d-full-gpu`, `--model`.
 - **Mesh:** `--no-mesh-repair`, `--mesh-smooth`, `--mc-level`.
-- **Materialize:** `--materialize` requer `--texture`; `--materialize-output-dir`, `--materialize-bin`, `--materialize-no-invert`.
 
 ## Variáveis de ambiente (resumo)
 
 | Variável | Função |
 |----------|--------|
 | `TEXT3D_BIN` | Caminho ao `text3d` se não estiver no `PATH` (útil para GameAssets) |
-| `MATERIALIZE_BIN` | Caminho ao `materialize` quando não está no `PATH` |
+| `PAINT3D_BIN` | Caminho ao `paint3d` (batch GameAssets com textura/PBR) |
+| `MATERIALIZE_BIN` | Caminho ao `materialize` quando o `paint3d` precisa dele |
 | `HF_HOME` | Cache Hugging Face |
 
 ## Licenças e pesos
@@ -102,8 +102,9 @@ O sistema aplica **prompt enhancement automático** (v2, framing positivo) que e
 
 | Ferramenta | Ligação |
 |------------|---------|
-| **GameAssets** | Perfil `text3d` no `game.yaml` mapeia para os mesmos flags (incl. Materialize por linha do manifest). |
-| **Materialize** | CLI autónoma para mapas PBR; no Text3D é invocada após Paint quando usas `--materialize`. |
+| **Paint3D** | Textura Hunyuan3D-Paint e `materialize-pbr` após o shape. |
+| **GameAssets** | `game.yaml` com `text3d` + `texture` / `materialize` orquestra `text3d` + `paint3d`. |
+| **Materialize** | CLI invocada pelo `paint3d` para mapas PBR no GLB. |
 
 ## Documentação no repositório
 

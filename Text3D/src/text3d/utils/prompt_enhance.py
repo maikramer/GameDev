@@ -53,7 +53,7 @@ TOXIC_TERMS: tuple[str, ...] = (
 # Descreve o "enquadramento técnico" da imagem: tipo de render + iluminação
 # ---------------------------------------------------------------------------
 _RENDER_PREFIX = (
-    "3D game asset reference render, "
+    "3D game asset reference render, three-quarter view showing depth and volume, "
     "flat ambient lighting from all directions equally, "
     "uniform soft diffuse illumination, "
     "pure white seamless infinite void background on all sides, "
@@ -61,8 +61,7 @@ _RENDER_PREFIX = (
 )
 
 _RENDER_PREFIX_LIGHT = (
-    "clean product render, soft even ambient light, "
-    "white seamless background, isolated centered object"
+    "clean product render, soft even ambient light, white seamless background, isolated centered object"
 )
 
 # ---------------------------------------------------------------------------
@@ -72,13 +71,12 @@ _RENDER_SUFFIX = (
     "vibrant flat colors, "
     "completely shadowless, "
     "matte surface finish, "
+    "full 3D volume visible from all angles, "
     "white background visible beneath and around the object, "
     "clean silhouette, game asset quality"
 )
 
-_RENDER_SUFFIX_LIGHT = (
-    "flat lit, clean render, game asset"
-)
+_RENDER_SUFFIX_LIGHT = "flat lit, clean render, game asset"
 
 # ---------------------------------------------------------------------------
 # Detector de termos já presentes (evitar duplicação)

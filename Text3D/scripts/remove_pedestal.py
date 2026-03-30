@@ -16,7 +16,6 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import Literal
 
 
 def main() -> int:
@@ -160,7 +159,7 @@ Exemplos:
         print(f"Erro durante reparo: {e}", file=sys.stderr)
         return 1
 
-    print(f"\nResultado:")
+    print("\nResultado:")
     print(f"  Vértices: {len(cleaned.vertices):,} (antes: {len(mesh.vertices):,})")
     print(f"  Faces: {len(cleaned.faces):,} (antes: {len(mesh.faces):,})")
 

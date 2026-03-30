@@ -538,6 +538,63 @@ def remove_small_islands(
         return mesh
 
 
+def remove_plate_components(
+    mesh: trimesh.Trimesh,
+    *,
+    flatness_threshold: float = 0.15,
+    aligned_area_threshold: float = 0.55,
+    min_keep: int = 1,
+) -> trimesh.Trimesh:
+    """Remove componentes que são placas/discos separados (não colados ao modelo).
+
+    Uma componente é considerada placa se:
+    - É muito achatada (min_extent/max_extent < ``flatness_threshold``), OU
+    - >55% da sua área de superfície tem normais alinhadas com um só eixo
+
+    Nunca remove todas as componentes — mantém pelo menos ``min_keep`` (a melhor
+    pelo score de ``_component_score``).
+    """
+    try:
+        parts = mesh.split(only_watertight=False)
+    except Exception:
+        return mesh
+    if len(parts) <= 1:
+        return mesh
+
+    def _is_plate(p: trimesh.Trimesh) -> bool:
+        e = sorted(float(x) for x in p.extents)
+        if e[2] < 1e-9:
+            return True
+        if e[0] / e[2] < flatness_threshold:
+            return True
+        try:
+            normals = p.face_normals
+            areas = p.area_faces
+            total = areas.sum()
+            if total > 0:
+                for ax in range(3):
+                    if areas[np.abs(normals[:, ax]) >= 0.7].sum() / total > aligned_area_threshold:
+                        return True
+        except Exception:
+            pass
+        return False
+
+    kept = [p for p in parts if not _is_plate(p)]
+
+    if len(kept) < min_keep:
+        ranked = sorted(parts, key=_component_score, reverse=True)
+        kept = ranked[:min_keep]
+
+    if not kept:
+        return mesh
+    if len(kept) == 1:
+        return kept[0]
+    try:
+        return trimesh.util.concatenate(kept)
+    except Exception:
+        return mesh
+
+
 def _order_cycle_vertices_planar(mesh: trimesh.Trimesh, cycle: list[int]) -> list[int]:
     """Ordena vértices de um ciclo de buraco (ângulo no plano PCA) para fan triangulation."""
     vidx = np.asarray(cycle, dtype=np.int64)
@@ -723,13 +780,64 @@ def _bbox_volume(part: trimesh.Trimesh) -> float:
     return float(e[0] * e[1] * e[2])
 
 
-def keep_largest_component(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
-    """
-    Mantém a componente conexa "principal" (descarta ilhas/placas).
+def _component_score(part: trimesh.Trimesh) -> float:
+    """Score composto para seleccionar o componente "real" vs casca/placa/caixa.
 
-    Usa volume do bounding box como critério em vez de contagem de faces:
-    com octree alto, placas de sombra planas podem ter mais triângulos
-    que o modelo 3D real mas volume AABB muito menor.
+    Combina múltiplas métricas para evitar seleccionar:
+    - Cascas/caixas (normais quase todas cardinais, geométricamente simples)
+    - Placas finas (bbox achatado)
+
+    Score = face_count * anti_flatness * anti_plate * anti_box
+    """
+    n_faces = len(part.faces)
+    if n_faces == 0:
+        return 0.0
+
+    e = sorted(float(x) for x in part.extents)
+    if e[2] < 1e-9:
+        return 0.0
+
+    # Anti-flatness: penaliza componentes achatados (placas)
+    flatness = e[0] / e[2]
+    anti_flat = min(flatness * 2.0, 1.0)
+
+    plate_penalty = 1.0
+    box_penalty = 1.0
+    try:
+        normals = part.face_normals
+        areas = part.area_faces
+        total_area = areas.sum()
+        if total_area > 0:
+            # Anti-plate: >50% área alinhada com UM eixo → provável placa
+            for ax in range(3):
+                aligned_area = areas[np.abs(normals[:, ax]) >= 0.7].sum()
+                if aligned_area / total_area > 0.5:
+                    plate_penalty = 0.1
+                    break
+
+            # Anti-box: normais quase todas cardinais → provável caixa/casca
+            cardinal = np.any(np.abs(normals) >= 0.85, axis=1)
+            cardinal_ratio = float(areas[cardinal].sum() / total_area)
+            if cardinal_ratio > 0.92:
+                box_penalty = 0.01
+            elif cardinal_ratio > 0.85:
+                box_penalty = 0.1
+            else:
+                # Boost para formas orgânicas (normais diversas)
+                box_penalty = 1.0 + (1.0 - cardinal_ratio)
+    except Exception:
+        pass
+
+    return float(n_faces) * anti_flat * plate_penalty * box_penalty
+
+
+def keep_largest_component(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
+    """Mantém a componente "principal" descartando placas/cascas/ilhas.
+
+    Usa score composto (faces × compacidade × anti-flatness × anti-plate)
+    em vez de apenas volume de bbox, para evitar seleccionar:
+    - Cascas ocas que envolvem o modelo (bbox grande, pouca compacidade)
+    - Placas separadas (muitas faces mas achatadas)
     """
     mesh = mesh.copy()
     try:
@@ -738,7 +846,7 @@ def keep_largest_component(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
         return mesh
     if len(parts) <= 1:
         return mesh
-    return max(parts, key=_bbox_volume)
+    return max(parts, key=_component_score)
 
 
 def _boundary_edge_count(mesh: trimesh.Trimesh) -> int:
@@ -772,9 +880,7 @@ def _detect_base_axis_mesh(mesh: trimesh.Trimesh) -> tuple[int, int]:
     return best_axis, best_direction
 
 
-def _bottom_zone_face_mask(
-    mesh: trimesh.Trimesh, axis: int, direction: int, band_frac: float
-) -> np.ndarray:
+def _bottom_zone_face_mask(mesh: trimesh.Trimesh, axis: int, direction: int, band_frac: float) -> np.ndarray:
     """Faces cujo centroide está na faixa inferior (ou superior) ao longo do eixo de suporte."""
     coords = mesh.vertices[:, axis]
     h = float(coords.max() - coords.min())
@@ -793,9 +899,10 @@ def _repair_holes_after_cut(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
     if _boundary_edge_count(m) <= 0:
         return m
     try:
-        import pymeshlab as _pml
         import tempfile as _tf
         from pathlib import Path as _Path
+
+        import pymeshlab as _pml
 
         with _tf.TemporaryDirectory(prefix="cut_repair_") as tmpdir:
             in_ply = str(_Path(tmpdir) / "in.ply")
@@ -1031,6 +1138,7 @@ def _pymeshlab_roundtrip(mesh: trimesh.Trimesh, apply_fn) -> trimesh.Trimesh:
 def manifold_repair(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
     """Repara topologia non-manifold, duplicatas e vértices órfãos via pymeshlab."""
     try:
+
         def _apply(ms):
             ms.meshing_repair_non_manifold_edges()
             ms.meshing_repair_non_manifold_vertices()
@@ -1070,6 +1178,7 @@ def make_watertight(
 
     # Etapa 1: pymeshlab — repair manifold + close holes
     try:
+
         def _apply(ms):
             ms.meshing_repair_non_manifold_edges()
             ms.meshing_repair_non_manifold_vertices()
@@ -1165,6 +1274,7 @@ def taubin_smooth(
     if iterations <= 0:
         return mesh
     try:
+
         def _apply(ms):
             ms.apply_coord_taubin_smoothing(
                 stepsmoothnum=iterations,
@@ -1186,6 +1296,7 @@ def hc_laplacian_smooth(
     if iterations <= 0:
         return mesh
     try:
+
         def _apply(ms):
             for _ in range(iterations):
                 ms.apply_coord_hc_laplacian_smoothing()
@@ -1232,8 +1343,7 @@ def isotropic_remesh(
         import warnings
 
         warnings.warn(
-            "pymeshlab não instalado — isotropic_remesh indisponível. "
-            "pip install pymeshlab",
+            "pymeshlab não instalado — isotropic_remesh indisponível. pip install pymeshlab",
             stacklevel=2,
         )
         return mesh
@@ -1327,6 +1437,140 @@ def _remove_spikes_and_repair(
         return mesh
 
 
+def mesh_quality_check(
+    mesh: trimesh.Trimesh,
+    *,
+    plate_coverage_threshold: float = 0.7,
+    flatness_threshold: float = 0.12,
+    volume_efficiency_threshold: float = 0.15,
+    thickness_ratio_threshold: float = 0.10,
+    band_frac: float = 0.10,
+    normal_align: float = 0.7,
+) -> dict:
+    """Analisa qualidade da mesh e detecta artefactos comuns do image-to-3D.
+
+    Detecta:
+    - **Backing plate**: superfície plana grande numa extremidade de qualquer eixo
+      (coverage > ``plate_coverage_threshold`` na secção transversal do bbox).
+    - **Flat cutout (bbox)**: modelo demasiado fino num eixo do bbox
+      (min/max extent < ``flatness_threshold``).
+    - **Flat cutout (volume)**: volume do convex hull muito pequeno vs bbox
+      (vol_hull/vol_bbox < ``volume_efficiency_threshold``). Detecta meshes que
+      parecem ter 3D no bbox mas são quase 2D na realidade (ex.: folha fina).
+    - **Flat-backed**: espessura mediana ao longo do eixo mais fino é muito baixa
+      (< ``thickness_ratio_threshold``). Detecta meshes com backing plate integrada
+      onde a geometria real está concentrada numa face.
+    - **Watertight**: mesh fechada sem buracos.
+
+    Retorna dict com:
+      ``passed``: bool — True se a mesh é aceitável
+      ``issues``: list[str] — descrição dos problemas
+      ``plate_axes``: list[dict] — eixos com backing plate
+      ``flatness_ratio``: float — min(extents)/max(extents)
+      ``volume_efficiency``: float — convex_hull_vol/bbox_vol
+      ``thickness_ratio``: float — espessura mediana no eixo mais fino
+      ``watertight``: bool
+    """
+    result: dict = {
+        "passed": True,
+        "issues": [],
+        "plate_axes": [],
+        "flatness_ratio": 0.0,
+        "volume_efficiency": 0.0,
+        "thickness_ratio": 0.0,
+        "watertight": False,
+    }
+
+    if len(mesh.faces) == 0:
+        result["passed"] = False
+        result["issues"].append("empty mesh")
+        return result
+
+    extents = mesh.extents
+    e_sorted = sorted(float(x) for x in extents)
+    flatness = e_sorted[0] / e_sorted[2] if e_sorted[2] > 1e-9 else 0
+    result["flatness_ratio"] = round(flatness, 4)
+    result["watertight"] = bool(mesh.is_watertight)
+
+    # --- Flat cutout (bbox) ---
+    if flatness < flatness_threshold:
+        result["passed"] = False
+        result["issues"].append(f"flat cutout bbox (ratio={flatness:.3f})")
+
+    # --- Volume efficiency (convex hull / bbox) ---
+    bbox_vol = float(e_sorted[0] * e_sorted[1] * e_sorted[2])
+    if bbox_vol > 1e-12:
+        try:
+            ch_vol = float(mesh.convex_hull.volume)
+        except Exception:
+            ch_vol = 0.0
+        vol_eff = ch_vol / bbox_vol
+    else:
+        vol_eff = 0.0
+    result["volume_efficiency"] = round(vol_eff, 4)
+
+    if vol_eff < volume_efficiency_threshold:
+        result["passed"] = False
+        result["issues"].append(f"flat cutout volume (efficiency={vol_eff:.3f})")
+
+    # --- Thickness ratio (median depth on thinnest axis) ---
+    min_ax = int(np.argmin(extents))
+    coords = mesh.vertices[:, min_ax]
+    half_range = (float(coords.max()) - float(coords.min())) / 2
+    if half_range > 1e-9:
+        median_c = float(np.median(coords))
+        dists = np.abs(coords - median_c)
+        thickness = float(np.median(dists) / half_range)
+    else:
+        thickness = 0.0
+    result["thickness_ratio"] = round(thickness, 4)
+
+    if thickness < thickness_ratio_threshold:
+        result["passed"] = False
+        result["issues"].append(f"flat-backed (thickness={thickness:.3f})")
+
+    # --- Backing plate (per-axis coverage) ---
+    normals = mesh.face_normals
+    areas = mesh.area_faces
+    centers = mesh.triangles_center
+    bounds = mesh.bounds
+
+    ax_names = ["X", "Y", "Z"]
+    for ax in range(3):
+        lo = float(bounds[0, ax])
+        hi = float(bounds[1, ax])
+        h = hi - lo
+        if h < 1e-8:
+            continue
+
+        other = [i for i in range(3) if i != ax]
+        cross_area = float(extents[other[0]] * extents[other[1]])
+        if cross_area < 1e-12:
+            continue
+
+        for side_label, band_lo, band_hi in [
+            ("min", lo, lo + band_frac * h),
+            ("max", hi - band_frac * h, hi),
+        ]:
+            in_band = (centers[:, ax] >= band_lo) & (centers[:, ax] <= band_hi)
+            aligned = np.abs(normals[:, ax]) >= normal_align
+            flat_in_band = in_band & aligned
+            flat_area = float(areas[flat_in_band].sum())
+            coverage = flat_area / cross_area
+
+            if coverage > plate_coverage_threshold:
+                result["passed"] = False
+                plate_info = {
+                    "axis": ax_names[ax],
+                    "side": side_label,
+                    "coverage": round(coverage, 3),
+                }
+                result["plate_axes"].append(plate_info)
+                result["issues"].append(f"backing plate {ax_names[ax]}-{side_label} (coverage={coverage:.2f})")
+
+    return result
+
+
 def repair_mesh(
     mesh: trimesh.Trimesh,
     *,
@@ -1413,7 +1657,11 @@ def repair_mesh(
         with contextlib.suppress(Exception):
             m = _remove_spikes_and_repair(m)
 
-    # 7. Keep largest
+    # 7a. Remover componentes-placa separadas
+    with contextlib.suppress(Exception):
+        m = remove_plate_components(m)
+
+    # 7b. Keep best component
     if keep_largest:
         m = keep_largest_component(m)
 

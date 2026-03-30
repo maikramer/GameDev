@@ -203,6 +203,75 @@ class HunyuanTextTo3DGenerator:
             return mesh, pil_image
         return mesh
 
+    def generate_with_quality_check(
+        self,
+        prompt: str,
+        *,
+        max_retries: int = 3,
+        t2d_seed: int | None = None,
+        return_reference_image: bool = False,
+        on_retry: Any = None,
+        **kwargs: Any,
+    ) -> trimesh.Trimesh | tuple[trimesh.Trimesh, Image.Image]:
+        """Generate com verificação de qualidade e retry automático.
+
+        Gera mesh, verifica se tem backing plates/flat cutouts. Se falhar,
+        regenera com seed diferente até ``max_retries`` tentativas.
+
+        ``on_retry``: callback(attempt, seed, quality_report) chamado a cada retry.
+        Retorna a melhor mesh encontrada (ou a última se todas falharem).
+        """
+        from .utils.mesh_repair import mesh_quality_check
+
+        best_mesh = None
+        best_image = None
+        best_score: float = -1.0
+        seed = t2d_seed
+
+        for attempt in range(1, max_retries + 1):
+            self._log(f"Tentativa {attempt}/{max_retries} (seed={seed})")
+
+            result = self.generate(
+                prompt,
+                t2d_seed=seed,
+                return_reference_image=True,
+                **kwargs,
+            )
+            mesh, ref_image = result  # type: ignore[misc]
+
+            quality = mesh_quality_check(mesh)
+            score = quality["flatness_ratio"]
+            if quality["passed"]:
+                score += 1.0
+
+            self._log(
+                f"  Qualidade: {'PASS' if quality['passed'] else 'FAIL'} "
+                f"(flatness={quality['flatness_ratio']:.3f}, "
+                f"plates={len(quality['plate_axes'])}, "
+                f"issues={quality['issues']})"
+            )
+
+            if score > best_score:
+                best_score = score
+                best_mesh = mesh
+                best_image = ref_image
+
+            if quality["passed"]:
+                break
+
+            if attempt < max_retries:
+                import random
+
+                old_seed = seed
+                seed = random.randint(0, 2**31)
+                if on_retry:
+                    on_retry(attempt, seed, quality)
+                self._log(f"  Retry: seed {old_seed} → {seed}")
+
+        if return_reference_image:
+            return best_mesh, best_image  # type: ignore[return-value]
+        return best_mesh  # type: ignore[return-value]
+
     def generate_from_image(
         self,
         image: str | Path | Image.Image,

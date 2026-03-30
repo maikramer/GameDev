@@ -1,8 +1,9 @@
 #!/bin/bash
+# Conveniência para dev: cria `.venv` e dependências. Instalação oficial: ../../docs/INSTALLING.md (`./install.sh text3d` na raiz GameDev).
 #
-# Text3D — Setup completo (venv + deps + custom_rasterizer)
+# Text3D — Setup completo (venv + deps; textura/PBR no projeto Paint3D)
 #
-# Pipeline padrão: Text2D → Hunyuan3D shape → repair → remesh → Paint (textura)
+# Pipeline: Text2D → Hunyuan3D shape → repair/remesh (sem Paint neste pacote)
 #
 # Uso:
 #   bash scripts/setup.sh                   # setup padrão
@@ -58,7 +59,7 @@ if command -v nvidia-smi &>/dev/null; then
     log_info "CUDA (driver): $CUDA_VERSION"
   fi
 else
-  log_warn "CUDA não detectado. Textura (Paint) requer GPU CUDA."
+  log_warn "CUDA não detectado. Text3D shape em CPU é possível; Paint3D (textura) em geral requer CUDA."
 fi
 
 # Autodetectar CUDA_HOME
@@ -118,44 +119,15 @@ fi
 log_step "Instalando Text3D (editable)..."
 pip install -e "$PROJECT_ROOT"
 
-# ── custom_rasterizer (Hunyuan3D-Paint) ───────────────────────────────
-log_step "custom_rasterizer (Hunyuan3D-Paint)..."
-if python -c "import torch; import custom_rasterizer" 2>/dev/null; then
-  log_info "custom_rasterizer já instalado."
-elif command -v nvcc &>/dev/null || [ -x "${CUDA_HOME:-}/bin/nvcc" ]; then
-  TMP_CLONE="${HUNYUAN3D_CLONE:-/tmp/Hunyuan3D-2}"
-  CR_DIR="$TMP_CLONE/hy3dgen/texgen/custom_rasterizer"
-
-  if [ ! -d "$CR_DIR" ]; then
-    log_info "Sparse-clone do Hunyuan3D-2..."
-    rm -rf "$TMP_CLONE"
-    git clone --depth 1 --filter=blob:none --sparse \
-      https://github.com/Tencent-Hunyuan/Hunyuan3D-2.git "$TMP_CLONE"
-    cd "$TMP_CLONE"
-    git sparse-checkout set hy3dgen/texgen/custom_rasterizer
-    cd "$PROJECT_ROOT"
-  fi
-
-  log_info "Compilando custom_rasterizer (CUDA_HOME=${CUDA_HOME:-auto})..."
-  pip install -e "$CR_DIR" --no-build-isolation
-
-  if python -c "import torch; import custom_rasterizer" 2>/dev/null; then
-    log_info "custom_rasterizer OK."
-  else
-    log_warn "Compilou mas falhou na importação. Verifique CUDA/nvcc."
-  fi
-else
-  log_warn "nvcc não encontrado — custom_rasterizer não compilado."
-  log_warn "Sem ele, --texture / Paint não funciona."
-  log_warn "Instale CUDA Toolkit e execute: bash scripts/install_custom_rasterizer.sh"
-fi
+# ── Paint3D (textura Hunyuan) ─────────────────────────────────────────
+log_step "Paint3D (opcional)..."
+log_info "Textura/PBR: instala o pacote ../Paint3D (./install.sh paint3d na raiz GameDev). Não faz parte deste venv."
 
 # ── Verificação final ─────────────────────────────────────────────────
 log_step "Verificando instalação..."
 python -c "import torch; print(f'  PyTorch: {torch.__version__} (CUDA={torch.cuda.is_available()})')"
 python -c "import pymeshlab; print(f'  PyMeshLab: OK')" 2>/dev/null || log_warn "pymeshlab não disponível"
 python -c "import text3d; print('  Text3D: OK')" 2>/dev/null || log_warn "text3d não importável"
-python -c "import torch; import custom_rasterizer; print('  custom_rasterizer: OK')" 2>/dev/null || log_warn "custom_rasterizer não disponível (--texture desativado)"
 
 echo ""
 echo "=========================================="
@@ -165,11 +137,11 @@ echo ""
 echo "Para ativar o ambiente:"
 echo "  source $VENV_DIR/bin/activate"
 echo ""
-echo "Pipeline padrão (shape + reparo + remesh + textura):"
+echo "Shape (Text2D → Hunyuan):"
 echo "  text3d generate 'um guerreiro medieval' -o guerreiro.glb"
 echo ""
-echo "Só geometria (sem textura):"
-echo "  text3d generate 'um guerreiro medieval' -o guerreiro.glb --no-texture"
+echo "Depois, textura com Paint3D (outro venv ou PATH):"
+echo "  paint3d texture guerreiro.glb -i guerreiro_text2d.png -o guerreiro_tex.glb"
 echo ""
 echo "Diagnóstico:"
 echo "  text3d doctor"

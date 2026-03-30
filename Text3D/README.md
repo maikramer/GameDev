@@ -4,7 +4,9 @@
 
 Os **valores por defeito** do CLI/API estão em [`src/text3d/defaults.py`](src/text3d/defaults.py): perfil **~6 GB VRAM** (CUDA) **validado na prática** (boa qualidade text-to-3D com os mesmos números que o comando sem flags extra). O **Text2D (FLUX)** usa **CPU offload** por defeito (`DEFAULT_T2D_CPU_OFFLOAD`), senão o modelo não cabe na GPU. Em GPU grande, `--t2d-full-gpu`. `--low-vram` força o **Hunyuan** em CPU (último recurso).
 
-**Atalhos:** `--preset fast` (menos tempo/VRAM), `balanced` (igual aos defeitos), `hq` (alta qualidade, GPU grande) — ajusta `--steps`, `--octree-resolution` e `--num-chunks` em conjunto (se usares `--preset`, não esperes que `--steps`/`--octree-resolution`/`--num-chunks` “ganhem” ao perfil — o preset tem prioridade). **`text3d doctor`** verifica PyTorch, VRAM e se o **Paint** pode carregar (`custom_rasterizer`). O CLI define `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` se a variável ainda não existir (menos fragmentação de VRAM).
+**Atalhos:** `--preset fast` (menos tempo/VRAM), `balanced` (igual aos defeitos), `hq` (alta qualidade, GPU grande) — ajusta `--steps`, `--octree-resolution` e `--num-chunks` em conjunto (se usares `--preset`, não esperes que `--steps`/`--octree-resolution`/`--num-chunks` “ganhem” ao perfil — o preset tem prioridade). **`text3d doctor`** verifica PyTorch e VRAM. O CLI define `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` se a variável ainda não existir (menos fragmentação de VRAM).
+
+**Textura e PBR** não fazem parte deste pacote: usa **[Paint3D](../Paint3D)** (`paint3d texture` / `materialize-pbr`) ou **[GameAssets](../GameAssets)** com `text3d.texture` no perfil.
 
 > **Licença dos pesos Hunyuan:** [Tencent Hunyuan 3D Community License](https://huggingface.co/tencent/Hunyuan3D-2mini) — lê o ficheiro `LICENSE` nos repositórios ([2mini](https://huggingface.co/tencent/Hunyuan3D-2mini), [Hunyuan3D-2 / Paint](https://huggingface.co/tencent/Hunyuan3D-2)): restrições de território, política de uso aceitável e obrigações. **Text2D (FLUX):** o default SDNQ no monorepo não é o mesmo regime que o BF16 Apache 2.0 da BFL — ver [Text2D/README](../Text2D/README.md) e [GameDev/README](../README.md).
 
@@ -19,7 +21,22 @@ Os **valores por defeito** do CLI/API estão em [`src/text3d/defaults.py`](src/t
 | RAM | 16GB | 32GB |
 | Disco | ~20GB livres | Mais (cache Hugging Face) |
 
-## Instalação (monorepo `GameDev`)
+## Instalação
+
+### Oficial (monorepo)
+
+Na **raiz** do repositório GameDev:
+
+```bash
+cd /caminho/para/GameDev
+./install.sh text3d
+```
+
+Instala o pacote em modo editável no `Text3D/.venv`, config em `~/.config/text3d`, wrappers em `~/.local/bin` (Linux/macOS) ou `%USERPROFILE%\bin` (Windows). Variável opcional: `PYTHON_CMD`. Opção CLI: `--skip-env-config` (não escrever `env.sh` / `env.bat`). Textura: instala **[Paint3D](../Paint3D)** à parte.
+
+Equivalente: `gamedev-install text3d`. Guia geral: [docs/INSTALLING.md](../docs/INSTALLING.md).
+
+### Manual / avançado
 
 O [`config/requirements.txt`](config/requirements.txt) referencia `text2d @ file:../Text2D` e `hy3dgen` a partir do [repositório Hunyuan3D-2](https://github.com/Tencent-Hunyuan/Hunyuan3D-2).
 
@@ -30,7 +47,11 @@ pip install -r config/requirements.txt
 pip install -e .
 ```
 
-**Windows:** `python -m venv .venv` e `.\.venv\Scripts\Activate.ps1`; ou `scripts\setup.ps1`. **Instalador** (`python scripts/installer.py`): cria `.venv`, instala dependências e gera `text3d.cmd` em `%USERPROFILE%\bin` (adiciona essa pasta ao PATH). **Linux/macOS:** `bash scripts/setup.sh` ou o mesmo instalador (wrappers em `~/.local/bin`). O interpretador por defeito é `python` no Windows e `python3` noutros (sobrescrever com `PYTHON_CMD`).
+**Windows:** `python -m venv .venv` e `.\.venv\Scripts\Activate.ps1`; ou `scripts\setup.ps1`.
+
+### Atalho local
+
+`python scripts/installer.py` (ou `scripts/run_installer.sh` / `scripts/install.sh`) usa a mesma lógica que `./install.sh text3d` quando executado a partir de `Text3D/`.
 
 ## Uso
 
@@ -41,15 +62,11 @@ pip install -e .
 | `text3d info` | Mostra configuração, GPU, cache e ambiente |
 | `text3d models` | Lista modelos disponíveis |
 | `text3d convert FILE` | Converte mesh entre formatos (PLY → GLB, etc.) |
-| `text3d texture FILE` | Aplica textura Paint a um mesh existente |
 | `text3d skill install` | Instala Agent Skill Cursor no projeto |
 
 ```bash
-# Por defeito: mesh + Hunyuan3D-Paint (textura). Só geometria: --no-texture
+# Mesh só geometria (Text2D → Hunyuan3D)
 text3d generate "um robô futurista" -o robo.glb
-
-# Explícito (equivalente ao defeito): --texture ou --final
-text3d generate "robô" --final -o robo_tex.glb
 
 # GPU com mais VRAM (equivalente ao trio HQ do model card)
 text3d generate "cadeira" --preset hq -W 1024 -H 1024
@@ -65,40 +82,13 @@ text3d info
 text3d models
 text3d convert mesh.ply --output mesh.glb
 
-# Só shape (sem Paint): CI ou sem custom_rasterizer
-text3d generate "espada" --no-texture -o espada_shape.glb
-
-# Textura num mesh já gerado (Hunyuan3D-Paint — 1.ª vez: download grande)
-text3d texture outputs/meshes/robo.glb -i minha_ref.png -o robo_tex.glb
+# Textura num mesh já gerado (projeto Paint3D)
+paint3d texture outputs/meshes/robo.glb -i minha_ref.png -o robo_tex.glb
 ```
 
-### Textura (`Hunyuan3D-Paint`)
+### Textura e PBR
 
-**Comportamento por defeito:** `text3d generate` corre o **Paint** depois do shape (GLB texturizado). Constante em [`defaults.py`](src/text3d/defaults.py): `DEFAULT_TEXTURE = True`. Para desligar o Paint no comando: `--no-texture`. Para desligar globalmente (ex.: CI): `TEXT3D_DEFAULT_TEXTURE=0`.
-
-O shape (**Hunyuan3D-2mini**) não inclui material; o **Paint** gera UV + textura a partir da **mesma imagem** que condiciona o 3D (no fluxo com prompt, é a imagem Text2D). Usa o repositório [`tencent/Hunyuan3D-2`](https://huggingface.co/tencent/Hunyuan3D-2) (subpastas `hunyuan3d-delight-v2-0` e `hunyuan3d-paint-v2-0-turbo`), não só o mini. Por defeito os modelos Paint usam **CPU offload**; em GPU grande experimenta `--paint-full-gpu` no `generate` ou no `text3d texture`.
-
-**Rasterizador:** o texgen precisa de um rasterizador GPU. O Text3D inclui um **shim automático** que usa **[nvdiffrast](https://github.com/NVlabs/nvdiffrast)** (NVIDIA) — instala-se com `pip`, sem compilação manual de extensões CUDA. Se preferires a extensão nativa original, ver [`docs/PAINT_SETUP.md`](docs/PAINT_SETUP.md).
-
-**Aliases:** `--texture` (defeito) e `--final` forçam mesh + pintura; não combinar com `--no-texture`.
-
-### PBR completo no GLB (Materialize)
-
-Depois do Paint, o **Materialize CLI** (projeto [`Materialize`](../Materialize) no monorepo) gera **normal**, **oclusão** e **metallic-roughness** a partir do albedo embutido; o Text3D empacota tudo num **glTF 2.0** e grava o GLB.
-
-**Um comando (texto → mesh → textura → PBR):**
-
-```bash
-text3d generate "a wooden crate" --texture --materialize --preset fast -o caixa_pbr.glb
-```
-
-**Guardar mapas PNG para inspeção:**
-
-```bash
-text3d generate "..." --texture --materialize -o out.glb --materialize-output-dir ./maps
-```
-
-**Requisito extra:** binário `materialize` no `PATH` (ou `MATERIALIZE_BIN`). Guia completo, achados em hardware modesto (~6 GB), tabelas de flags e referências: **[docs/PBR_MATERIALIZE.md](docs/PBR_MATERIALIZE.md)**.
+Fluxo completo texto → mesh → textura → mapas PBR: **[GameAssets](../GameAssets)** (`gameassets batch` com `text3d.texture` / `materialize`) ou encadear manualmente `text3d generate` → `paint3d texture` → `paint3d materialize-pbr`. Detalhes do Materialize: **[docs/PBR_MATERIALIZE.md](docs/PBR_MATERIALIZE.md)** e **[Paint3D/docs/PAINT_SETUP.md](../Paint3D/docs/PAINT_SETUP.md)**.
 
 ### Parâmetros principais (defeitos = perfil ~6 GB, validado)
 
@@ -109,7 +99,6 @@ Ver [`defaults.py`](src/text3d/defaults.py). Resumo:
 | `-W` / `-H` | 768 | 1024 |
 | `--steps` | 24 | 30 |
 | `--guidance` | 5.0 | 5.0 |
-| `--texture` | **ligado** (Paint) | `--no-texture` só geometria |
 | `--octree-resolution` | 256 | 380 |
 | `--num-chunks` | 8000 | 20000 |
 | `--low-vram` | off | força Hunyuan em CPU se ainda OOM |
@@ -137,16 +126,16 @@ with HunyuanTextTo3DGenerator(verbose=True) as gen:
 ```
 Text3D/
 ├── src/text3d/
-│   ├── defaults.py        # Padrões ~6GB vs constantes HQ + Paint HF
+│   ├── defaults.py        # Padrões ~6GB vs constantes HQ
 │   ├── generator.py       # HunyuanTextTo3DGenerator
-│   ├── painter.py         # Hunyuan3D-Paint (hy3dgen.texgen)
-│   ├── materialize_pbr.py # Paint → Materialize CLI → GLB PBR (glTF)
 │   ├── cli.py
 │   └── utils/
 │       └── env.py         # PYTORCH_CUDA_ALLOC_CONF ao iniciar o CLI
 ├── docs/
-│   └── PBR_MATERIALIZE.md # Fluxo PBR, requisitos, flags, achados
+│   └── PBR_MATERIALIZE.md # → Paint3D
 ├── config/requirements.txt
+
+# Textura, Materialize PBR e Upscale IA → pacote Paint3D (../Paint3D)
 ```
 
 ## Limitações do image-to-3D e pós-processo
@@ -172,15 +161,15 @@ text3d generate "objeto" --no-mesh-repair
 | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Resolução de problemas |
 | [docs/EXAMPLES.md](docs/EXAMPLES.md) | Exemplos de uso avançado |
 | [docs/API.md](docs/API.md) | Referência da API Python |
-| [docs/PAINT_SETUP.md](docs/PAINT_SETUP.md) | Setup do Hunyuan3D-Paint + custom_rasterizer |
-| [docs/PBR_MATERIALIZE.md](docs/PBR_MATERIALIZE.md) | Fluxo PBR com Materialize CLI |
+| [docs/PAINT_SETUP.md](docs/PAINT_SETUP.md) | Redireciona para Paint3D (textura Hunyuan) |
+| [docs/PBR_MATERIALIZE.md](docs/PBR_MATERIALIZE.md) | Redireciona para Paint3D + Materialize |
 
 ## Variáveis de Ambiente
 
 | Variável | Descrição |
 |----------|-----------|
 | `TEXT2D_MODEL_ID` | Override do modelo HF para a fase Text2D |
-| `MATERIALIZE_BIN` | Caminho para o binário `materialize` (se não estiver no `PATH`) |
+| `MATERIALIZE_BIN` | Usado pelo **paint3d** (materialize-pbr), não pelo `text3d` |
 | `HF_HOME` | Diretório de cache Hugging Face (defeito: `~/.cache/huggingface`) |
 | `PYTORCH_CUDA_ALLOC_CONF` | Configuração CUDA (auto-definida como `expandable_segments:True` se vazia) |
 | `TEXT3D_ALLOW_SHARED_GPU` | Permitir GPU partilhada com outros processos (`1` = sim) |
