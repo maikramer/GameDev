@@ -24,12 +24,47 @@ from diffusers import DiffusionPipeline
 from diffusers import EulerAncestralDiscreteScheduler, DDIMScheduler, UniPCMultistepScheduler
 
 
+def _quantize_model_nf4(model: "torch.nn.Module") -> "torch.nn.Module":
+    """Substitui nn.Linear por Linear4bit (NF4) in-place — reduz ~75% de VRAM dos pesos."""
+    try:
+        import bitsandbytes as bnb
+    except ImportError:
+        return model
+
+    for name, module in list(model.named_modules()):
+        if not isinstance(module, torch.nn.Linear):
+            continue
+        parts = name.rsplit(".", 1)
+        parent = model if len(parts) == 1 else dict(model.named_modules())[parts[0]]
+        attr = parts[-1] if len(parts) > 1 else parts[0]
+
+        quant_linear = bnb.nn.Linear4bit(
+            module.in_features,
+            module.out_features,
+            bias=module.bias is not None,
+            compute_dtype=torch.float16,
+            quant_type="nf4",
+        )
+        quant_linear.weight = bnb.nn.Params4bit(
+            module.weight.data,
+            requires_grad=False,
+            quant_type="nf4",
+            compress_statistics=False,
+        )
+        if module.bias is not None:
+            quant_linear.bias = module.bias
+        quant_linear = quant_linear.to(module.weight.device)
+        setattr(parent, attr, quant_linear)
+
+    return model
+
+
 class multiviewDiffusionNet:
     def __init__(self, config) -> None:
         self.device = config.device
 
         cfg_path = config.multiview_cfg_path
-        custom_pipeline = os.path.join(os.path.dirname(__file__),"..","hunyuanpaintpbr")
+        custom_pipeline = os.path.join(os.path.dirname(__file__), "..", "hunyuanpaintpbr")
         cfg = OmegaConf.load(cfg_path)
         self.cfg = cfg
         self.mode = self.cfg.model.params.stable_diffusion_config.custom_pipeline[2:]
@@ -41,33 +76,41 @@ class multiviewDiffusionNet:
             repo_id=config.multiview_pretrained_path,
             allow_patterns=[f"{weights_subfolder}/*"],
         )
-
         model_path = os.path.join(model_path, weights_subfolder)
+
         pipeline = DiffusionPipeline.from_pretrained(
             model_path,
-            custom_pipeline=custom_pipeline, 
-            torch_dtype=torch.float16
+            custom_pipeline=custom_pipeline,
+            torch_dtype=torch.float16,
         )
 
-        pipeline.scheduler = UniPCMultistepScheduler.from_config(pipeline.scheduler.config, timestep_spacing="trailing")
+        pipeline.scheduler = UniPCMultistepScheduler.from_config(
+            pipeline.scheduler.config, timestep_spacing="trailing"
+        )
         pipeline.set_progress_bar_config(disable=True)
         pipeline.eval()
         setattr(pipeline, "view_size", cfg.model.params.get("view_size", 320))
-        low_vram = getattr(config, "low_vram", False)
-        self.pipeline = pipeline.to(self.device)
-        if low_vram:
-            if hasattr(self.pipeline, "enable_vae_slicing"):
-                self.pipeline.enable_vae_slicing()
-            if hasattr(self.pipeline, "enable_vae_tiling"):
-                self.pipeline.enable_vae_tiling()
-            if hasattr(self.pipeline, "enable_attention_slicing"):
-                self.pipeline.enable_attention_slicing()
 
+        self.pipeline = pipeline.to(self.device)
+
+        if hasattr(self.pipeline, "unet") and self.pipeline.unet is not None:
+            _quantize_model_nf4(self.pipeline.unet)
+        if hasattr(self.pipeline, "text_encoder") and self.pipeline.text_encoder is not None:
+            _quantize_model_nf4(self.pipeline.text_encoder)
+        torch.cuda.empty_cache()
+
+        if hasattr(self.pipeline, "enable_vae_slicing"):
+            self.pipeline.enable_vae_slicing()
+        if hasattr(self.pipeline, "enable_vae_tiling"):
+            self.pipeline.enable_vae_tiling()
+
+        # DINO sempre em CPU: ~1.1 GB fp16 que não cabem na GPU com UNet.
+        # O output é movido para CUDA no forward (~ms de overhead).
+        self._dino_on_cpu = True
         if hasattr(self.pipeline.unet, "use_dino") and self.pipeline.unet.use_dino:
             from ..hunyuanpaintpbr.unet.modules import Dino_v2
 
-            self.dino_v2 = Dino_v2(config.dino_ckpt_path).to(torch.float16)
-            self.dino_v2 = self.dino_v2.to("cpu" if low_vram else self.device)
+            self.dino_v2 = Dino_v2(config.dino_ckpt_path).to(torch.float16).to("cpu")
 
     def seed_everything(self, seed):
         random.seed(seed)
@@ -97,12 +140,8 @@ class multiviewDiffusionNet:
             control_images[i] = control_images[i].resize((custom_view_size, custom_view_size))
             if control_images[i].mode == "L":
                 control_images[i] = control_images[i].point(lambda x: 255 if x > 1 else 0, mode="1")
-        _gen_dev = (
-            torch.device("cuda")
-            if self.device == "cuda" and torch.cuda.is_available()
-            else self.pipeline.device
-        )
-        kwargs = dict(generator=torch.Generator(device=_gen_dev).manual_seed(0))
+
+        kwargs = dict(generator=torch.Generator(device=self.pipeline.device).manual_seed(0))
 
         num_view = len(control_images) // 2
         normal_image = [[control_images[i] for i in range(num_view)]]
@@ -116,7 +155,7 @@ class multiviewDiffusionNet:
 
         if hasattr(self.pipeline.unet, "use_dino") and self.pipeline.unet.use_dino:
             dino_hidden_states = self.dino_v2(input_images[0])
-            if isinstance(dino_hidden_states, torch.Tensor) and self.device != "cpu":
+            if self._dino_on_cpu and isinstance(dino_hidden_states, torch.Tensor):
                 dino_hidden_states = dino_hidden_states.to(torch.device(self.device))
             kwargs["dino_hidden_states"] = dino_hidden_states
 
@@ -140,7 +179,6 @@ class multiviewDiffusionNet:
 
         if "pbr" in self.mode:
             mvd_image = {"albedo": mvd_image[:num_view], "mr": mvd_image[num_view:]}
-            # mvd_image = {'albedo':mvd_image[:num_view]}
         else:
             mvd_image = {"hdr": mvd_image}
 

@@ -31,6 +31,7 @@ dependencies = [
     "pymeshlab>=2022.2",
     "xatlas>=0.0.9",
     "scipy>=1.10.0",
+    "bitsandbytes>=0.43.0",
     "bpy==5.1.0",
     # Hunyuan3D-2.1: código vendored em paint3d/hy3dpaint/ (de Tencent-Hunyuan/Hunyuan3D-2.1)
     # Real-ESRGAN (RRDBNet + RealESRGANer): vendored — evita basicsr (pip falha no Python 3.13)

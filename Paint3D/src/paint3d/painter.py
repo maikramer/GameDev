@@ -12,7 +12,6 @@ O rasterizador CUDA é fornecido por **nvdiffrast** (NVIDIA), registado como
 
 from __future__ import annotations
 
-import os
 import shutil
 import sys
 import tempfile
@@ -86,14 +85,14 @@ def apply_hunyuan_paint(
     paint_cpu_offload: bool = _defaults.DEFAULT_PAINT_CPU_OFFLOAD,
     max_num_view: int = _defaults.DEFAULT_PAINT_MAX_VIEWS,
     view_resolution: int = _defaults.DEFAULT_PAINT_VIEW_RESOLUTION,
-    low_vram: bool = False,
     use_remesh: bool = True,
     verbose: bool = False,
 ) -> trimesh.Trimesh:
     """
     Aplica Hunyuan3D-Paint 2.1: mesh + imagem de referência → mesh com UV e textura/PBR (GLB).
 
-    ``image`` deve alinhar semanticamente com a geometria (ex.: a mesma imagem usada no image-to-3D).
+    O UNet é quantizado a 8-bit (bitsandbytes) automaticamente se disponível,
+    reduzindo ~50% de VRAM dos pesos. DINO permanece em CPU se a GPU for limitada.
     """
     check_paint_rasterizer_available()
 
@@ -107,16 +106,11 @@ def apply_hunyuan_paint(
 
     from .hy3dpaint.textureGenPipeline import Hunyuan3DPaintConfig, Hunyuan3DPaintPipeline
 
-    low = bool(low_vram) or os.environ.get("PAINT3D_LOW_VRAM", "").strip().lower() in ("1", "true", "yes")
-    if low:
-        max_num_view = min(int(max_num_view), 4)
-        view_resolution = min(int(view_resolution), 384)
-
     if verbose:
         print(
             f"[Paint 2.1] hy3dpaint={hy3dpaint_root}\n"
             f"  repo={model_repo} weights_subfolder={subfolder} offload={paint_cpu_offload} "
-            f"max_views={max_num_view} res={view_resolution} low_vram={low}"
+            f"max_views={max_num_view} res={view_resolution}"
         )
 
     clear_cuda_memory()
@@ -137,7 +131,6 @@ def apply_hunyuan_paint(
             im.save(ref_path)
 
         config = Hunyuan3DPaintConfig(max_num_view, view_resolution)
-        config.low_vram = low
         config.multiview_pretrained_path = model_repo
         config.multiview_weights_subfolder = subfolder
         config.multiview_cfg_path = str(cfg_yaml)
@@ -148,10 +141,7 @@ def apply_hunyuan_paint(
         else:
             config.device = "cpu"
 
-        if low and torch.cuda.is_available():
-            config.render_size = 512
-            config.texture_size = 1024
-        elif paint_cpu_offload and torch.cuda.is_available():
+        if paint_cpu_offload and torch.cuda.is_available():
             config.render_size = 1024
             config.texture_size = 2048
         elif not paint_cpu_offload and torch.cuda.is_available():
@@ -161,16 +151,6 @@ def apply_hunyuan_paint(
             config.texture_size = min(config.texture_size, 2048)
 
         pipe = Hunyuan3DPaintPipeline(config)
-
-        if paint_cpu_offload and torch.cuda.is_available() and not low:
-            mv = pipe.models.get("multiview_model")
-            pl = getattr(mv, "pipeline", None) if mv is not None else None
-            if pl is not None and hasattr(pl, "enable_model_cpu_offload"):
-                try:
-                    pl.enable_model_cpu_offload()
-                except Exception:
-                    if verbose:
-                        print("[Paint 2.1] enable_model_cpu_offload não aplicável; continua.")
 
         try:
             with torch.inference_mode():
@@ -206,7 +186,6 @@ def paint_file_to_file(
     paint_cpu_offload: bool | None = None,
     max_num_view: int | None = None,
     view_resolution: int | None = None,
-    low_vram: bool = False,
     use_remesh: bool = True,
     verbose: bool = False,
 ) -> Path:
@@ -216,7 +195,6 @@ def paint_file_to_file(
     offload = _defaults.DEFAULT_PAINT_CPU_OFFLOAD if paint_cpu_offload is None else paint_cpu_offload
     nviews = _defaults.DEFAULT_PAINT_MAX_VIEWS if max_num_view is None else max_num_view
     vres = _defaults.DEFAULT_PAINT_VIEW_RESOLUTION if view_resolution is None else view_resolution
-    low = bool(low_vram) or os.environ.get("PAINT3D_LOW_VRAM", "").strip().lower() in ("1", "true", "yes")
 
     mesh = load_mesh_trimesh(mesh_path)
     out = apply_hunyuan_paint(
@@ -227,7 +205,6 @@ def paint_file_to_file(
         paint_cpu_offload=offload,
         max_num_view=nviews,
         view_resolution=vres,
-        low_vram=low,
         use_remesh=use_remesh,
         verbose=verbose,
     )

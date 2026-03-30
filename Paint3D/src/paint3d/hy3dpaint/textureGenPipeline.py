@@ -52,7 +52,6 @@ class Hunyuan3DPaintConfig:
         self.resolution = resolution
         self.bake_exp = 4
         self.merge_method = "fast"
-        self.low_vram = False
 
         # view selection
         self.candidate_camera_azims = [0, 90, 180, 270, 0, 180]

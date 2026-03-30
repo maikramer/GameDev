@@ -27,6 +27,7 @@ opencv-python-headless>=4.8.0,<4.12
 pymeshlab>=2022.2
 xatlas>=0.0.9
 scipy>=1.10.0
+bitsandbytes>=0.43.0
 # API Blender (conversão OBJ→GLB em mesh_utils); PyPI alinha com Blender 5.1
 bpy==5.1.0
 # basicsr / realesrgan PyPI: build quebrado no Python 3.13 (basicsr setup KeyError __version__);

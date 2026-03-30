@@ -23,8 +23,7 @@ class imageSuperNet:
         from paint3d.hy3dpaint.utils.rrdbnet_arch_standalone import RRDBNet
 
         model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=4)
-        low = getattr(config, "low_vram", False)
-        dev = torch.device("cpu") if low else None
+        # RealESRGAN em CPU: ~64 MB de pesos, inferência rápida em CPU, liberta VRAM para o UNet.
         upsampler = RealESRGANer(
             scale=4,
             model_path=config.realesrgan_ckpt_path,
@@ -33,8 +32,8 @@ class imageSuperNet:
             tile=0,
             tile_pad=10,
             pre_pad=0,
-            half=not low,
-            device=dev,
+            half=False,
+            device=torch.device("cpu"),
             gpu_id=None,
         )
         self.upsampler = upsampler
