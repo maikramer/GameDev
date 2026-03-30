@@ -30,13 +30,18 @@ Ambos os repositórios podem ser **gated**: aceita os termos no Hub e define `HF
 
 ## Instalação
 
-### Via instalador unificado (recomendado)
+### Oficial (monorepo)
+
+Na **raiz** do repositório GameDev:
 
 ```bash
+cd /caminho/para/GameDev
 ./install.sh text2sound
 ```
 
-### Setup manual
+Guia geral: [docs/INSTALLING.md](../docs/INSTALLING.md).
+
+### Manual / desenvolvimento
 
 ```bash
 cd Text2Sound
@@ -44,7 +49,7 @@ bash scripts/setup.sh
 source .venv/bin/activate
 ```
 
-### Instalador standalone
+### Atalho local
 
 ```bash
 python3 scripts/installer.py --use-venv

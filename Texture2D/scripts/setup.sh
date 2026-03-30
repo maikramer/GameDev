@@ -1,4 +1,7 @@
 #!/bin/bash
+# Conveniência para dev: cria `.venv` e instala em modo editável.
+# Instalação oficial: ../../docs/INSTALLING.md (`./install.sh texture2d` na raiz GameDev).
+#
 # Texture2D — ambiente virtual e dependências
 
 set -e

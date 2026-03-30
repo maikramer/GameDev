@@ -1,0 +1,36 @@
+# Dependências de stable-audio-tools==0.0.18 (METADATA em PyPI), excepto pandas.
+# pandas vem de requirements.txt (>=2.2.3, wheel cp313). Não usar stable-audio-tools
+# >=0.0.13 via resolver: puxa flash-attn (build) ou pandas==2.0.2 (sem wheel 3.13).
+
+# Resolver não pode puxar numpy 1.23.x (build falha em Py3.13 / setuptools isolado).
+numpy>=1.26.4,<3
+
+alias-free-torch==0.0.6
+auraloss==0.4.0
+descript-audio-codec==1.0.0
+einops
+einops-exts
+ema-pytorch==0.2.3
+encodec==0.1.1
+gradio>=3.42.0
+huggingface_hub
+importlib-resources==5.12.0
+k-diffusion==0.1.1
+# laion-clap fixa numpy==1.23.5 (sem wheel cp313) — não necessário para inferência CLI
+local-attention==1.8.6
+prefigure==0.0.9
+pytorch_lightning==2.1.0
+# 1.4.1 não tem wheel cp313; stable-audio aceita PyWavelets compatível em runtime
+PyWavelets>=1.6.0
+safetensors
+# 0.1.99 não tem wheel cp313 (build falha)
+sentencepiece>=0.2.0
+torchmetrics==0.11.4
+tqdm
+transformers
+v-diffusion-pytorch==0.0.2
+vector-quantize-pytorch==1.14.41
+# 0.15.4 puxa pathtools (setup usa imp, removido no Py3.13)
+wandb>=0.16.0
+webdataset==0.2.100
+x-transformers<1.27.0

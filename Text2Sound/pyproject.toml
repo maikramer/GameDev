@@ -6,23 +6,23 @@ build-backend = "setuptools.build_meta"
 name = "text2sound"
 version = "0.1.0"
 description = "CLI Text-to-Audio com Stable Audio Open 1.0 — áudio estéreo 44.1 kHz"
+readme = "README.md"
+authors = [{ name = "Text2Sound Project" }]
 requires-python = ">=3.10"
 license = "MIT"
 dependencies = [
     "torch>=2.1.0",
     "torchaudio>=0.16.0",
-    "stable-audio-tools>=0.0.13",
     "einops>=0.7.0",
     "soundfile>=0.12.0",
     "click>=8.1.0",
     "rich>=13.0.0",
     "rich-click>=1.8.0",
-    "gamedev-shared",
+    "gamedev-shared @ file:../Shared",
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Topic :: Multimedia :: Sound/Audio",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",

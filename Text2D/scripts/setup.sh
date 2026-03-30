@@ -1,4 +1,7 @@
 #!/bin/bash
+# Conveniência para dev: cria `.venv` e instala em modo editável.
+# Instalação oficial do monorepo: ../../README.md ou ../../docs/INSTALLING.md (`./install.sh text2d` na raiz GameDev).
+#
 # Text2D — ambiente virtual e dependências
 
 set -e

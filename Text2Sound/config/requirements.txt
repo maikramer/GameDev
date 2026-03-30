@@ -5,8 +5,11 @@
 torch>=2.1.0
 torchaudio>=0.16.0
 
-# Stable Audio pipeline (modelo + inferência de difusão)
-stable-audio-tools>=0.0.13
+# Wheel cp313 (evita build desde fonte de pandas antigo sem setuptools no isolamento PEP 517)
+pandas>=2.2.3
+
+# stable-audio-tools: instalado pelo instalador unificado (wheel 0.0.18 --no-deps +
+# requirements-stable-audio-deps.txt) para evitar flash-attn ou pandas==2.0.2.
 
 # Tensor rearrange (batch → stereo channels)
 einops>=0.7.0

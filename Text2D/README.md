@@ -13,7 +13,22 @@ CLI de **text-to-imagem** com [FLUX.2 Klein 4B](https://huggingface.co/black-for
 
 **Licença dos pesos:** o default é o checkpoint SDNQ [Disty0](https://huggingface.co/Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic), que no Hugging Face está associado a **FLUX Non-Commercial** (`flux-non-commercial-license` no metadata), **distinto** do oficial [black-forest-labs/FLUX.2-klein-4B](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B) (**Apache 2.0** no model card). Para uso comercial com menos ambiguidade, define `TEXT2D_MODEL_ID=black-forest-labs/FLUX.2-klein-4B` (mais VRAM). Resumo: [Licenças no monorepo](../README.md).
 
-## Instalação rápida
+## Instalação
+
+### Oficial (monorepo)
+
+Na **raiz** do repositório GameDev (pasta com `install.sh` e `Shared/`):
+
+```bash
+cd /caminho/para/GameDev
+./install.sh text2d
+```
+
+Equivalente: `gamedev-install text2d`. Guia geral: [docs/INSTALLING.md](../docs/INSTALLING.md).
+
+### Manual / desenvolvimento (`scripts/setup.sh`)
+
+`setup.sh` **não** substitui o instalador oficial; é conveniência para criar `Text2D/.venv` e `pip install -e` localmente.
 
 ```bash
 cd Text2D
@@ -26,16 +41,17 @@ text2d --help
 - Com **NVIDIA**, `setup.sh` instala PyTorch com CUDA (em **Python 3.13+** usa wheels do **PyPI**; em 3.10–3.12 usa o índice `cu121`/`cu118`).
 - Dependências de runtime: [`config/requirements.txt`](config/requirements.txt). Desenvolvimento/testes: [`config/requirements-dev.txt`](config/requirements-dev.txt) ou `pip install -e ".[dev]"`.
 
-### Instalador (paridade Text3D)
+### Atalho local (`scripts/installer.py`)
 
 Com `.venv` já criado (ex.: após `setup.sh`):
 
 ```bash
-chmod +x scripts/install.sh
-./scripts/install.sh --use-venv --prefix ~/.local
+chmod +x scripts/run_installer.sh scripts/install.sh
+./scripts/run_installer.sh --use-venv --prefix ~/.local
+# ou: ./scripts/install.sh … (delega para run_installer.sh)
 ```
 
-Instalação completa no `python3` do sistema (PyTorch + requirements + pacote + wrappers em `PREFIX/bin`):
+Instalação a partir do `python3` do sistema (PyTorch + requirements + pacote + wrappers em `PREFIX/bin`):
 
 ```bash
 python3 scripts/installer.py --prefix ~/.local
@@ -108,8 +124,9 @@ Text2D/
 │   └── requirements-dev.txt
 ├── scripts/
 │   ├── setup.sh           # Setup do venv + deps
-│   ├── install.sh         # Instalador com wrappers
-│   └── installer.py       # Instalador Python standalone
+│   ├── run_installer.sh   # Chama installer.py (implementação)
+│   ├── install.sh         # Delega para run_installer.sh (atalho local)
+│   └── installer.py       # Lógica partilhada com gamedev-install
 └── tests/
 ```
 

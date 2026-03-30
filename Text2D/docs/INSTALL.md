@@ -8,7 +8,8 @@
 | [`config/requirements-dev.txt`](../config/requirements-dev.txt) | Inclui `requirements.txt` + pytest |
 | [`scripts/setup.sh`](../scripts/setup.sh) | Cria `.venv`, PyTorch (CUDA/CPU), `pip install -e .` |
 | [`scripts/installer.py`](../scripts/installer.py) | Instalação estilo Text3D + wrappers em `--prefix/bin` |
-| [`scripts/install.sh`](../scripts/install.sh) | `exec python3 installer.py "$@"` |
+| [`scripts/run_installer.sh`](../scripts/run_installer.sh) | Executa `installer.py` (implementação) |
+| [`scripts/install.sh`](../scripts/install.sh) | Delega para `run_installer.sh` (não confundir com `GameDev/install.sh` na raiz) |
 
 ## `scripts/setup.sh` (recomendado para desenvolvimento)
 
@@ -33,15 +34,17 @@ text2d info
 Instalação para `~/.local` ou outro `--prefix`:
 
 ```bash
-chmod +x scripts/install.sh
-./scripts/install.sh --prefix ~/.local
+chmod +x scripts/run_installer.sh scripts/install.sh
+./scripts/run_installer.sh --prefix ~/.local
 ```
 
 Com **venv** existente (só reinstala o pacote no `.venv` e gera wrappers):
 
 ```bash
-./scripts/install.sh --use-venv --prefix ~/.local
+./scripts/run_installer.sh --use-venv --prefix ~/.local
 ```
+
+(`./scripts/install.sh` é equivalente a `run_installer.sh`.)
 
 Sem `.venv` e com `--use-venv` → **erro** (mensagem a indicar `./scripts/setup.sh`).
 

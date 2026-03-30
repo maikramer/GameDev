@@ -25,6 +25,11 @@ from gamedev_shared.installer.base import default_python_command
 class Text2SoundInstaller(PythonProjectInstaller):
     """Instalador específico do Text2Sound (PyTorch + CUDA)."""
 
+    def install_in_venv(self) -> None:
+        from gamedev_shared.installer.text2sound_extras import text2sound_install_in_venv
+
+        text2sound_install_in_venv(self)
+
     def __init__(self, args: argparse.Namespace) -> None:
         super().__init__(
             project_name="Text2Sound",

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Conveniência para dev: venv + editable install. Instalação oficial: ../../docs/INSTALLING.md (`./install.sh text2sound` na raiz GameDev).
+#
 # Text2Sound — setup rápido (venv + dependências + editable install)
 set -euo pipefail
 

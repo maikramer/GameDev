@@ -32,37 +32,36 @@ texture2d generate "weathered surface" --preset Stone -o wall.png
 
 ## Instalação
 
-### Desenvolvimento local
+### Oficial (monorepo)
+
+Na **raiz** do repositório GameDev:
+
+```bash
+cd /caminho/para/GameDev
+./install.sh texture2d
+# Windows: .\install.ps1 texture2d
+```
+
+O instalador **cria** `Texture2D/.venv` se não existir, instala em modo editável e gera wrappers em `~/.local/bin`. Lista de ferramentas: `./install.sh --list`. Guia geral: [docs/INSTALLING.md](../docs/INSTALLING.md).
+
+### Manual / desenvolvimento
 
 ```bash
 ./scripts/setup.sh
 source .venv/bin/activate
 ```
 
-O `setup.sh` instala `gamedev-shared` a partir de `../Shared` (caminho do monorepo) e o pacote `texture2d` em modo editável.
+O `setup.sh` instala `gamedev-shared` a partir de `../Shared` e o pacote `texture2d` em modo editável (conveniência dev; não substitui o fluxo oficial acima).
 
-### Instalador unificado (raiz do monorepo GameDev)
-
-A partir da raiz do repositório:
-
-```bash
-./install.sh texture2d
-# Windows: .\install.ps1 texture2d
-```
-
-(O instalador unificado **cria** `Texture2D/.venv` se não existir, instala lá em modo editável e os wrappers em `~/.local/bin` apontam para esse Python. `scripts/setup.sh` continua opcional.)
-
-Lista ferramentas: `./install.sh --list`.
-
-### System-wide (script do projeto)
+### Atalho local
 
 ```bash
 python3 scripts/installer.py --prefix ~/.local
-# ou com venv:
+# ou: ./scripts/run_installer.sh / ./scripts/install.sh
 python3 scripts/installer.py --use-venv
 ```
 
-O instalador não usa PyTorch local — apenas dependências em `config/requirements.txt` e `gamedev-shared`.
+Sem PyTorch local — apenas `config/requirements.txt` e `gamedev-shared`.
 
 ## Comandos
 
@@ -136,8 +135,9 @@ Texture2D/
 │   └── requirements-dev.txt
 ├── scripts/
 │   ├── setup.sh           # Setup do venv + deps
-│   ├── install.sh         # Instalador com wrappers
-│   └── installer.py       # Instalador standalone
+│   ├── run_installer.sh   # Chama installer.py
+│   ├── install.sh         # Delega para run_installer.sh
+│   └── installer.py       # Lógica partilhada com gamedev-install
 └── tests/
 ```
 
