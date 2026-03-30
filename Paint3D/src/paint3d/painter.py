@@ -1,18 +1,19 @@
 """
-Textura com Hunyuan3D-Paint (hy3dgen.texgen.Hunyuan3DPaintPipeline).
+Textura com Hunyuan3D-Paint 2.1 (``hy3dpaint.textureGenPipeline.Hunyuan3DPaintPipeline``).
 
-Requer pesos em ``tencent/Hunyuan3D-2`` (subpastas delight + paint), descarregados na primeira execução.
+Requer o código em ``third_party/Hunyuan3D-2.1/hy3dpaint`` (submodule) ou ``HUNYUAN3D_21_ROOT``,
+pesos em Hugging Face (``tencent/Hunyuan3D-2.1``, pasta ``hunyuan3d-paintpbr-v2-1``),
+e o checkpoint Real-ESRGAN em ``hy3dpaint/ckpt/RealESRGAN_x4plus.pth``.
 
 O rasterizador CUDA é fornecido por **nvdiffrast** (NVIDIA), registado como
-``custom_rasterizer`` em ``sys.modules`` antes de qualquer importação do texgen.
-Isto elimina a necessidade de compilar a extensão C++/CUDA manualmente.
+``custom_rasterizer`` em ``sys.modules`` antes de importar o renderer 2.1.
 """
 
 from __future__ import annotations
 
+import shutil
 import sys
-from collections.abc import Iterator
-from contextlib import contextmanager
+import tempfile
 from pathlib import Path
 
 import torch
@@ -22,6 +23,7 @@ from PIL import Image
 from gamedev_shared.gpu import clear_cuda_memory
 
 from . import defaults as _defaults
+from .hy3d21_paths import default_realesrgan_ckpt, ensure_hy3dpaint_on_path, resolve_hy3dpaint_root
 from .utils.mesh_io import load_mesh_trimesh, save_glb
 
 
@@ -41,120 +43,6 @@ def _ensure_custom_rasterizer_shim() -> None:
     sys.modules["custom_rasterizer"] = custom_rasterizer_shim  # type: ignore[assignment]
 
 
-PAINT_DELIGHT_STEPS = 20
-PAINT_MULTIVIEW_STEPS_TURBO = 8
-PAINT_RENDER_SIZE = 1024
-PAINT_TEXTURE_SIZE = 1024
-
-
-@contextmanager
-def _paint_config_optimized(render_size: int, texture_size: int) -> Iterator[None]:
-    """
-    Força device='cpu' (evita OOM no carregamento) e aplica render/texture size
-    reduzidos para acelerar baking e reduzir VRAM.
-    """
-    import hy3dgen.texgen.pipelines as pip_mod
-
-    orig = pip_mod.Hunyuan3DTexGenConfig.__init__
-
-    def wrapped_init(self, *args, **kwargs):
-        orig(self, *args, **kwargs)
-        self.device = "cpu"
-        self.render_size = render_size
-        self.texture_size = texture_size
-
-    pip_mod.Hunyuan3DTexGenConfig.__init__ = wrapped_init  # type: ignore[assignment]
-    try:
-        yield
-    finally:
-        pip_mod.Hunyuan3DTexGenConfig.__init__ = orig  # type: ignore[assignment]
-
-
-def _patch_delight_steps(pipe, steps: int) -> None:
-    """Reduz os steps do Delight (SD InstructPix2Pix) de 50 para ``steps``."""
-    delight = pipe.models.get("delight_model")
-    if delight is None:
-        return
-
-    def patched_call(self, image):
-        image = image.resize((512, 512))
-
-        import cv2
-        import numpy as np
-
-        if image.mode == "RGBA":
-            image_array = np.array(image)
-            alpha_channel = image_array[:, :, 3]
-            kernel = np.ones((3, 3), np.uint8)
-            alpha_channel = cv2.erode(alpha_channel, kernel, iterations=1)
-            image_array[alpha_channel == 0, :3] = 255
-            image_array[:, :, 3] = alpha_channel
-            image = Image.fromarray(image_array)
-            image_tensor = torch.tensor(np.array(image) / 255.0).to(self.device)
-            alpha = image_tensor[:, :, 3:]
-            rgb_target = image_tensor[:, :, :3]
-        else:
-            image_tensor = torch.tensor(np.array(image) / 255.0).to(self.device)
-            alpha = torch.ones_like(image_tensor)[:, :, :1]
-            rgb_target = image_tensor[:, :, :3]
-
-        image = image.convert("RGB")
-        image = self.pipeline(
-            prompt="",
-            image=image,
-            generator=torch.manual_seed(42),
-            height=512,
-            width=512,
-            num_inference_steps=steps,
-            image_guidance_scale=self.cfg_image,
-            guidance_scale=self.cfg_text,
-        ).images[0]
-
-        image_tensor = torch.tensor(np.array(image) / 255.0).to(self.device)
-        rgb_src = image_tensor[:, :, :3]
-        image = self.recorrect_rgb(rgb_src, rgb_target, alpha)
-        image = image[:, :, :3] * image[:, :, 3:] + torch.ones_like(image[:, :, :3]) * (1.0 - image[:, :, 3:])
-        image = Image.fromarray((image.cpu().numpy() * 255).astype(np.uint8))
-        return image
-
-    import types
-
-    delight.__call__ = types.MethodType(patched_call, delight)
-
-
-def _patch_multiview_steps(pipe, steps: int) -> None:
-    """Reduz os steps do Multiview diffusion de 30 para ``steps``."""
-    mv = pipe.models.get("multiview_model")
-    if mv is None:
-        return
-
-    def patched_call(self, input_images, control_images, camera_info):
-        self.seed_everything(0)
-        if not isinstance(input_images, list):
-            input_images = [input_images]
-        input_images = [img.resize((self.view_size, self.view_size)) for img in input_images]
-        for i in range(len(control_images)):
-            control_images[i] = control_images[i].resize((self.view_size, self.view_size))
-            if control_images[i].mode == "L":
-                control_images[i] = control_images[i].point(lambda x: 255 if x > 1 else 0, mode="1")
-
-        kwargs = dict(generator=torch.Generator(device=self.pipeline.device).manual_seed(0))
-        num_view = len(control_images) // 2
-        kwargs["width"] = self.view_size
-        kwargs["height"] = self.view_size
-        kwargs["num_in_batch"] = num_view
-        kwargs["camera_info_gen"] = [camera_info]
-        kwargs["camera_info_ref"] = [[0]]
-        kwargs["normal_imgs"] = [[control_images[i] for i in range(num_view)]]
-        kwargs["position_imgs"] = [[control_images[i + num_view] for i in range(num_view)]]
-
-        return self.pipeline(input_images, num_inference_steps=steps, **kwargs).images
-
-    import types
-
-    mv.__call__ = types.MethodType(patched_call, mv)
-
-
 def check_paint_rasterizer_available() -> None:
     """Garante que ``custom_rasterizer`` está disponível (shim nvdiffrast ou extensão nativa)."""
     _ensure_custom_rasterizer_shim()
@@ -163,8 +51,27 @@ def check_paint_rasterizer_available() -> None:
     except (ImportError, ModuleNotFoundError, OSError) as e:
         raise RuntimeError(
             "Rasterizador indisponível: nem nvdiffrast nem custom_rasterizer foram encontrados.\n"
-            "Instala nvdiffrast: pip install git+https://github.com/NVlabs/nvdiffrast.git --no-build-isolation"
+            "Instala nvdiffrast: pip install git+https://github.com/NVlabs/nvdiffrast.git --no-build-isolation\n"
+            "Ou compila hy3dpaint/custom_rasterizer (ver PAINT_SETUP.md)."
         ) from e
+
+
+def check_hunyuan3d21_environment() -> tuple[bool, str]:
+    """
+    Verifica clone hy3dpaint e peso Real-ESRGAN.
+    Devolve (ok, mensagem ou caminho do hy3dpaint).
+    """
+    try:
+        root = resolve_hy3dpaint_root()
+    except FileNotFoundError as e:
+        return False, str(e)
+    ckpt = default_realesrgan_ckpt(root)
+    if not ckpt.is_file():
+        return False, f"Real-ESRGAN em falta: {ckpt} (ver PAINT_SETUP.md)"
+    cfg = root / "cfgs" / "hunyuan-paint-pbr.yaml"
+    if not cfg.is_file():
+        return False, f"Config em falta: {cfg}"
+    return True, str(root)
 
 
 def apply_hunyuan_paint(
@@ -174,47 +81,101 @@ def apply_hunyuan_paint(
     model_repo: str = _defaults.DEFAULT_PAINT_HF_REPO,
     subfolder: str = _defaults.DEFAULT_PAINT_SUBFOLDER,
     paint_cpu_offload: bool = _defaults.DEFAULT_PAINT_CPU_OFFLOAD,
+    max_num_view: int = _defaults.DEFAULT_PAINT_MAX_VIEWS,
+    view_resolution: int = _defaults.DEFAULT_PAINT_VIEW_RESOLUTION,
+    use_remesh: bool = True,
     verbose: bool = False,
 ) -> trimesh.Trimesh:
     """
-    Aplica Hunyuan3D-Paint: mesh + imagem de referência → mesh com UV e textura embutida (GLB).
+    Aplica Hunyuan3D-Paint 2.1: mesh + imagem de referência → mesh com UV e textura/PBR (GLB).
 
     ``image`` deve alinhar semanticamente com a geometria (ex.: a mesma imagem usada no image-to-3D).
     """
     check_paint_rasterizer_available()
 
-    from hy3dgen.texgen import Hunyuan3DPaintPipeline
+    ok, msg = check_hunyuan3d21_environment()
+    if not ok:
+        raise RuntimeError(msg)
+
+    hy3dpaint_root = ensure_hy3dpaint_on_path()
+    cfg_yaml = hy3dpaint_root / "cfgs" / "hunyuan-paint-pbr.yaml"
+    ckpt_path = default_realesrgan_ckpt(hy3dpaint_root)
+
+    from textureGenPipeline import Hunyuan3DPaintConfig, Hunyuan3DPaintPipeline
 
     if verbose:
-        print(f"[Paint] repo={model_repo} subfolder={subfolder} offload={paint_cpu_offload}")
         print(
-            f"[Paint] delight_steps={PAINT_DELIGHT_STEPS} "
-            f"multiview_steps={PAINT_MULTIVIEW_STEPS_TURBO} "
-            f"render={PAINT_RENDER_SIZE} texture={PAINT_TEXTURE_SIZE}"
+            f"[Paint 2.1] hy3dpaint={hy3dpaint_root}\n"
+            f"  repo={model_repo} weights_subfolder={subfolder} offload={paint_cpu_offload} "
+            f"max_views={max_num_view} res={view_resolution}"
         )
 
     clear_cuda_memory()
 
-    with _paint_config_optimized(PAINT_RENDER_SIZE, PAINT_TEXTURE_SIZE):
-        pipe = Hunyuan3DPaintPipeline.from_pretrained(model_repo, subfolder=subfolder)
+    with tempfile.TemporaryDirectory(prefix="paint3d_h21_") as td_raw:
+        tdir = Path(td_raw)
+        mesh_in = tdir / "input_mesh.glb"
+        ref_path = tdir / "ref.png"
+        out_obj = tdir / "textured_mesh.obj"
+        out_glb = tdir / "textured_mesh.glb"
 
-    _patch_delight_steps(pipe, PAINT_DELIGHT_STEPS)
-    _patch_multiview_steps(pipe, PAINT_MULTIVIEW_STEPS_TURBO)
+        save_glb(mesh, mesh_in)
 
-    if torch.cuda.is_available() and paint_cpu_offload:
-        pipe.enable_model_cpu_offload()
+        if isinstance(image, (str, Path)):
+            shutil.copy2(image, ref_path)
+        else:
+            im = image.convert("RGB") if image.mode != "RGB" else image
+            im.save(ref_path)
 
-    if isinstance(image, (str, Path)):
-        img_arg: str | Image.Image = str(image)
-    else:
-        img_arg = image.convert("RGB") if image.mode != "RGB" else image
+        config = Hunyuan3DPaintConfig(max_num_view, view_resolution)
+        config.multiview_pretrained_path = model_repo
+        config.multiview_weights_subfolder = subfolder
+        config.multiview_cfg_path = str(cfg_yaml)
+        config.realesrgan_ckpt_path = str(ckpt_path)
 
-    try:
-        with torch.inference_mode():
-            textured = pipe(mesh, img_arg)
-    finally:
-        del pipe
-        clear_cuda_memory()
+        if torch.cuda.is_available():
+            config.device = "cuda"
+        else:
+            config.device = "cpu"
+
+        if paint_cpu_offload and torch.cuda.is_available():
+            config.render_size = 1024
+            config.texture_size = 2048
+        elif not paint_cpu_offload and torch.cuda.is_available():
+            pass
+        else:
+            config.render_size = min(config.render_size, 1024)
+            config.texture_size = min(config.texture_size, 2048)
+
+        pipe = Hunyuan3DPaintPipeline(config)
+
+        if paint_cpu_offload and torch.cuda.is_available():
+            mv = pipe.models.get("multiview_model")
+            pl = getattr(mv, "pipeline", None) if mv is not None else None
+            if pl is not None and hasattr(pl, "enable_model_cpu_offload"):
+                try:
+                    pl.enable_model_cpu_offload()
+                except Exception:
+                    if verbose:
+                        print("[Paint 2.1] enable_model_cpu_offload não aplicável; continua.")
+
+        try:
+            with torch.inference_mode():
+                pipe(
+                    mesh_path=str(mesh_in),
+                    image_path=str(ref_path),
+                    output_mesh_path=str(out_obj),
+                    use_remesh=use_remesh,
+                    save_glb=True,
+                )
+        finally:
+            del pipe
+            clear_cuda_memory()
+
+        if not out_glb.is_file():
+            raise FileNotFoundError(f"Paint 2.1 não gerou GLB esperado: {out_glb}")
+
+        textured = load_mesh_trimesh(out_glb)
 
     if not isinstance(textured, trimesh.Trimesh):
         raise TypeError(f"Paint devolveu {type(textured)}, esperado Trimesh")
@@ -230,16 +191,17 @@ def paint_file_to_file(
     model_repo: str | None = None,
     subfolder: str | None = None,
     paint_cpu_offload: bool | None = None,
+    max_num_view: int | None = None,
+    view_resolution: int | None = None,
+    use_remesh: bool = True,
     verbose: bool = False,
-    materialize: bool = False,
-    materialize_output_dir: str | Path | None = None,
-    materialize_bin: str | Path | None = None,
-    materialize_no_invert: bool = False,
 ) -> Path:
-    """Atalho: carrega mesh, pinta, exporta GLB. Com ``materialize=True``, embute PBR (Materialize CLI)."""
+    """Atalho: carrega mesh, pinta com Hunyuan3D-Paint 2.1 (PBR baked), exporta GLB."""
     repo = model_repo or _defaults.DEFAULT_PAINT_HF_REPO
     sub = subfolder or _defaults.DEFAULT_PAINT_SUBFOLDER
     offload = _defaults.DEFAULT_PAINT_CPU_OFFLOAD if paint_cpu_offload is None else paint_cpu_offload
+    nviews = _defaults.DEFAULT_PAINT_MAX_VIEWS if max_num_view is None else max_num_view
+    vres = _defaults.DEFAULT_PAINT_VIEW_RESOLUTION if view_resolution is None else view_resolution
 
     mesh = load_mesh_trimesh(mesh_path)
     out = apply_hunyuan_paint(
@@ -248,18 +210,11 @@ def paint_file_to_file(
         model_repo=repo,
         subfolder=sub,
         paint_cpu_offload=offload,
+        max_num_view=nviews,
+        view_resolution=vres,
+        use_remesh=use_remesh,
         verbose=verbose,
     )
-    if materialize:
-        from .materialize_pbr import apply_materialize_pbr
-
-        out = apply_materialize_pbr(
-            out,
-            materialize_bin=materialize_bin,
-            save_sidecar_maps_dir=materialize_output_dir,
-            roughness_from_one_minus_smoothness=not materialize_no_invert,
-            verbose=verbose,
-        )
 
     output_path = Path(output_path)
     save_glb(out, output_path)

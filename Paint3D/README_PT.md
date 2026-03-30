@@ -2,7 +2,9 @@
 
 **Documentação:** [English (`README.md`)](README.md) · Português (esta página)
 
-Texturização 3D: **Hunyuan3D-Paint** (textura multivista) + **Materialize PBR** (normal, AO, metallic-roughness) + **Upscale IA** (Real-ESRGAN).
+Texturização 3D: **Hunyuan3D-Paint 2.1** (multivista PBR no GLB exportado) + **Upscale IA** (Real-ESRGAN).
+
+É necessário o código **Hunyuan3D-2.1**: submodule `third_party/Hunyuan3D-2.1` ou variável `HUNYUAN3D_21_ROOT`. Ver [docs/PAINT_SETUP.md](docs/PAINT_SETUP.md).
 
 ## Instalação
 
@@ -15,13 +17,13 @@ cd /caminho/para/GameDev
 ./install.sh paint3d
 ```
 
-Instala o pacote no `Paint3D/.venv`, PyTorch, **nvdiffrast** e wrappers em `~/.local/bin` (ou equivalente no Windows). Ver [docs/INSTALLING_PT.md](../docs/INSTALLING_PT.md) · [EN](../docs/INSTALLING.md)
+Instala o pacote no `Paint3D/.venv`, PyTorch, **nvdiffrast**, submodule **Hunyuan3D-2.1**, pesos **Real-ESRGAN** quando possível, e wrappers. Ver [docs/INSTALLING_PT.md](../docs/INSTALLING_PT.md) · [EN](../docs/INSTALLING.md)
 
 ### Manual / avançado
 
 ```bash
 cd Paint3D
-pip install -e .              # core (paint + materialize)
+pip install -e .              # core (paint)
 pip install -e ".[upscale]"   # + upscale IA (spandrel)
 ```
 
@@ -30,14 +32,8 @@ O instalador oficial trata do **nvdiffrast** (`--no-build-isolation`); em instal
 ## CLI
 
 ```bash
-# Texturizar mesh com imagem de referência
+# Texturizar mesh (GLB com material PBR do Paint 2.1)
 paint3d texture mesh.glb -i ref.png -o mesh_textured.glb
-
-# Texturizar + PBR
-paint3d texture mesh.glb -i ref.png -o mesh_pbr.glb --materialize
-
-# Só PBR (mesh já texturizada)
-paint3d materialize-pbr mesh_textured.glb -o mesh_pbr.glb
 
 # Diagnóstico (rasterizador, GPU)
 paint3d doctor
@@ -58,11 +54,11 @@ textured = apply_hunyuan_paint(mesh, "reference.png")
 ## Dependências
 
 - **gamedev-shared** (monorepo GameDev — GPU, logging)
-- **hy3dgen** (Hunyuan3D-2 — pipeline de textura)
-- **nvdiffrast** (NVIDIA — rasterizador diferenciável)
-- **spandrel** (opcional — upscale IA)
+- **Hunyuan3D-2.1 `hy3dpaint`** (submodule ou `HUNYUAN3D_21_ROOT`)
+- **pymeshlab**, **xatlas**, **omegaconf**, **basicsr**, **realesrgan**
+- **nvdiffrast** (NVIDIA — shim do rasterizador)
+- **spandrel** (opcional — upscale IA no GLB exportado)
 
 ## Documentação
 
 - [Setup do rasterizador](docs/PAINT_SETUP.md)
-- [Materialize PBR](docs/PBR_MATERIALIZE.md)

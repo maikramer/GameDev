@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Compila e instala custom_rasterizer (Hunyuan3D-Paint) no venv ativo.
+# Compila e instala custom_rasterizer (Hunyuan3D-Paint 2.1 / hy3dpaint) no venv ativo.
 #
 # Uso (a partir da raiz Paint3D):
 #   source .venv/bin/activate
@@ -41,17 +41,14 @@ if ! command -v nvcc &>/dev/null; then
   fi
 fi
 
-TMP="${HUNYUAN3D_CLONE:-/tmp/Hunyuan3D-2}"
-CR_DIR="$TMP/hy3dgen/texgen/custom_rasterizer"
+MONOREPO="$(cd "$ROOT/.." && pwd)"
+CR_DIR="${HUNYUAN3D_21_CUSTOM_RASTER:-$MONOREPO/third_party/Hunyuan3D-2.1/hy3dpaint/custom_rasterizer}"
 
 if [[ ! -d "$CR_DIR" ]]; then
-  echo "[STEP] Sparse-clone do Hunyuan3D-2 em $TMP ..."
-  rm -rf "$TMP"
-  git clone --depth 1 --filter=blob:none --sparse \
-    https://github.com/Tencent-Hunyuan/Hunyuan3D-2.git "$TMP"
-  cd "$TMP"
-  git sparse-checkout set hy3dgen/texgen/custom_rasterizer
-  cd "$ROOT"
+  echo "[ERROR] custom_rasterizer não encontrado: $CR_DIR" >&2
+  echo "  Na raiz do monorepo: git submodule update --init third_party/Hunyuan3D-2.1" >&2
+  echo "  Ou define HUNYUAN3D_21_CUSTOM_RASTER para hy3dpaint/custom_rasterizer" >&2
+  exit 1
 fi
 
 "$VENV_PY" -c "import torch; print('torch', torch.__version__, 'cuda', torch.version.cuda)" 2>/dev/null || {

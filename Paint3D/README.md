@@ -2,7 +2,9 @@
 
 **Language:** English · [Português (`README_PT.md`)](README_PT.md)
 
-3D texturing: **Hunyuan3D-Paint** (multiview) + **Materialize PBR** (normal, AO, metallic-roughness) + **AI upscale** (Real-ESRGAN).
+3D texturing: **Hunyuan3D-Paint 2.1** (multiview PBR in the exported GLB) + optional **AI upscale** (Real-ESRGAN).
+
+Requires the **Hunyuan3D-2.1** tree: submodule `third_party/Hunyuan3D-2.1` or env `HUNYUAN3D_21_ROOT`. See [docs/PAINT_SETUP.md](docs/PAINT_SETUP.md).
 
 ## Installation
 
@@ -15,13 +17,13 @@ cd /path/to/GameDev
 ./install.sh paint3d
 ```
 
-Installs the package in `Paint3D/.venv`, PyTorch, **nvdiffrast**, and wrappers in `~/.local/bin` (or Windows equivalent). See [docs/INSTALLING.md](../docs/INSTALLING.md).
+Installs the package in `Paint3D/.venv`, PyTorch, **nvdiffrast**, initializes submodule **Hunyuan3D-2.1**, downloads **Real-ESRGAN** weights when possible, and adds wrappers. See [docs/INSTALLING.md](../docs/INSTALLING.md).
 
 ### Manual / advanced
 
 ```bash
 cd Paint3D
-pip install -e .              # core (paint + materialize)
+pip install -e .              # core (paint)
 pip install -e ".[upscale]"   # + AI upscale (spandrel)
 ```
 
@@ -30,14 +32,8 @@ The official installer handles **nvdiffrast** (`--no-build-isolation`); for manu
 ## CLI
 
 ```bash
-# Texture mesh with reference image
+# Texture mesh with reference image (GLB includes PBR material from Paint 2.1)
 paint3d texture mesh.glb -i ref.png -o mesh_textured.glb
-
-# Texture + PBR
-paint3d texture mesh.glb -i ref.png -o mesh_pbr.glb --materialize
-
-# PBR only (already textured mesh)
-paint3d materialize-pbr mesh_textured.glb -o mesh_pbr.glb
 
 # Diagnostics (rasterizer, GPU)
 paint3d doctor
@@ -58,11 +54,11 @@ textured = apply_hunyuan_paint(mesh, "reference.png")
 ## Dependencies
 
 - **gamedev-shared** (GameDev monorepo — GPU, logging)
-- **hy3dgen** (Hunyuan3D-2 — texture pipeline)
-- **nvdiffrast** (NVIDIA — differentiable rasterizer)
-- **spandrel** (optional — AI upscale)
+- **Hunyuan3D-2.1 `hy3dpaint`** (submodule or `HUNYUAN3D_21_ROOT`) — texture pipeline
+- **pymeshlab**, **xatlas**, **omegaconf**, **basicsr**, **realesrgan** (super-resolution inside paint)
+- **nvdiffrast** (NVIDIA — differentiable rasterizer shim)
+- **spandrel** (optional — AI upscale on exported GLB)
 
 ## Documentation
 
 - [Rasterizer setup](docs/PAINT_SETUP.md)
-- [Materialize PBR](docs/PBR_MATERIALIZE.md)

@@ -2,7 +2,7 @@
 """
 Paint3D - CLI Principal
 
-Texturização 3D: Hunyuan3D-Paint + Materialize PBR + Upscale IA.
+Texturização 3D: Hunyuan3D-Paint 2.1 (PBR no GLB) + Upscale IA.
 """
 
 import os
@@ -76,14 +76,12 @@ def _prepare_gpu(allow_shared_gpu: bool, gpu_kill_others: bool) -> None:
 @click.pass_context
 def cli(ctx, verbose):
     """
-    Paint3D — texturização 3D com Hunyuan3D-Paint.
+    Paint3D — texturização 3D com Hunyuan3D-Paint 2.1 (PBR).
 
     Pipeline: mesh + imagem de referência → mesh texturizada (GLB).
 
     \b
         paint3d texture mesh.glb -i ref.png -o mesh_tex.glb
-        paint3d texture mesh.glb -i ref.png -o mesh_pbr.glb --materialize
-        paint3d materialize-pbr mesh_tex.glb -o mesh_pbr.glb
         paint3d doctor
     """
     ctx.ensure_object(dict)
@@ -111,29 +109,11 @@ def cli(ctx, verbose):
     default=_defaults.DEFAULT_PAINT_SUBFOLDER,
     show_default=True,
 )
-@click.option("--paint-full-gpu", is_flag=True, help="Mantém modelos Paint na GPU (VRAM alta).")
-@click.option("--materialize", is_flag=True, help="Após Paint, gera mapas PBR (Materialize CLI) e embute no GLB.")
 @click.option(
-    "--materialize-preset",
-    "materialize_preset",
-    default="default",
-    show_default=True,
-    type=click.Choice(_defaults.MATERIALIZE_PRESETS),
-    help="Preset Materialize: ajusta parâmetros PBR ao tipo de superfície.",
+    "--paint-full-gpu",
+    is_flag=True,
+    help="Resoluções internas máximas (VRAM alta; recomendado para Paint 2.1).",
 )
-@click.option(
-    "--materialize-output-dir",
-    type=click.Path(file_okay=False, path_type=Path),
-    default=None,
-    help="Guarda PNGs dos mapas nesta pasta.",
-)
-@click.option(
-    "--materialize-bin",
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    default=None,
-    help="Binário materialize (defeito: PATH ou MATERIALIZE_BIN).",
-)
-@click.option("--materialize-no-invert", is_flag=True, help="Roughness = smoothness (sem 1-smoothness).")
 @click.option(
     "--upscale/--no-upscale",
     "upscale",
@@ -165,18 +145,13 @@ def texture(
     paint_repo,
     paint_subfolder,
     paint_full_gpu,
-    materialize,
-    materialize_preset,
-    materialize_output_dir,
-    materialize_bin,
-    materialize_no_invert,
     upscale,
     upscale_factor,
     texture_verbose,
     allow_shared_gpu,
     gpu_kill_others,
 ):
-    """Aplica Hunyuan3D-Paint a uma mesh GLB/OBJ + imagem de referência → GLB texturizado."""
+    """Aplica Hunyuan3D-Paint 2.1 a uma mesh GLB/OBJ + imagem de referência → GLB texturizado (PBR baked)."""
     from .painter import paint_file_to_file
 
     verbose = bool(ctx.obj.get("VERBOSE")) or texture_verbose
@@ -189,18 +164,12 @@ def texture(
     info_table.add_row("[bold]Imagem[/bold]", f"[cyan]{image_file}[/cyan]")
     info_table.add_row("[bold]Saída[/bold]", f"[cyan]{output}[/cyan]")
     info_table.add_row(
-        "[bold]Paint[/bold]",
-        f"{paint_subfolder} {'GPU' if paint_full_gpu else 'CPU offload'}",
+        "[bold]Paint 2.1[/bold]",
+        f"{paint_repo} / {paint_subfolder} — {'VRAM alta' if paint_full_gpu else 'modo económico'}",
     )
     if upscale:
         info_table.add_row("[bold]Upscale[/bold]", f"Real-ESRGAN {upscale_factor}x")
-    if materialize:
-        info_table.add_row(
-            "[bold]Materialize PBR[/bold]",
-            f"preset={materialize_preset}"
-            + (f" → [cyan]{materialize_output_dir}[/cyan]" if materialize_output_dir else ""),
-        )
-    console.print(Panel(info_table, title="[bold green]Hunyuan3D-Paint", border_style="green"))
+    console.print(Panel(info_table, title="[bold green]Hunyuan3D-Paint 2.1", border_style="green"))
 
     _prepare_gpu(allow_shared_gpu, gpu_kill_others)
 
@@ -215,10 +184,6 @@ def texture(
                 subfolder=paint_subfolder,
                 paint_cpu_offload=not paint_full_gpu,
                 verbose=verbose,
-                materialize=materialize,
-                materialize_output_dir=materialize_output_dir,
-                materialize_bin=materialize_bin,
-                materialize_no_invert=materialize_no_invert,
             )
 
         if upscale:
@@ -253,109 +218,20 @@ def texture(
         sys.exit(1)
 
 
-@cli.command("materialize-pbr")
-@click.argument("mesh_file", type=click.Path(exists=True, dir_okay=False))
-@click.option("--output", "-o", type=click.Path(), required=True, help="GLB de saída (PBR embutido).")
-@click.option(
-    "--materialize-output-dir",
-    type=click.Path(file_okay=False, path_type=Path),
-    default=None,
-    help="Guarda PNGs dos mapas nesta pasta.",
-)
-@click.option(
-    "--materialize-bin",
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    default=None,
-)
-@click.option("--materialize-no-invert", is_flag=True, help="Roughness = smoothness (sem 1-smoothness).")
-@click.option(
-    "--preset",
-    "-p",
-    "mat_preset",
-    default="default",
-    show_default=True,
-    type=click.Choice(_defaults.MATERIALIZE_PRESETS),
-    help="Preset Materialize: ajusta parâmetros PBR ao tipo de superfície.",
-)
-@click.option("-v", "--verbose", "mat_verbose", is_flag=True)
-@click.option("--allow-shared-gpu", "allow_shared_gpu", is_flag=True)
-@click.option("--gpu-kill-others/--no-gpu-kill-others", "gpu_kill_others", default=True)
-@click.pass_context
-def materialize_pbr_cmd(
-    ctx,
-    mesh_file,
-    output,
-    materialize_output_dir,
-    materialize_bin,
-    materialize_no_invert,
-    mat_preset,
-    mat_verbose,
-    allow_shared_gpu,
-    gpu_kill_others,
-):
-    """Só Materialize PBR: GLB já texturizado (Paint) → mapas + GLB PBR (sem re-correr Paint)."""
-    from .materialize_pbr import apply_materialize_pbr
-    from .utils.mesh_io import load_mesh_trimesh, save_glb
-
-    verbose = bool(ctx.obj.get("VERBOSE")) or mat_verbose
-    mesh_path = Path(mesh_file)
-    out_path = Path(output)
-    if out_path.suffix.lower() not in (".glb",):
-        raise click.UsageError("Saída deve ser .glb")
-
-    console.print(
-        Panel(
-            f"Entrada: [cyan]{mesh_path}[/cyan]\nSaída: [cyan]{out_path}[/cyan]",
-            title="[bold green]Materialize PBR",
-            border_style="green",
-        )
-    )
-
-    _prepare_gpu(allow_shared_gpu, gpu_kill_others)
-
-    try:
-        start = time.time()
-        with console.status(f"[bold yellow]Materialize PBR (preset={mat_preset})...", spinner="dots"):
-            mesh = load_mesh_trimesh(mesh_path)
-            result = apply_materialize_pbr(
-                mesh,
-                materialize_bin=materialize_bin,
-                save_sidecar_maps_dir=materialize_output_dir,
-                roughness_from_one_minus_smoothness=not materialize_no_invert,
-                preset=mat_preset,
-                verbose=verbose,
-            )
-            save_glb(result, out_path)
-
-        out_p = out_path.resolve()
-        try:
-            sz = format_bytes(out_p.stat().st_size)
-        except OSError:
-            sz = "?"
-        console.print(Rule("[bold green]Resultado", style="green"))
-        console.print(f"[bold green]✓[/bold green] GLB PBR: [cyan]{out_p}[/cyan] [dim]({sz})[/dim]")
-        console.print(f"\n[dim]Tempo: {time.time() - start:.1f}s[/dim]")
-    except Exception as e:
-        console.print(f"\n[bold red]✗ Erro:[/bold red] {e!s}")
-        if verbose:
-            console.print_exception()
-        sys.exit(1)
-
-
 @cli.command("doctor")
 def doctor():
-    """Verifica ambiente: PyTorch, CUDA, VRAM e extensão Hunyuan3D-Paint (custom_rasterizer)."""
+    """Verifica ambiente: PyTorch, CUDA, VRAM, hy3dpaint 2.1, Real-ESRGAN e rasterizador."""
     from gamedev_shared.gpu import (
         DEFAULT_EXCLUSIVE_GPU_MAX_USED_MIB,
         get_system_info,
         gpu_bytes_in_use,
     )
 
-    from .painter import check_paint_rasterizer_available
+    from .painter import check_hunyuan3d21_environment, check_paint_rasterizer_available
 
     console.print(
         Panel.fit(
-            "[bold]paint3d doctor[/bold] — PyTorch, CUDA, Paint (custom_rasterizer)",
+            "[bold]paint3d doctor[/bold] — PyTorch, CUDA, Paint 2.1 (hy3dpaint, Real-ESRGAN, rasterizador)",
             border_style="blue",
         )
     )
@@ -392,10 +268,17 @@ def doctor():
         import custom_rasterizer
 
         backend = "nvdiffrast (shim)" if getattr(custom_rasterizer, "IS_NVDIFFRAST_SHIM", False) else "nativo"
-        table.add_row("Hunyuan3D-Paint", f"[green]rasterizador OK — {backend}[/green]")
+        table.add_row("Rasterizador (custom_rasterizer)", f"[green]OK — {backend}[/green]")
     except RuntimeError as e:
         msg = str(e).split("\n")[0][:120]
-        table.add_row("Hunyuan3D-Paint", f"[yellow]{msg}…[/yellow]")
+        table.add_row("Rasterizador (custom_rasterizer)", f"[yellow]{msg}…[/yellow]")
+
+    ok21, msg21 = check_hunyuan3d21_environment()
+    if ok21:
+        table.add_row("Hunyuan3D-2.1 (hy3dpaint)", f"[green]{msg21}[/green]")
+    else:
+        short = msg21.split("\n")[0][:160]
+        table.add_row("Hunyuan3D-2.1 (hy3dpaint)", f"[yellow]{short}[/yellow]")
 
     console.print(table)
     console.print(
@@ -447,8 +330,8 @@ def models():
     table.add_column("Notas", style="dim")
 
     table.add_row(
-        "Hunyuan3D-Paint",
-        "Textura multivista (tencent/Hunyuan3D-2, delight + paint)",
+        "Hunyuan3D-Paint 2.1",
+        "PBR multivista (tencent/Hunyuan3D-2.1, hunyuan3d-paintpbr-v2-1)",
         "Comando: paint3d texture",
     )
     table.add_row(

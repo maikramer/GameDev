@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "paint3d"
 version = "0.1.0"
-description = "Texturização 3D: Hunyuan3D-Paint + Materialize PBR + Upscale IA"
+description = "Texturização 3D: Hunyuan3D-Paint 2.1 (PBR) + Upscale IA"
 requires-python = ">=3.10"
 license = "MIT"
 dependencies = [
@@ -24,7 +24,14 @@ dependencies = [
     "rich>=13.0.0",
     "rich-click>=1.8.0",
     "tqdm>=4.66.0",
-    "hy3dgen @ git+https://github.com/Tencent-Hunyuan/Hunyuan3D-2.git",
+    "omegaconf>=2.3.0",
+    "opencv-python-headless>=4.8.0",
+    "pymeshlab>=2022.2",
+    "xatlas>=0.0.9",
+    "scipy>=1.10.0",
+    "basicsr>=1.4.2",
+    "realesrgan>=0.3.0",
+    # Hunyuan3D-2.1: código em third_party/Hunyuan3D-2.1/hy3dpaint (submodule) ou HUNYUAN3D_21_ROOT
     # nvdiffrast: instalar separadamente com --no-build-isolation (requer PyTorch pré-instalado)
     # pip install git+https://github.com/NVlabs/nvdiffrast.git --no-build-isolation
 ]

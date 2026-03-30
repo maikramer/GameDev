@@ -123,10 +123,13 @@ class _ToolPythonInstaller(PythonProjectInstaller):
 
             return run_part3d_post_install(self)
 
-        if self.spec.cli_name == "paint3d" and not _install_nvdiffrast(
-            self.venv_python, self.project_root, self.logger
-        ):
-            return False
+        if self.spec.cli_name == "paint3d":
+            if not _install_nvdiffrast(self.venv_python, self.project_root, self.logger):
+                return False
+            from .paint3d_extras import run_paint3d_post_install
+
+            if not run_paint3d_post_install(self._monorepo_root, self.logger):
+                return False
 
         aliases = list(self.spec.extra_aliases) if self.spec.extra_aliases else None
         self.create_cli_wrappers(extra_aliases=aliases)

@@ -1,14 +1,43 @@
-# Hunyuan3D-Paint — Setup
+# Hunyuan3D-Paint 2.1 — Setup
 
-O comando `paint3d texture` usa o **texgen** do `hy3dgen`, que precisa de um rasterizador GPU.
+O comando `paint3d texture` usa o código **`hy3dpaint`** do repositório [Hunyuan3D-2.1](https://github.com/Tencent-Hunyuan/Hunyuan3D-2.1) e descarrega os pesos **PBR** do Hugging Face ([`tencent/Hunyuan3D-2.1`](https://huggingface.co/tencent/Hunyuan3D-2.1), pasta `hunyuan3d-paintpbr-v2-1`).
+
+## Patches no hy3dpaint (após submodule)
+
+Depois de `git submodule update --init`, corre (na raiz do monorepo):
+
+```bash
+python Paint3D/scripts/apply_hunyuan21_patches.py
+```
+
+O instalador `./install.sh paint3d` / `install.ps1 paint3d` tenta aplicar estes patches automaticamente. Corrige o loop de resize multivista e torna a subpasta de pesos HF configurável (`--paint-subfolder`).
+
+## Código hy3dpaint (obrigatório)
+
+1. **Submodule (recomendado no monorepo GameDev)**
+
+   ```bash
+   git submodule update --init third_party/Hunyuan3D-2.1
+   python Paint3D/scripts/apply_hunyuan21_patches.py
+   ```
+
+2. **Ou variável de ambiente** `HUNYUAN3D_21_ROOT` — caminho para a raiz do clone `Hunyuan3D-2.1` (ou directamente para a pasta `hy3dpaint`).
+
+## Real-ESRGAN (obrigatório para o super-resolution do pipeline)
+
+Ficheiro: `hy3dpaint/ckpt/RealESRGAN_x4plus.pth` (relativo ao clone).
+
+```bash
+# Linux / macOS
+wget https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth \
+  -P third_party/Hunyuan3D-2.1/hy3dpaint/ckpt
+```
+
+No Windows, coloca o mesmo ficheiro nessa pasta ou corre `./install.ps1 paint3d` / `./install.sh paint3d` (o instalador tenta descarregar).
 
 ## Rasterizador: nvdiffrast (recomendado)
 
-O Paint3D inclui um **shim** que usa **nvdiffrast** (NVIDIA) como drop-in para o `custom_rasterizer` original. Não é necessária compilação manual.
-
-### Instalação
-
-O `nvdiffrast` é instalado automaticamente pelo `pip install -e .` (está no `pyproject.toml`). Se falhar:
+O Paint3D inclui um **shim** que usa **nvdiffrast** (NVIDIA) como `custom_rasterizer` antes de carregar o renderer 2.1.
 
 ```bash
 pip install git+https://github.com/NVlabs/nvdiffrast.git --no-build-isolation
@@ -20,42 +49,21 @@ pip install git+https://github.com/NVlabs/nvdiffrast.git --no-build-isolation
 paint3d doctor
 ```
 
-Deve mostrar: `rasterizador OK — nvdiffrast (shim)`.
+## Alternativa: custom_rasterizer nativo (Hunyuan3D-2.1)
 
-Ou em Python:
-
-```python
-from paint3d import check_paint_rasterizer_available
-check_paint_rasterizer_available()
-print("OK")
+```bash
+cd third_party/Hunyuan3D-2.1/hy3dpaint/custom_rasterizer
+pip install -e . --no-build-isolation
 ```
 
-## VRAM modesta (~6 GB)
+## VRAM
 
-- O Paint3D carrega os pesos Paint em **CPU** e usa `enable_model_cpu_offload` (evita OOM).
-- Opcional: `export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`.
+O model card indica da ordem de **~21 GB VRAM** para textura em configuração completa. Com `--paint-full-gpu` o Paint3D usa `render_size` / `texture_size` maiores; sem essa flag usa um perfil mais económico e tenta `enable_model_cpu_offload` no diffusion pipeline (quando suportado).
 
 ## Uso
 
 ```bash
-# Pintar meshes existentes
 paint3d texture mesh.glb -i ref.png -o out.glb
-
-# Pintar + PBR
-paint3d texture mesh.glb -i ref.png -o out.glb --materialize
-
-# Sem textura (só PBR numa mesh já pintada)
-paint3d materialize-pbr mesh_textured.glb -o mesh_pbr.glb
 ```
 
-## Alternativa: custom_rasterizer nativo
-
-Se preferires a extensão CUDA original (sem shim), compila manualmente:
-
-```bash
-git clone --depth 1 https://github.com/Tencent-Hunyuan/Hunyuan3D-2.git
-cd Hunyuan3D-2/hy3dgen/texgen/custom_rasterizer
-pip install -e . --no-build-isolation
-```
-
-O Paint3D detecta automaticamente a extensão nativa e usa-a em vez do shim.
+O pipeline 2.1 já produz GLB com material PBR. Para **mapas PBR a partir de uma imagem difusa** (não GLB), usa o projeto [Materialize](../../Materialize) ou `texture2d.materialize` no GameAssets — ver [Text3D/docs/PBR_MATERIALIZE.md](../../Text3D/docs/PBR_MATERIALIZE.md).
