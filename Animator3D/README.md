@@ -9,19 +9,24 @@ CLI de **animação 3D** com [Blender Python API](https://docs.blender.org/api/c
 
 ## Instalação
 
-No monorepo GameDev, a partir da pasta do projeto:
+### Oficial (monorepo)
+
+Na **raiz** do repositório GameDev (pasta com `install.sh` e `Shared/`):
+
+```bash
+cd /caminho/para/GameDev
+./install.sh animator3d
+```
+
+Equivalente: `gamedev-install animator3d`. Documentação geral: [docs/INSTALLING.md](../docs/INSTALLING.md).
+
+### Manual / desenvolvimento
 
 ```bash
 cd Animator3D
 python3.13 -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
-```
-
-Ou via instalador unificado (após registo no `gamedev_shared`):
-
-```bash
-./install.sh animator3d
 ```
 
 ## Uso

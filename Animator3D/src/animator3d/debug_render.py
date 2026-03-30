@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import math
-import os
 from pathlib import Path
 from typing import Any
 
@@ -30,11 +29,13 @@ DEFAULT_VIEWS = ["front", "three_quarter", "right", "back"]
 
 def _bpy():
     import bpy
+
     return bpy
 
 
 def _look_at(camera, target: tuple[float, float, float]) -> None:
     from mathutils import Vector
+
     direction = Vector(target) - camera.location
     rot_quat = direction.to_track_quat("-Z", "Y")
     camera.rotation_euler = rot_quat.to_euler()
@@ -81,6 +82,7 @@ def _auto_frame_camera(camera) -> None:
         return
 
     import numpy as np
+
     pts = np.array([(v.x, v.y, v.z) for v in all_coords])
     center = pts.mean(axis=0)
     extent = (pts.max(axis=0) - pts.min(axis=0)).max()

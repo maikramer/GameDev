@@ -563,9 +563,7 @@ def breathe_idle_keyframes(
                 euler = list(pb.rotation_euler)
                 euler[axis] = angle
                 if secondary_axis is not None:
-                    euler[secondary_axis] = secondary_amp * scale * math.sin(
-                        t * math.pi * 2 * freq * 0.5 + phase + 0.7
-                    )
+                    euler[secondary_axis] = secondary_amp * scale * math.sin(t * math.pi * 2 * freq * 0.5 + phase + 0.7)
                 _set_pose_bone_rotation(pb, tuple(euler))
                 pb.keyframe_insert(data_path=_rotation_data_path(pb), frame=frame)
 
@@ -574,33 +572,56 @@ def breathe_idle_keyframes(
 
     if "spine" in chains:
         _anim_chain(
-            chains["spine"], axis=0, amp=breath_amp * 0.7, freq=cycles,
-            phase_step=0.2, secondary_axis=2, secondary_amp=breath_amp * 0.3,
+            chains["spine"],
+            axis=0,
+            amp=breath_amp * 0.7,
+            freq=cycles,
+            phase_step=0.2,
+            secondary_axis=2,
+            secondary_amp=breath_amp * 0.3,
         )
 
     if "tail" in chains:
         _anim_chain(
-            chains["tail"], axis=2, amp=tail_amp, freq=cycles,
-            phase_step=0.5, secondary_axis=0, secondary_amp=tail_amp * 0.2,
+            chains["tail"],
+            axis=2,
+            amp=tail_amp,
+            freq=cycles,
+            phase_step=0.5,
+            secondary_axis=0,
+            secondary_amp=tail_amp * 0.2,
             decay=0.1,
         )
 
     if "neck" in chains:
         _anim_chain(
-            chains["neck"], axis=0, amp=neck_amp, freq=cycles * 0.8,
-            phase_step=0.25, secondary_axis=2, secondary_amp=neck_amp * 0.3,
+            chains["neck"],
+            axis=0,
+            amp=neck_amp,
+            freq=cycles * 0.8,
+            phase_step=0.25,
+            secondary_axis=2,
+            secondary_amp=neck_amp * 0.3,
             decay=0.15,
         )
 
     if "wing_r" in chains:
         _anim_chain(
-            chains["wing_r"], axis=1, amp=wing_amp, freq=cycles,
-            phase_step=0.3, decay=0.2,
+            chains["wing_r"],
+            axis=1,
+            amp=wing_amp,
+            freq=cycles,
+            phase_step=0.3,
+            decay=0.2,
         )
     if "wing_l" in chains:
         _anim_chain(
-            chains["wing_l"], axis=1, amp=-wing_amp, freq=cycles,
-            phase_step=0.3, decay=0.2,
+            chains["wing_l"],
+            axis=1,
+            amp=-wing_amp,
+            freq=cycles,
+            phase_step=0.3,
+            decay=0.2,
         )
 
     # Dedos das asas: movimento muito subtil
@@ -608,8 +629,13 @@ def breathe_idle_keyframes(
         if fk in chains:
             sign = 1.0 if "r" in fk else -1.0
             _anim_chain(
-                chains[fk], axis=1, amp=sign * wing_amp * 0.08, freq=cycles * 1.5,
-                phase_step=0.15, decay=0.3, max_bones=6,
+                chains[fk],
+                axis=1,
+                amp=sign * wing_amp * 0.08,
+                freq=cycles * 1.5,
+                phase_step=0.15,
+                decay=0.3,
+                max_bones=6,
             )
 
     # Patas ficam paradas no chao (idle = pousado).
@@ -713,9 +739,8 @@ def attack_keyframes(
                 euler = list(base)
                 euler[axis] = base[axis] + sign * amp * scale * prof
                 if secondary_axis is not None and secondary_scale != 0.0:
-                    euler[secondary_axis] = (
-                        base[secondary_axis]
-                        + secondary_scale * scale * prof * math.sin(max(prof, 0.0) * math.pi)
+                    euler[secondary_axis] = base[secondary_axis] + secondary_scale * scale * prof * math.sin(
+                        max(prof, 0.0) * math.pi
                     )
                 _key_bone_rot(bname, frame, tuple(euler))
 
@@ -724,20 +749,31 @@ def attack_keyframes(
 
     if "spine" in chains:
         _anim_chain_strike(
-            chains["spine"], axis=0, amp=spine_amp,
-            decay=0.08, secondary_axis=2, secondary_scale=spine_amp * 0.15,
+            chains["spine"],
+            axis=0,
+            amp=spine_amp,
+            decay=0.08,
+            secondary_axis=2,
+            secondary_scale=spine_amp * 0.15,
         )
 
     if "neck" in chains:
         _anim_chain_strike(
-            chains["neck"], axis=0, amp=neck_amp,
-            decay=0.1, secondary_axis=2, secondary_scale=neck_amp * 0.2,
+            chains["neck"],
+            axis=0,
+            amp=neck_amp,
+            decay=0.1,
+            secondary_axis=2,
+            secondary_scale=neck_amp * 0.2,
         )
 
     if "tail" in chains:
         _anim_chain_strike(
-            chains["tail"], axis=2, amp=-tail_amp,
-            decay=0.08, phase_delay=0.06,
+            chains["tail"],
+            axis=2,
+            amp=-tail_amp,
+            decay=0.08,
+            phase_delay=0.06,
         )
 
     if "wing_r" in chains:
@@ -749,8 +785,11 @@ def attack_keyframes(
         if fk in chains:
             sgn = 1.0 if "r" in fk else -1.0
             _anim_chain_strike(
-                chains[fk], axis=1, amp=sgn * finger_amp,
-                decay=0.2, max_bones=8,
+                chains[fk],
+                axis=1,
+                amp=sgn * finger_amp,
+                decay=0.2,
+                max_bones=8,
             )
 
     finalize_current_action_to_nla(armature_name)
@@ -817,8 +856,12 @@ def walk_cycle_keyframes(
 
     if "spine" in chains:
         _anim_chain(
-            chains["spine"], axis=0, amp=body_amp * 0.8, freq=cycles,
-            phase_step=0.2, phase_global=0.15,
+            chains["spine"],
+            axis=0,
+            amp=body_amp * 0.8,
+            freq=cycles,
+            phase_step=0.2,
+            phase_global=0.15,
         )
 
     if "leg_r" in chains:
@@ -828,16 +871,24 @@ def walk_cycle_keyframes(
 
     if "tail" in chains:
         _anim_chain(
-            chains["tail"], axis=2, amp=tail_amp, freq=cycles * 0.9,
-            phase_step=0.4, decay=0.1,
+            chains["tail"],
+            axis=2,
+            amp=tail_amp,
+            freq=cycles * 0.9,
+            phase_step=0.4,
+            decay=0.1,
         )
 
     if "wing_r" in chains:
         _anim_chain(chains["wing_r"], axis=1, amp=wing_amp, freq=cycles, phase_step=0.25, decay=0.15)
     if "wing_l" in chains:
         _anim_chain(
-            chains["wing_l"], axis=1, amp=-wing_amp, freq=cycles,
-            phase_step=0.25, decay=0.15,
+            chains["wing_l"],
+            axis=1,
+            amp=-wing_amp,
+            freq=cycles,
+            phase_step=0.25,
+            decay=0.15,
         )
 
     finalize_current_action_to_nla(armature_name)
@@ -898,9 +949,7 @@ def hover_flap_keyframes(
                 euler = list(pb.rotation_euler)
                 euler[axis] = angle
                 if secondary_axis is not None:
-                    euler[secondary_axis] = secondary_amp * scale * math.sin(
-                        t * math.pi * 2 * freq * 0.5 + phase
-                    )
+                    euler[secondary_axis] = secondary_amp * scale * math.sin(t * math.pi * 2 * freq * 0.5 + phase)
                 _set_pose_bone_rotation(pb, tuple(euler))
                 pb.keyframe_insert(data_path=_rotation_data_path(pb), frame=frame)
 
@@ -909,36 +958,58 @@ def hover_flap_keyframes(
 
     if "spine" in chains:
         _anim_chain(
-            chains["spine"], axis=0, amp=body_amp * 0.6, freq=cycles * 0.35,
-            phase_step=0.15, secondary_axis=2, secondary_amp=body_amp * 0.2,
+            chains["spine"],
+            axis=0,
+            amp=body_amp * 0.6,
+            freq=cycles * 0.35,
+            phase_step=0.15,
+            secondary_axis=2,
+            secondary_amp=body_amp * 0.2,
         )
 
     if "neck" in chains:
         _anim_chain(
-            chains["neck"], axis=0, amp=body_amp * 0.4, freq=cycles * 0.3,
-            phase_step=0.2, decay=0.12,
+            chains["neck"],
+            axis=0,
+            amp=body_amp * 0.4,
+            freq=cycles * 0.3,
+            phase_step=0.2,
+            decay=0.12,
         )
 
     if "tail" in chains:
         _anim_chain(
-            chains["tail"], axis=2, amp=tail_amp, freq=cycles * 0.45,
-            phase_step=0.45, decay=0.08,
+            chains["tail"],
+            axis=2,
+            amp=tail_amp,
+            freq=cycles * 0.45,
+            phase_step=0.45,
+            decay=0.08,
         )
 
     if "wing_r" in chains:
         _anim_chain(chains["wing_r"], axis=1, amp=wing_amp, freq=cycles, phase_step=0.22, decay=0.12)
     if "wing_l" in chains:
         _anim_chain(
-            chains["wing_l"], axis=1, amp=-wing_amp, freq=cycles,
-            phase_step=0.22, decay=0.12,
+            chains["wing_l"],
+            axis=1,
+            amp=-wing_amp,
+            freq=cycles,
+            phase_step=0.22,
+            decay=0.12,
         )
 
     for fk in ("wing_r_fingers", "wing_l_fingers"):
         if fk in chains:
             sgn = 1.0 if "r" in fk else -1.0
             _anim_chain(
-                chains[fk], axis=1, amp=sgn * finger_amp, freq=cycles * 1.1,
-                phase_step=0.12, decay=0.25, max_bones=8,
+                chains[fk],
+                axis=1,
+                amp=sgn * finger_amp,
+                freq=cycles * 1.1,
+                phase_step=0.12,
+                decay=0.25,
+                max_bones=8,
             )
 
     finalize_current_action_to_nla(armature_name)
@@ -1007,27 +1078,32 @@ def soar_keyframes(
 
     # Asas com batidas desiguais (assimétricas)
     if "wing_r" in chains:
-        _anim_chain(chains["wing_r"], axis=1, amp=0.45, freq=cycles * 0.6,
-                   phase_step=0.15, phase_global=0.0, decay=0.1)
+        _anim_chain(chains["wing_r"], axis=1, amp=0.45, freq=cycles * 0.6, phase_step=0.15, phase_global=0.0, decay=0.1)
     if "wing_l" in chains:
-        _anim_chain(chains["wing_l"], axis=1, amp=-0.38, freq=cycles * 0.55,
-                   phase_step=0.18, phase_global=0.4, decay=0.1)
+        _anim_chain(
+            chains["wing_l"], axis=1, amp=-0.38, freq=cycles * 0.55, phase_step=0.18, phase_global=0.4, decay=0.1
+        )
 
     # Cauda como leme - movimentos largos e lentos
     if "tail" in chains:
-        _anim_chain(chains["tail"], axis=2, amp=0.25, freq=cycles * 0.4,
-                   phase_step=0.5, decay=0.08,
-                   secondary_axis=0, secondary_amp=0.15)
+        _anim_chain(
+            chains["tail"],
+            axis=2,
+            amp=0.25,
+            freq=cycles * 0.4,
+            phase_step=0.5,
+            decay=0.08,
+            secondary_axis=0,
+            secondary_amp=0.15,
+        )
 
     # Corpo com leve rolagem e arfagem
     if "body" in chains:
-        _anim_chain(chains["body"], axis=0, amp=0.06, freq=cycles * 0.5,
-                   phase_global=0.2)
+        _anim_chain(chains["body"], axis=0, amp=0.06, freq=cycles * 0.5, phase_global=0.2)
 
     # Pescoço estabilizando
     if "neck" in chains:
-        _anim_chain(chains["neck"], axis=0, amp=0.04, freq=cycles * 0.6,
-                   phase_step=0.2, decay=0.1)
+        _anim_chain(chains["neck"], axis=0, amp=0.04, freq=cycles * 0.6, phase_step=0.2, decay=0.1)
 
     finalize_current_action_to_nla(armature_name)
     return chains
@@ -1064,8 +1140,8 @@ def dive_attack_keyframes(
             # Preparação: recolhe asas, inclina para frente
             return (
                 _smoothstep01(t / 0.2) * 0.8,  # corpo inclinado
-                -0.6 * _smoothstep01(t / 0.2),   # asas recolhidas (negativo)
-                0.3 * _smoothstep01(t / 0.2),   # cauda estendida para cima
+                -0.6 * _smoothstep01(t / 0.2),  # asas recolhidas (negativo)
+                0.3 * _smoothstep01(t / 0.2),  # cauda estendida para cima
             )
         elif t < 0.7:
             # Picada: corpo em 45 graus, asas coladas
@@ -1074,9 +1150,9 @@ def dive_attack_keyframes(
             # Impacto: abre asas bruscamente para frear, cauda abaixa
             w = (t - 0.7) / 0.3
             return (
-                0.8 - _smoothstep01(w) * 0.5,   # corpo volta
+                0.8 - _smoothstep01(w) * 0.5,  # corpo volta
                 -0.6 + _smoothstep01(w) * 1.2,  # asas abrem de -0.6 para 0.6
-                0.3 - _smoothstep01(w) * 0.5,   # cauda abaixa
+                0.3 - _smoothstep01(w) * 0.5,  # cauda abaixa
             )
 
     # Anima asas assimétricas (direita lidera)
@@ -1178,17 +1254,17 @@ def fire_breath_keyframes(
             # Inspiração: peito abaixa, pescoço recua, asas recolhem
             w = u / 0.3
             return (
-                -0.15 * _smoothstep01(w),      # peito abaixa (inspira)
-                -0.25 * _smoothstep01(w),      # pescoço recua
-                -0.2 * _smoothstep01(w),       # asas recolhem
+                -0.15 * _smoothstep01(w),  # peito abaixa (inspira)
+                -0.25 * _smoothstep01(w),  # pescoço recua
+                -0.2 * _smoothstep01(w),  # asas recolhem
             )
         elif u < 0.5:
             # Expiração violenta: peito sobe, pescoço avança, asas abrem
             w = (u - 0.3) / 0.2
             return (
-                0.35 * _smoothstep01(w),       # peito sobe
-                0.55 * _smoothstep01(w),       # pescoço avança
-                0.4 * _smoothstep01(w),        # asas abrem
+                0.35 * _smoothstep01(w),  # peito sobe
+                0.55 * _smoothstep01(w),  # pescoço avança
+                0.4 * _smoothstep01(w),  # asas abrem
             )
         else:
             # Recuperação suave
@@ -1300,28 +1376,28 @@ def land_keyframes(
             # Planeio descendente
             w = t / 0.4
             return (
-                0.4 + w * 0.3,    # inclinação aumenta
-                0.2 + w * 0.15,   # asas semi-abertas
-                0.0,              # pernas retraídas
-                -0.1,             # cauda baixa
+                0.4 + w * 0.3,  # inclinação aumenta
+                0.2 + w * 0.15,  # asas semi-abertas
+                0.0,  # pernas retraídas
+                -0.1,  # cauda baixa
             )
         elif t < 0.65:
             # Freio aerodinâmico - asas abrem ao máximo para frear
             w = (t - 0.4) / 0.25
             return (
-                0.7 - w * 0.2,    # corpo nivela
+                0.7 - w * 0.2,  # corpo nivela
                 0.35 + w * 0.45,  # asas abrem de 0.35 para 0.8
-                w * 0.25,         # pernas começam a estender
-                -0.1 + w * 0.3,   # cauda sobe para equilibrar
+                w * 0.25,  # pernas começam a estender
+                -0.1 + w * 0.3,  # cauda sobe para equilibrar
             )
         elif t < 0.85:
             # Preparação para impacto
             w = (t - 0.65) / 0.2
             return (
-                0.5 - w * 0.3,    # corpo volta
-                0.8 - w * 0.2,    # asas fecham um pouco
+                0.5 - w * 0.3,  # corpo volta
+                0.8 - w * 0.2,  # asas fecham um pouco
                 0.25 + w * 0.15,  # pernas estendidas
-                0.2 - w * 0.1,    # cauda nivela
+                0.2 - w * 0.1,  # cauda nivela
             )
         else:
             # Amortecimento
@@ -1330,7 +1406,7 @@ def land_keyframes(
                 0.2 * (1.0 - w * 0.5),  # corpo estabiliza
                 0.6 * (1.0 - w * 0.3),  # asas abrem para equilibrar
                 0.4 * (1.0 - w * 0.2),  # pernas flexionam
-                0.1 + w * 0.05,         # cauda estabiliza
+                0.1 + w * 0.05,  # cauda estabiliza
             )
 
     # Corpo/Spine - inclinação durante descida
@@ -1436,10 +1512,10 @@ def victory_roar_keyframes(
             # Elevação dramática - peito sobe, pescoço ergue
             w = t / 0.25
             return (
-                -0.4 * _smoothstep01(w),      # peito ergue (negativo = cima)
-                -0.6 * _smoothstep01(w),      # pescoço para trás/erguido
-                w * 0.3,                      # asas começam a abrir
-                w * 0.2,                      # cauda sobe
+                -0.4 * _smoothstep01(w),  # peito ergue (negativo = cima)
+                -0.6 * _smoothstep01(w),  # pescoço para trás/erguido
+                w * 0.3,  # asas começam a abrir
+                w * 0.2,  # cauda sobe
             )
         elif t < 0.4:
             # Pose de poder - sustenta
@@ -1450,18 +1526,18 @@ def victory_roar_keyframes(
             roar_intensity = _smoothstep01(w) * (1.0 - _smoothstep01((w - 0.7) / 0.3))
             return (
                 -0.4 + roar_intensity * 0.15,  # peito vibra
-                -0.6 + roar_intensity * 0.4,   # pescoço avança no rugido
-                0.3 + roar_intensity * 0.5,    # asas abrem no máximo
-                0.2 + roar_intensity * 0.3,    # cauda ergue
+                -0.6 + roar_intensity * 0.4,  # pescoço avança no rugido
+                0.3 + roar_intensity * 0.5,  # asas abrem no máximo
+                0.2 + roar_intensity * 0.3,  # cauda ergue
             )
         else:
             # Estabilização majestosa
             w = (t - 0.7) / 0.3
             return (
                 -0.25 * (1.0 - _smoothstep01(w) * 0.3),  # peito mantém altura
-                -0.2 * (1.0 - _smoothstep01(w) * 0.5),   # pescoço relaxa um pouco
-                0.8 * (1.0 - _smoothstep01(w) * 0.25),   # asas mantêm abertas
-                0.5 * (1.0 - _smoothstep01(w) * 0.2),    # cauda mantém posição
+                -0.2 * (1.0 - _smoothstep01(w) * 0.5),  # pescoço relaxa um pouco
+                0.8 * (1.0 - _smoothstep01(w) * 0.25),  # asas mantêm abertas
+                0.5 * (1.0 - _smoothstep01(w) * 0.2),  # cauda mantém posição
             )
 
     # Peito/Spine - elevação majestosa

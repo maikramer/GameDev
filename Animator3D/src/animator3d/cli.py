@@ -220,10 +220,16 @@ def cmd_breathe_idle(
 @click.argument("input_path", type=click.Path(path_type=Path, exists=True))
 @click.argument("output_path", type=click.Path(path_type=Path))
 @click.option("--frames", default=72, show_default=True, type=int, help="Duracao do clip (1 ou mais golpes).")
-@click.option("--strikes", default=1, show_default=True, type=int, help="Numero de golpes no mesmo clip (repete o perfil).")
+@click.option(
+    "--strikes", default=1, show_default=True, type=int, help="Numero de golpes no mesmo clip (repete o perfil)."
+)
 @click.option("--wing-amp", "wing_amp", default=0.62, show_default=True, type=float, help="Amplitude asas (rad).")
-@click.option("--neck-amp", "neck_amp", default=0.55, show_default=True, type=float, help="Amplitude pescoço / mordida (rad).")
-@click.option("--tail-amp", "tail_amp", default=0.42, show_default=True, type=float, help="Amplitude cauda contrabalanco (rad).")
+@click.option(
+    "--neck-amp", "neck_amp", default=0.55, show_default=True, type=float, help="Amplitude pescoço / mordida (rad)."
+)
+@click.option(
+    "--tail-amp", "tail_amp", default=0.42, show_default=True, type=float, help="Amplitude cauda contrabalanco (rad)."
+)
 @click.option(
     "--append/--no-append",
     "append_mode",
@@ -735,8 +741,15 @@ def cmd_list_clips(input_path: Path) -> None:
 
 @main.command("screenshot")
 @click.argument("input_path", type=click.Path(path_type=Path, exists=True))
-@click.option("--output-dir", "-o", type=click.Path(path_type=Path), default=None, help="Pasta destino (default: <input>_debug/).")
-@click.option("--views", default=",".join(["front", "three_quarter", "right", "back"]), show_default=True, help="Vistas separadas por virgula.")
+@click.option(
+    "--output-dir", "-o", type=click.Path(path_type=Path), default=None, help="Pasta destino (default: <input>_debug/)."
+)
+@click.option(
+    "--views",
+    default=",".join(["front", "three_quarter", "right", "back"]),
+    show_default=True,
+    help="Vistas separadas por virgula.",
+)
 @click.option("--resolution", "-r", default=512, show_default=True, type=int, help="Resolucao em px.")
 @click.option("--show-bones", is_flag=True, help="Mostrar armature wireframe.")
 @click.option("--frame", default=None, type=int, help="Um frame para todas as vistas (ficheiros view.png).")
@@ -784,9 +797,13 @@ def cmd_screenshot(
 @click.argument("input_path", type=click.Path(path_type=Path, exists=True))
 @click.option("--output-dir", "-o", type=click.Path(path_type=Path), default=None, help="Pasta destino.")
 @click.option("--show-weights", default=None, type=str, help="Nome do osso para heatmap de pesos.")
-@click.option("--views", default=",".join(["front", "three_quarter", "right", "back"]), show_default=True, help="Vistas.")
+@click.option(
+    "--views", default=",".join(["front", "three_quarter", "right", "back"]), show_default=True, help="Vistas."
+)
 @click.option("--resolution", "-r", default=512, show_default=True, type=int, help="Resolucao em px.")
-def cmd_inspect_rig(input_path: Path, output_dir: Path | None, show_weights: str | None, views: str, resolution: int) -> None:
+def cmd_inspect_rig(
+    input_path: Path, output_dir: Path | None, show_weights: str | None, views: str, resolution: int
+) -> None:
     """Inspeciona rig: screenshots com ossos visiveis e/ou heatmap de pesos (debug IA)."""
     _require_bpy()
     from .debug_render import render_screenshots, render_weight_heatmap
@@ -799,7 +816,9 @@ def cmd_inspect_rig(input_path: Path, output_dir: Path | None, show_weights: str
     report = render_screenshots(input_path, output_dir, views=view_list, resolution=resolution, show_bones=True)
 
     if show_weights:
-        weight_report = render_weight_heatmap(input_path, output_dir, show_weights, views=view_list, resolution=resolution)
+        weight_report = render_weight_heatmap(
+            input_path, output_dir, show_weights, views=view_list, resolution=resolution
+        )
         report["weight_heatmap"] = weight_report.get("weight_heatmap")
 
     sys.stdout.write(json.dumps(report, indent=2, ensure_ascii=False) + "\n")
