@@ -22,6 +22,8 @@ class ManifestRow:
     generate_audio: bool = False
     # Auto-rig do GLB (Rigging3D) após Text3D; requer --with-rig e generate_3d=true
     generate_rig: bool = False
+    # Decomposição semântica (Part3D) após Text3D; requer --with-parts e generate_3d=true
+    generate_parts: bool = False
 
 
 def effective_image_source(profile: GameProfile, row: ManifestRow) -> str:
@@ -48,7 +50,7 @@ def _parse_image_source(value: str | None) -> str | None:
 
 
 def load_manifest(path: Path) -> list[ManifestRow]:
-    """Lê CSV com cabeçalhos: id, idea; opcionais: kind, generate_3d, image_source, generate_audio, generate_rig."""
+    """Lê CSV: id, idea; opcionais kind, generate_3d, image_source, generate_audio, generate_rig, generate_parts."""
     rows: list[ManifestRow] = []
     with path.open("r", encoding="utf-8", newline="") as f:
         reader = csv.DictReader(f)
@@ -64,6 +66,7 @@ def load_manifest(path: Path) -> list[ManifestRow]:
         img_src_key = fields.get("image_source")
         ga_key = fields.get("generate_audio")
         gr_key = fields.get("generate_rig")
+        gp_key = fields.get("generate_parts")
         for raw in reader:
             rid = (raw.get(id_key) or "").strip()
             idea = (raw.get(idea_key) or "").strip()
@@ -85,6 +88,9 @@ def load_manifest(path: Path) -> list[ManifestRow]:
             gr = False
             if gr_key:
                 gr = _parse_bool(raw.get(gr_key))
+            gp = False
+            if gp_key:
+                gp = _parse_bool(raw.get(gp_key))
             rows.append(
                 ManifestRow(
                     id=rid,
@@ -94,6 +100,7 @@ def load_manifest(path: Path) -> list[ManifestRow]:
                     image_source=img_src,
                     generate_audio=ga,
                     generate_rig=gr,
+                    generate_parts=gp,
                 )
             )
     if not rows:

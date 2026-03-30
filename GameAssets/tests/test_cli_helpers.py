@@ -7,11 +7,14 @@ from pathlib import Path
 
 from gameassets.cli import (
     _extract_json_from_output,
+    _paint3d_materialize_pbr_argv,
+    _paint3d_texture_argv,
     _paths_for_row,
     _rigging3d_output_path,
     _rigging3d_pipeline_argv,
     _seed_for_row,
     _text3d_argv,
+    _texture_subprocess_argv,
 )
 from gameassets.manifest import ManifestRow
 from gameassets.profile import GameProfile, Rigging3DProfile, Text3DProfile
@@ -137,7 +140,7 @@ def test_text3d_argv_with_profile_options() -> None:
     argv = _text3d_argv("text3d", p, Path("i.png"), Path("o.glb"))
     assert "--preset" in argv and "hq" in argv
     assert "--low-vram" in argv
-    assert "--texture" in argv
+    assert "--texture" not in argv
 
 
 def test_text3d_argv_shape_only_skips_texture() -> None:
@@ -168,6 +171,82 @@ def test_text3d_argv_explicit_hunyuan_skips_preset() -> None:
     argv = _text3d_argv("text3d", p, Path("i.png"), Path("o.glb"))
     assert "--preset" not in argv
     assert "--steps" in argv and "28" in argv
+
+
+def test_paint3d_texture_argv_includes_preset_when_materialize() -> None:
+    row = ManifestRow(id="x1", idea="x", kind=None, generate_3d=True)
+    p = GameProfile(
+        title="T",
+        genre="G",
+        tone="t",
+        style_preset="lowpoly",
+        output_dir="out",
+        text3d=Text3DProfile(
+            texture=True,
+            materialize=True,
+            materialize_preset="metal",
+        ),
+    )
+    argv = _paint3d_texture_argv(
+        "/bin/paint3d",
+        p,
+        Path("/shape.glb"),
+        Path("/ref.png"),
+        Path("/out.glb"),
+        with_materialize=True,
+        materialize_maps_dir=None,
+        row=row,
+    )
+    assert argv[0] == "/bin/paint3d"
+    assert argv[1] == "texture"
+    assert "--materialize" in argv
+    idx = argv.index("--materialize-preset") + 1
+    assert argv[idx] == "metal"
+
+
+def test_texture_subprocess_delegates_to_paint3d() -> None:
+    row = ManifestRow(id="r", idea="x", kind=None, generate_3d=True)
+    p = GameProfile(
+        title="T",
+        genre="G",
+        tone="t",
+        style_preset="lowpoly",
+        text3d=Text3DProfile(texture=True),
+    )
+    argv = _texture_subprocess_argv(
+        "/bin/paint3d",
+        p,
+        Path("/a.glb"),
+        Path("/b.png"),
+        Path("/c.glb"),
+        with_materialize=False,
+        materialize_maps_dir=None,
+        row=row,
+    )
+    assert argv[0] == "/bin/paint3d"
+    assert argv[1] == "texture"
+
+
+def test_paint3d_materialize_pbr_argv_preset() -> None:
+    row = ManifestRow(id="p", idea="x", kind=None, generate_3d=True)
+    p = GameProfile(
+        title="T",
+        genre="G",
+        tone="t",
+        style_preset="lowpoly",
+        text3d=Text3DProfile(materialize_preset="wood"),
+    )
+    argv = _paint3d_materialize_pbr_argv(
+        "paint3d",
+        p,
+        Path("/in.glb"),
+        Path("/out.glb"),
+        materialize_maps_dir=None,
+        row=row,
+    )
+    assert argv[:3] == ["paint3d", "materialize-pbr", str(Path("/in.glb"))]
+    i = argv.index("--preset") + 1
+    assert argv[i] == "wood"
 
 
 def test_text3d_argv_allow_shared_and_no_gpu_kill() -> None:
@@ -207,32 +286,7 @@ def test_text3d_argv_mesh_flags() -> None:
     assert "--mesh-smooth" in argv and "1" in argv
 
 
-def test_text3d_argv_materialize_with_maps_dir() -> None:
-    row = ManifestRow(id="Props/crate_01", idea="x", kind=None, generate_3d=True)
-    p = GameProfile(
-        title="T",
-        genre="G",
-        tone="t",
-        style_preset="lowpoly",
-        output_dir="out",
-        text3d=Text3DProfile(
-            preset="fast",
-            texture=True,
-            materialize=True,
-            materialize_save_maps=True,
-            materialize_maps_subdir="pbr_maps",
-        ),
-    )
-    argv = _text3d_argv("text3d", p, Path("i.png"), Path("o.glb"), row=row)
-    assert "--texture" in argv
-    assert "--materialize" in argv
-    assert "--materialize-output-dir" in argv
-    idx = argv.index("--materialize-output-dir") + 1
-    assert "Props__crate_01" in argv[idx]
-    assert "pbr_maps" in argv[idx]
-
-
-def test_text3d_argv_materialize_maps_dir_override() -> None:
+def test_paint3d_materialize_pbr_argv_maps_dir() -> None:
     row = ManifestRow(id="x", idea="x", kind=None, generate_3d=True)
     p = GameProfile(
         title="T",
@@ -241,23 +295,21 @@ def test_text3d_argv_materialize_maps_dir_override() -> None:
         style_preset="lowpoly",
         output_dir="out",
         text3d=Text3DProfile(
-            preset="fast",
-            texture=True,
-            materialize=True,
             materialize_save_maps=True,
+            materialize_preset="default",
         ),
     )
-    override = Path("/tmp/gameassets_maps_staging")
-    argv = _text3d_argv(
-        "text3d",
+    maps = Path("/tmp/pbr_maps")
+    argv = _paint3d_materialize_pbr_argv(
+        "paint3d",
         p,
-        Path("i.png"),
-        Path("o.glb"),
+        Path("/in.glb"),
+        Path("/out.glb"),
+        materialize_maps_dir=maps,
         row=row,
-        materialize_maps_dir=override,
     )
     idx = argv.index("--materialize-output-dir") + 1
-    assert argv[idx] == str(override)
+    assert argv[idx] == str(maps)
 
 
 def test_rigging3d_output_path() -> None:

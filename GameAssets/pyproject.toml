@@ -15,7 +15,7 @@ dependencies = [
     "rich>=13.0",
     "rich-click>=1.8.0",
     "Pillow>=10.0",
-    "gamedev-shared",
+    "gamedev-shared @ file:../Shared",
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",

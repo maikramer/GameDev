@@ -25,7 +25,15 @@ from .cli_rich import click
 from .cursor_skill_install import install_agent_skill
 from .manifest import ManifestRow, effective_image_source, load_manifest
 from .presets import get_preset, load_presets_bundle
-from .profile import GameProfile, Rigging3DProfile, Text2SoundProfile, Texture2DProfile, load_profile
+from .profile import (
+    GameProfile,
+    Part3DProfile,
+    Rigging3DProfile,
+    Text2SoundProfile,
+    Text3DProfile,
+    Texture2DProfile,
+    load_profile,
+)
 from .prompt_builder import build_audio_prompt, build_prompt
 from .runner import merge_subprocess_output, resolve_binary, run_cmd
 from .templates import GAME_YAML, MANIFEST_CSV
@@ -42,7 +50,8 @@ Preset só num ficheiro teu (ex.: galaxy_orbital em presets-local.yaml):
   gameassets batch --profile game.yaml --manifest manifest.csv --with-3d \\
     --presets-local presets-local.yaml --log run.jsonl
 
-Define TEXT2D_BIN / TEXT3D_BIN / RIGGING3D_BIN
+Define TEXT2D_BIN / TEXT3D_BIN / PAINT3D_BIN (se ``text3d.texture`` ou ``materialize``) / RIGGING3D_BIN / PART3D_BIN.
+Text3D gera só geometria; textura e PBR são o CLI ``paint3d``.
 (e MATERIALIZE_BIN se usares text3d.materialize) se não estiverem no PATH.
 Com image_source: texture2d: TEXTURE2D_BIN e, se texture2d.materialize,
 MATERIALIZE_BIN (ou texture2d.materialize_bin).
@@ -343,7 +352,7 @@ def _rigging3d_pipeline_failed(
     rigging3d_bin: str | None,
     with_rig: bool,
 ) -> bool:
-    """Corre ``rigging3d pipeline`` após GLB do Text3D. Devolve True se o rig falhou."""
+    """Corre ``rigging3d pipeline`` após Text3D (GLB base ou ``*_parts.glb`` se parts+rig). Devolve True se falhou."""
     if not with_rig or not row.generate_rig or not rigging3d_bin:
         return False
     if not row.generate_3d:
@@ -378,6 +387,164 @@ def _rigging3d_pipeline_failed(
         return True
     rec["rig_mesh_path"] = _path_for_log(rig_out, manifest_dir)
     return False
+
+
+def _part3d_profile_effective(profile: GameProfile) -> Part3DProfile:
+    return profile.part3d or Part3DProfile()
+
+
+def _part3d_stem_suffix(raw: str | None, default: str) -> str:
+    s = (raw or "").strip()
+    if not s:
+        s = default
+    return s if s.startswith("_") else f"_{s}"
+
+
+def _part3d_output_paths(mesh_final: Path, p3: Part3DProfile) -> tuple[Path, Path]:
+    ps = _part3d_stem_suffix(p3.parts_suffix, "_parts")
+    ss = _part3d_stem_suffix(p3.segmented_suffix, "_segmented")
+    parts = mesh_final.with_name(f"{mesh_final.stem}{ps}.glb")
+    segmented = mesh_final.with_name(f"{mesh_final.stem}{ss}.glb")
+    return parts, segmented
+
+
+def _part3d_decompose_argv(
+    part3d_bin: str,
+    mesh_in: Path,
+    out_parts: Path,
+    out_seg: Path,
+    p3: Part3DProfile,
+    seed: int | None,
+) -> list[str]:
+    args = [
+        part3d_bin,
+        "decompose",
+        str(mesh_in),
+        "-o",
+        str(out_parts),
+        "--output-segmented",
+        str(out_seg),
+    ]
+    if p3.octree_resolution is not None:
+        args.extend(["--octree-resolution", str(p3.octree_resolution)])
+    if p3.steps is not None:
+        args.extend(["--steps", str(p3.steps)])
+    if p3.num_chunks is not None:
+        args.extend(["--num-chunks", str(p3.num_chunks)])
+    if seed is not None:
+        args.extend(["--seed", str(seed)])
+    if p3.no_cpu_offload:
+        args.append("--no-cpu-offload")
+    if p3.segment_only:
+        args.append("--segment-only")
+    if p3.verbose:
+        args.append("-v")
+    return args
+
+
+def _part3d_pipeline_failed(
+    profile: GameProfile,
+    row: ManifestRow,
+    mesh_final: Path,
+    rec: dict[str, Any],
+    manifest_dir: Path,
+    child_env: dict[str, str],
+    part3d_bin: str | None,
+    with_parts: bool,
+) -> bool:
+    """Corre ``part3d decompose`` após GLB do Text3D. Devolve True se falhou."""
+    if not with_parts or not row.generate_parts or not part3d_bin:
+        return False
+    if not row.generate_3d:
+        return False
+    if not mesh_final.is_file():
+        return False
+    p3 = _part3d_profile_effective(profile)
+    out_parts, out_seg = _part3d_output_paths(mesh_final, p3)
+    seed = _seed_for_row(profile, f"{row.id}:part3d")
+    argv = _part3d_decompose_argv(part3d_bin, mesh_final, out_parts, out_seg, p3, seed)
+    t0 = time.perf_counter()
+    r = run_cmd(argv, extra_env=child_env, cwd=manifest_dir)
+    _timing_append(rec, "part3d", time.perf_counter() - t0)
+    if r.returncode != 0:
+        err = merge_subprocess_output(r) or "part3d falhou"
+        rec["status"] = "error"
+        rec["error"] = err
+        preview = merge_subprocess_output(r, max_chars=4000) or err
+        console.print(f"[red]part3d falhou[/red] {row.id}: {preview}")
+        return True
+    if p3.segment_only:
+        if not out_seg.is_file():
+            rec["status"] = "error"
+            rec["error"] = "part3d não produziu mesh segmentada"
+            console.print(f"[red]part3d sem mesh segmentada[/red] {row.id}")
+            return True
+        rec["segmented_mesh_path"] = _path_for_log(out_seg, manifest_dir)
+        return False
+    if not out_parts.is_file():
+        rec["status"] = "error"
+        rec["error"] = "part3d não produziu GLB de partes"
+        console.print(f"[red]part3d sem GLB de partes[/red] {row.id}")
+        return True
+    rec["parts_mesh_path"] = _path_for_log(out_parts, manifest_dir)
+    if out_seg.is_file():
+        rec["segmented_mesh_path"] = _path_for_log(out_seg, manifest_dir)
+    return False
+
+
+def _post_text3d_mesh_extras(
+    profile: GameProfile,
+    row: ManifestRow,
+    mesh_final: Path,
+    rec: dict[str, Any],
+    maps_tmp: Path | None,
+    t3_opts: Text3DProfile | None,
+    manifest_dir: Path,
+    child_env: dict[str, str],
+    part3d_bin: str | None,
+    with_parts: bool,
+    rigging3d_bin: str | None,
+    with_rig: bool,
+) -> bool:
+    """Exporta mapas PBR, define mesh_path, part3d, rigging3d. Devolve True se algum passo falhou."""
+    if maps_tmp is not None and t3_opts and t3_opts.materialize_export_maps_to_output:
+        dst_maps = _materialize_maps_path_manifest(profile, manifest_dir, row)
+        dst_maps.mkdir(parents=True, exist_ok=True)
+        _install_maps_dir(maps_tmp, dst_maps)
+    rec["mesh_path"] = _path_for_log(mesh_final, manifest_dir)
+    part3d_fail = _part3d_pipeline_failed(
+        profile,
+        row,
+        mesh_final,
+        rec,
+        manifest_dir,
+        child_env,
+        part3d_bin,
+        with_parts,
+    )
+    rig_mesh_in = mesh_final
+    if (
+        not part3d_fail
+        and with_rig
+        and row.generate_rig
+        and with_parts
+        and row.generate_parts
+    ):
+        p3 = _part3d_profile_effective(profile)
+        out_parts, _out_seg = _part3d_output_paths(mesh_final, p3)
+        if not p3.segment_only and out_parts.is_file():
+            rig_mesh_in = out_parts
+            rec["rig_input_path"] = _path_for_log(rig_mesh_in, manifest_dir)
+    return part3d_fail or _rigging3d_pipeline_failed(
+        profile,
+        row,
+        rig_mesh_in,
+        rec,
+        manifest_dir,
+        child_env,
+        rigging3d_bin,
+        with_rig,
+    )
 
 
 def _build_context(
@@ -618,6 +785,12 @@ def prompts_cmd(
     is_flag=True,
     help="Após Text3D, corre rigging3d pipeline nas linhas com generate_rig=true (GLB rigado).",
 )
+@click.option(
+    "--with-parts",
+    "with_parts",
+    is_flag=True,
+    help="Após Text3D, corre part3d decompose nas linhas com generate_parts=true (partes semânticas).",
+)
 def batch_cmd(
     profile_path: Path,
     manifest_path: Path,
@@ -631,6 +804,7 @@ def batch_cmd(
     skip_text2d: bool,
     skip_audio: bool,
     with_rig: bool,
+    with_parts: bool,
 ) -> None:
     """Gera imagens (e opcionalmente meshes) para cada linha do manifest."""
     profile, rows, _bundle, preset = _build_context(profile_path, manifest_path, presets_local)
@@ -668,6 +842,26 @@ def batch_cmd(
             )
         )
 
+    if not with_3d and any(r.generate_parts for r in rows):
+        console.print(
+            Panel(
+                "[yellow]Há linhas com generate_parts=true mas --with-3d está desligado.[/yellow]\n"
+                "O Part3D corre após o GLB do Text3D; activa [bold]--with-3d[/bold] e generate_3d.",
+                title="Aviso",
+                border_style="yellow",
+            )
+        )
+
+    if not with_parts and any(r.generate_parts for r in rows):
+        console.print(
+            Panel(
+                "[yellow]Há linhas com generate_parts=true mas Part3D está desligado.[/yellow]\n"
+                "Usa [bold]--with-parts[/bold] para correr part3d após o GLB do Text3D.",
+                title="Aviso",
+                border_style="yellow",
+            )
+        )
+
     def _row_sources() -> tuple[bool, bool]:
         any_t2d = False
         any_tex = False
@@ -696,16 +890,32 @@ def batch_cmd(
             except FileNotFoundError as e:
                 raise click.ClickException(str(e)) from e
     text3d_bin: str | None = None
+    paint3d_bin: str | None = None
     if with_3d:
         try:
             text3d_bin = resolve_binary("TEXT3D_BIN", "text3d")
         except FileNotFoundError as e:
             raise click.ClickException(str(e)) from e
+        t3_chk = profile.text3d
+        if t3_chk and (t3_chk.texture or t3_chk.materialize):
+            try:
+                paint3d_bin = resolve_binary("PAINT3D_BIN", "paint3d")
+            except FileNotFoundError as e:
+                raise click.ClickException(
+                    "Perfil com text3d.texture ou text3d.materialize requer paint3d no PATH ou PAINT3D_BIN."
+                ) from e
 
     rigging3d_bin: str | None = None
     if with_rig and any(r.generate_rig for r in rows):
         try:
             rigging3d_bin = resolve_binary("RIGGING3D_BIN", "rigging3d")
+        except FileNotFoundError as e:
+            raise click.ClickException(str(e)) from e
+
+    part3d_bin: str | None = None
+    if with_parts and any(r.generate_parts for r in rows):
+        try:
+            part3d_bin = resolve_binary("PART3D_BIN", "part3d")
         except FileNotFoundError as e:
             raise click.ClickException(str(e)) from e
 
@@ -741,7 +951,14 @@ def batch_cmd(
             "[dim]omitido (--skip-audio)[/dim]" if skip_audio else (text2sound_bin or ""),
         )
     meta.add_row("text3d", text3d_bin or "[dim](desligado)[/dim]")
+    if with_3d:
+        t3_meta = profile.text3d
+        if t3_meta and (t3_meta.texture or t3_meta.materialize):
+            meta.add_row("paint3d", paint3d_bin or "[red]em falta[/red]")
+        else:
+            meta.add_row("paint3d", "[dim](não necessário — sem textura/PBR)[/dim]")
     meta.add_row("rigging3d", rigging3d_bin or "[dim](desligado)[/dim]")
+    meta.add_row("part3d", part3d_bin or "[dim](desligado)[/dim]")
     meta.add_row("Modo", "[cyan]dry-run[/cyan]" if dry_run else "execução")
     if skip_text2d:
         ord_skip: list[str] = ["Geração 2D omitida"]
@@ -749,6 +966,8 @@ def batch_cmd(
             ord_skip.append("Text2Sound (linhas generate_audio)")
         if with_3d:
             ord_skip.append("Text3D (só generate_3d, PNG no output_dir)")
+            if with_parts:
+                ord_skip.append("Part3D (generate_parts)")
         meta.add_row("Ordem", " → ".join(ord_skip))
     elif any_texture2d_row or any_text2d_row:
         if any_texture2d_row and any_text2d_row:
@@ -763,6 +982,8 @@ def batch_cmd(
             ord_parts.append("Text2Sound (linhas generate_audio)")
         if with_3d:
             ord_parts.append("Text3D (só generate_3d)")
+            if with_parts:
+                ord_parts.append("Part3D (generate_parts)")
         meta.add_row("Ordem", " → ".join(ord_parts))
     else:
         ord_tail = "Text2D (todas as linhas)"
@@ -770,6 +991,8 @@ def batch_cmd(
             ord_tail += " → Text2Sound (linhas generate_audio)"
         if with_3d:
             ord_tail += " → Text3D (só generate_3d, imagens já gravadas)"
+            if with_parts:
+                ord_tail += " → Part3D (generate_parts)"
         meta.add_row("Ordem", ord_tail)
     lock_path = manifest_path.parent / ".gameassets_batch.lock"
     meta.add_row(
@@ -876,9 +1099,9 @@ def batch_cmd(
                     console.print(f"[dim]{' '.join(argv_au)}[/dim]")
         if with_3d and text3d_bin and any(r.generate_3d for r in rows):
             t3d = profile.text3d
-            phased = bool(t3d and t3d.phased_batch and t3d.texture)
+            phased = bool(t3d and t3d.texture)
             if phased:
-                console.print("[dim]--- Text3D em fases (phased_batch): shape → Paint → materialize-pbr ---[/dim]")
+                console.print("[dim]--- Text3D + paint3d: shape → texture → materialize-pbr ---[/dim]")
                 for row in rows:
                     if not row.generate_3d:
                         continue
@@ -897,8 +1120,9 @@ def batch_cmd(
                         a1 = [*a1, "--seed", str(seed)]
                     console.print(f"[dim]{' '.join(a1)}[/dim]")
                     out_paint = str(mesh_path) if not (t3d and t3d.materialize) else "<tmp>/painted.glb"
-                    a2 = _text3d_texture_argv(
-                        text3d_bin,
+                    pbin = paint3d_bin or "paint3d"
+                    a2 = _texture_subprocess_argv(
+                        pbin,
                         profile,
                         Path(tw),
                         img_path,
@@ -910,8 +1134,8 @@ def batch_cmd(
                     console.print(f"[dim]{' '.join(a2)}[/dim]")
                     if t3d and t3d.materialize:
                         maps_ph = _materialize_maps_path(profile, row)
-                        a3 = _text3d_materialize_pbr_argv(
-                            text3d_bin,
+                        a3 = _materialize_pbr_subprocess_argv(
+                            pbin,
                             profile,
                             Path("<tmp>/painted.glb"),
                             mesh_path,
@@ -930,8 +1154,19 @@ def batch_cmd(
                     if seed is not None:
                         t3d_args.extend(["--seed", str(seed)])
                     console.print(f"[dim]{' '.join(t3d_args)}[/dim]")
+        if with_parts and part3d_bin and any(r.generate_3d and r.generate_parts for r in rows):
+            console.print("[dim]--- Part3D (após GLB Text3D; generate_parts=true) ---[/dim]")
+            for row in rows:
+                if not row.generate_3d or not row.generate_parts:
+                    continue
+                _img_path, mesh_path = _paths_for_row_manifest(profile, manifest_dir, row)
+                p3 = _part3d_profile_effective(profile)
+                out_p, out_s = _part3d_output_paths(mesh_path, p3)
+                seed = _seed_for_row(profile, f"{row.id}:part3d")
+                pa = _part3d_decompose_argv(part3d_bin, mesh_path, out_p, out_s, p3, seed)
+                console.print(f"[dim]{' '.join(pa)}[/dim]")
         if with_rig and rigging3d_bin and any(r.generate_3d and r.generate_rig for r in rows):
-            console.print("[dim]--- Rigging3D (após GLB do Text3D; generate_rig=true) ---[/dim]")
+            console.print("[dim]--- Rigging3D (entrada: *_parts.glb se parts+rig; senão GLB base) ---[/dim]")
             for row in rows:
                 if not row.generate_3d or not row.generate_rig:
                     continue
@@ -939,10 +1174,18 @@ def batch_cmd(
                 seed = _seed_for_row(profile, row.id)
                 rg = profile.rigging3d
                 sfx = rg.output_suffix if rg else "_rigged"
-                rig_out = _rigging3d_output_path(mesh_path, sfx)
+                rig_in = mesh_path
+                if (
+                    with_parts
+                    and row.generate_parts
+                    and not (_part3d_profile_effective(profile).segment_only)
+                ):
+                    out_p, _ = _part3d_output_paths(mesh_path, _part3d_profile_effective(profile))
+                    rig_in = out_p
+                rig_out = _rigging3d_output_path(rig_in, sfx)
                 rg_args = _rigging3d_pipeline_argv(
                     rigging3d_bin,
-                    mesh_path,
+                    rig_in,
                     rig_out,
                     seed=seed,
                     rig_profile=rg,
@@ -1003,6 +1246,8 @@ def batch_cmd(
                         "status": "ok",
                         "image_path": _path_for_log(img_final, manifest_dir),
                         "mesh_path": None,
+                        "parts_mesh_path": None,
+                        "segmented_mesh_path": None,
                         "rig_mesh_path": None,
                         "audio_path": None,
                         "error": None,
@@ -1213,14 +1458,14 @@ def batch_cmd(
                             "`nvidia-smi` deve mostrar VRAM livre. Em ~6 GB, "
                             "[bold]text3d.low_vram: true[/bold] no [cyan]game.yaml[/cyan] "
                             "evita OOM (malha pode ser mais grosseira). "
-                            "Com [bold]phased_batch: true[/bold], o batch corre: shape (todos) → "
-                            "Paint (todos) → materialize-pbr (todos), libertando VRAM entre passos.",
+                            "Com [bold]text3d.texture[/bold], o batch corre: shape (text3d) → "
+                            "paint3d texture → materialize-pbr, libertando VRAM entre passos.",
                             border_style="yellow",
                             title="Antes do 3D",
                         )
                     )
                     t3_opts = profile.text3d
-                    use_phased = bool(t3_opts and t3_opts.phased_batch and t3_opts.texture)
+                    use_phased = bool(t3_opts and t3_opts.texture)
 
                     def _finalize_mesh_ok(
                         rec: dict[str, Any],
@@ -1229,18 +1474,17 @@ def batch_cmd(
                         row: ManifestRow,
                     ) -> None:
                         nonlocal failures
-                        if maps_tmp is not None and t3_opts and t3_opts.materialize_export_maps_to_output:
-                            dst_maps = _materialize_maps_path_manifest(profile, manifest_dir, row)
-                            dst_maps.mkdir(parents=True, exist_ok=True)
-                            _install_maps_dir(maps_tmp, dst_maps)
-                        rec["mesh_path"] = _path_for_log(mesh_final, manifest_dir)
-                        if _rigging3d_pipeline_failed(
+                        if _post_text3d_mesh_extras(
                             profile,
                             row,
                             mesh_final,
                             rec,
+                            maps_tmp,
+                            t3_opts,
                             manifest_dir,
                             child_env,
+                            part3d_bin,
+                            with_parts,
                             rigging3d_bin,
                             with_rig,
                         ):
@@ -1303,7 +1547,10 @@ def batch_cmd(
                                     shutil.rmtree(row_work, ignore_errors=True)
                                 progress.advance(task_shape)
 
-                        task_paint = progress.add_task("[cyan]Text3D: Paint (todos)[/cyan]", total=len(shape_ok))
+                        task_paint = progress.add_task(
+                            "[cyan]paint3d texture (todos)[/cyan]",
+                            total=len(shape_ok),
+                        )
                         texture_ok: list[int] = []
                         for idx in shape_ok:
                             row = rows[idx]
@@ -1321,8 +1568,9 @@ def batch_cmd(
                             if t3_opts and t3_opts.materialize and t3_opts.materialize_save_maps:
                                 maps_tmp = row_work / "pbr_maps"
                             try:
-                                t_tex = _text3d_texture_argv(
-                                    text3d_bin,
+                                assert paint3d_bin is not None
+                                t_tex = _texture_subprocess_argv(
+                                    paint3d_bin,
                                     profile,
                                     mesh_shape,
                                     img_final,
@@ -1333,22 +1581,22 @@ def batch_cmd(
                                 )
                                 t_paint = time.perf_counter()
                                 r4 = run_cmd(t_tex, extra_env=child_env, cwd=manifest_dir)
-                                _timing_append(rec, "text3d_texture", time.perf_counter() - t_paint)
+                                _timing_append(rec, "paint3d_texture", time.perf_counter() - t_paint)
                                 if r4.returncode != 0:
                                     failures += 1
-                                    err = merge_subprocess_output(r4) or "text3d texture falhou"
+                                    err = merge_subprocess_output(r4) or "paint3d texture falhou"
                                     rec["status"] = "error"
                                     rec["error"] = err
                                     preview = merge_subprocess_output(r4, max_chars=4000) or err
-                                    console.print(f"[red]text3d texture falhou[/red] {row.id}: {preview}")
+                                    console.print(f"[red]texture (paint) falhou[/red] {row.id}: {preview}")
                                     append_log(rec)
                                     if not continue_on_error:
                                         raise click.Abort()
                                 elif not mesh_out.is_file():
                                     failures += 1
                                     rec["status"] = "error"
-                                    rec["error"] = "text3d texture não produziu GLB"
-                                    console.print(f"[red]text3d texture sem GLB[/red] {row.id}")
+                                    rec["error"] = "texture não produziu GLB"
+                                    console.print(f"[red]texture sem GLB[/red] {row.id}")
                                     append_log(rec)
                                     if not continue_on_error:
                                         raise click.Abort()
@@ -1368,7 +1616,7 @@ def batch_cmd(
 
                         if t3_opts and t3_opts.materialize:
                             task_mat = progress.add_task(
-                                "[cyan]Text3D: Materialize PBR (todos)[/cyan]",
+                                "[cyan]Paint3D: Materialize PBR (todos)[/cyan]",
                                 total=len(texture_ok),
                             )
                             for idx in texture_ok:
@@ -1383,8 +1631,9 @@ def batch_cmd(
                                 img_final, mesh_final = _paths_for_row_manifest(profile, manifest_dir, row)
                                 maps_tmp = row_work / "pbr_maps"
                                 try:
-                                    t_mat = _text3d_materialize_pbr_argv(
-                                        text3d_bin,
+                                    assert paint3d_bin is not None
+                                    t_mat = _materialize_pbr_subprocess_argv(
+                                        paint3d_bin,
                                         profile,
                                         painted,
                                         mesh_final,
@@ -1393,14 +1642,10 @@ def batch_cmd(
                                     )
                                     t_mpbr = time.perf_counter()
                                     r5 = run_cmd(t_mat, extra_env=child_env, cwd=manifest_dir)
-                                    _timing_append(
-                                        rec,
-                                        "text3d_materialize_pbr",
-                                        time.perf_counter() - t_mpbr,
-                                    )
+                                    _timing_append(rec, "paint3d_materialize_pbr", time.perf_counter() - t_mpbr)
                                     if r5.returncode != 0:
                                         failures += 1
-                                        err = merge_subprocess_output(r5) or "text3d materialize-pbr falhou"
+                                        err = merge_subprocess_output(r5) or "materialize-pbr falhou"
                                         rec["status"] = "error"
                                         rec["error"] = err
                                         preview = merge_subprocess_output(r5, max_chars=4000) or err
@@ -1464,18 +1709,17 @@ def batch_cmd(
                                     console.print(f"[red]text3d sem GLB[/red] {row.id}")
                                 else:
                                     _install_file(mesh_tmp, mesh_final)
-                                    if maps_tmp is not None and t3_opts and t3_opts.materialize_export_maps_to_output:
-                                        dst_maps = _materialize_maps_path_manifest(profile, manifest_dir, row)
-                                        dst_maps.mkdir(parents=True, exist_ok=True)
-                                        _install_maps_dir(maps_tmp, dst_maps)
-                                    rec["mesh_path"] = _path_for_log(mesh_final, manifest_dir)
-                                    if _rigging3d_pipeline_failed(
+                                    if _post_text3d_mesh_extras(
                                         profile,
                                         row,
                                         mesh_final,
                                         rec,
+                                        maps_tmp,
+                                        t3_opts,
                                         manifest_dir,
                                         child_env,
+                                        part3d_bin,
+                                        with_parts,
                                         rigging3d_bin,
                                         with_rig,
                                     ):
@@ -1500,6 +1744,135 @@ def batch_cmd(
             console.print(f"[yellow]Concluído com {failures} falha(s).[/yellow]")
             sys.exit(1)
         console.print("[green]Batch concluído com sucesso.[/green]")
+
+
+def _try_paint3d_bin() -> str | None:
+    try:
+        return resolve_binary("PAINT3D_BIN", "paint3d")
+    except FileNotFoundError:
+        return None
+
+
+def _paint3d_texture_argv(
+    paint3d_bin: str,
+    profile: GameProfile,
+    mesh_in: Path,
+    image_path: Path,
+    mesh_out: Path,
+    *,
+    with_materialize: bool,
+    materialize_maps_dir: Path | None,
+    row: ManifestRow,
+) -> list[str]:
+    """Subcomando ``paint3d texture`` (Hunyuan3D-Paint); PBR opcional no mesmo passo."""
+    args = [
+        paint3d_bin,
+        "texture",
+        str(mesh_in),
+        "--image",
+        str(image_path),
+        "-o",
+        str(mesh_out),
+    ]
+    t3 = profile.text3d
+    if not t3:
+        return args
+    if with_materialize and t3.materialize:
+        args.append("--materialize")
+        args.extend(["--materialize-preset", t3.materialize_preset])
+        if t3.materialize_save_maps:
+            maps_dir = (
+                materialize_maps_dir if materialize_maps_dir is not None else _materialize_maps_path(profile, row)
+            )
+            args.extend(["--materialize-output-dir", str(maps_dir)])
+        if t3.materialize_bin:
+            args.extend(["--materialize-bin", t3.materialize_bin])
+        if t3.materialize_no_invert:
+            args.append("--materialize-no-invert")
+    if t3.allow_shared_gpu:
+        args.append("--allow-shared-gpu")
+    if not t3.gpu_kill_others:
+        args.append("--no-gpu-kill-others")
+    if t3.full_gpu:
+        args.append("--paint-full-gpu")
+    return args
+
+
+def _paint3d_materialize_pbr_argv(
+    paint3d_bin: str,
+    profile: GameProfile,
+    mesh_in: Path,
+    mesh_out: Path,
+    *,
+    materialize_maps_dir: Path | None,
+    row: ManifestRow,
+) -> list[str]:
+    """Subcomando ``paint3d materialize-pbr`` (só Materialize, GLB já pintado)."""
+    args = [
+        paint3d_bin,
+        "materialize-pbr",
+        str(mesh_in),
+        "-o",
+        str(mesh_out),
+    ]
+    t3 = profile.text3d
+    if not t3:
+        return args
+    args.extend(["--preset", t3.materialize_preset])
+    if t3.materialize_save_maps:
+        maps_dir = materialize_maps_dir if materialize_maps_dir is not None else _materialize_maps_path(profile, row)
+        args.extend(["--materialize-output-dir", str(maps_dir)])
+    if t3.materialize_bin:
+        args.extend(["--materialize-bin", t3.materialize_bin])
+    if t3.materialize_no_invert:
+        args.append("--materialize-no-invert")
+    if t3.allow_shared_gpu:
+        args.append("--allow-shared-gpu")
+    if not t3.gpu_kill_others:
+        args.append("--no-gpu-kill-others")
+    return args
+
+
+def _texture_subprocess_argv(
+    paint3d_bin: str,
+    profile: GameProfile,
+    mesh_in: Path,
+    image_path: Path,
+    mesh_out: Path,
+    *,
+    with_materialize: bool,
+    materialize_maps_dir: Path | None,
+    row: ManifestRow,
+) -> list[str]:
+    return _paint3d_texture_argv(
+        paint3d_bin,
+        profile,
+        mesh_in,
+        image_path,
+        mesh_out,
+        with_materialize=with_materialize,
+        materialize_maps_dir=materialize_maps_dir,
+        row=row,
+    )
+
+
+def _materialize_pbr_subprocess_argv(
+    paint3d_bin: str,
+    profile: GameProfile,
+    mesh_in: Path,
+    mesh_out: Path,
+    *,
+    materialize_maps_dir: Path | None,
+    row: ManifestRow,
+) -> list[str]:
+    return _paint3d_materialize_pbr_argv(
+        paint3d_bin,
+        profile,
+        mesh_in,
+        mesh_out,
+        materialize_maps_dir=materialize_maps_dir,
+        row=row,
+    )
 
 
 def _text3d_argv(
@@ -1541,114 +1914,18 @@ def _text3d_argv(
         args.extend(["--model-subfolder", t3.model_subfolder])
     if t3.low_vram:
         args.append("--low-vram")
-    if t3.texture and not shape_only:
-        args.append("--texture")
     if t3.mc_level is not None:
         args.extend(["--mc-level", str(t3.mc_level)])
     if t3.no_mesh_repair:
         args.append("--no-mesh-repair")
     if t3.mesh_smooth is not None:
         args.extend(["--mesh-smooth", str(t3.mesh_smooth)])
-    if t3.materialize and not shape_only:
-        args.append("--materialize")
-        if t3.materialize_save_maps:
-            if row is None:
-                raise ValueError("text3d.materialize_save_maps requer id do manifest (uso interno batch)")
-            maps_dir = (
-                materialize_maps_dir if materialize_maps_dir is not None else _materialize_maps_path(profile, row)
-            )
-            args.extend(["--materialize-output-dir", str(maps_dir)])
-        if t3.materialize_bin:
-            args.extend(["--materialize-bin", t3.materialize_bin])
-        if t3.materialize_no_invert:
-            args.append("--materialize-no-invert")
     if t3.allow_shared_gpu:
         args.append("--allow-shared-gpu")
     if not t3.gpu_kill_others:
         args.append("--no-gpu-kill-others")
-    # GPU pura: desativa CPU offload no Text2D e Paint (quando aplicável)
     if t3.full_gpu:
         args.append("--t2d-full-gpu")
-        if t3.texture and not shape_only:
-            args.append("--paint-full-gpu")
-    return args
-
-
-def _text3d_texture_argv(
-    text3d_bin: str,
-    profile: GameProfile,
-    mesh_in: Path,
-    image_path: Path,
-    mesh_out: Path,
-    *,
-    with_materialize: bool,
-    materialize_maps_dir: Path | None,
-    row: ManifestRow,
-) -> list[str]:
-    """Subcomando ``text3d texture`` (Hunyuan3D-Paint); PBR opcional no mesmo passo."""
-    args = [
-        text3d_bin,
-        "texture",
-        str(mesh_in),
-        "--image",
-        str(image_path),
-        "-o",
-        str(mesh_out),
-    ]
-    t3 = profile.text3d
-    if not t3:
-        return args
-    if with_materialize and t3.materialize:
-        args.append("--materialize")
-        if t3.materialize_save_maps:
-            maps_dir = (
-                materialize_maps_dir if materialize_maps_dir is not None else _materialize_maps_path(profile, row)
-            )
-            args.extend(["--materialize-output-dir", str(maps_dir)])
-        if t3.materialize_bin:
-            args.extend(["--materialize-bin", t3.materialize_bin])
-        if t3.materialize_no_invert:
-            args.append("--materialize-no-invert")
-    if t3.allow_shared_gpu:
-        args.append("--allow-shared-gpu")
-    if not t3.gpu_kill_others:
-        args.append("--no-gpu-kill-others")
-    if t3.full_gpu:
-        args.append("--paint-full-gpu")
-    return args
-
-
-def _text3d_materialize_pbr_argv(
-    text3d_bin: str,
-    profile: GameProfile,
-    mesh_in: Path,
-    mesh_out: Path,
-    *,
-    materialize_maps_dir: Path | None,
-    row: ManifestRow,
-) -> list[str]:
-    """Subcomando ``text3d materialize-pbr`` (só Materialize, GLB já pintado)."""
-    args = [
-        text3d_bin,
-        "materialize-pbr",
-        str(mesh_in),
-        "-o",
-        str(mesh_out),
-    ]
-    t3 = profile.text3d
-    if not t3:
-        return args
-    if t3.materialize_save_maps:
-        maps_dir = materialize_maps_dir if materialize_maps_dir is not None else _materialize_maps_path(profile, row)
-        args.extend(["--materialize-output-dir", str(maps_dir)])
-    if t3.materialize_bin:
-        args.extend(["--materialize-bin", t3.materialize_bin])
-    if t3.materialize_no_invert:
-        args.append("--materialize-no-invert")
-    if t3.allow_shared_gpu:
-        args.append("--allow-shared-gpu")
-    if not t3.gpu_kill_others:
-        args.append("--no-gpu-kill-others")
     return args
 
 
@@ -1700,8 +1977,8 @@ def resume_cmd(
     Detecta automaticamente por item:
       - PNG em falta  → text2d
       - shape em falta → text3d generate (shape)
-      - paint em falta → text3d texture
-      - GLB final em falta → materialize-pbr + copiar
+      - paint em falta → paint3d texture
+      - GLB final em falta → paint3d materialize-pbr + copiar
       - tudo OK       → skip
     """
 
@@ -1721,6 +1998,9 @@ def resume_cmd(
         text3d_bin: str | None = resolve_binary("TEXT3D_BIN", "text3d")
     except FileNotFoundError:
         text3d_bin = None
+    paint3d_bin: str | None = None
+    if t3_opts and (t3_opts.texture or t3_opts.materialize):
+        paint3d_bin = _try_paint3d_bin()
 
     work_dir = manifest_dir / ".gameassets_work" if work_dir is None else work_dir.resolve()
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -1813,13 +2093,17 @@ def resume_cmd(
         "text3d generate --from-image" if shape_pending > 0 else "[green]OK[/green]",
     )
     paint_pending = counts[NEED_PAINT] + counts[NEED_SHAPE] + counts[NEED_IMAGE]
+    paint_label = "paint3d texture"
     plan_table.add_row(
-        "3. Paint (textura)", str(paint_pending), "text3d texture" if paint_pending > 0 else "[green]OK[/green]"
+        "3. Paint (textura)",
+        str(paint_pending),
+        paint_label if paint_pending > 0 else "[green]OK[/green]",
     )
     mat_pending = counts[NEED_MATERIALIZE] + paint_pending
     if want_materialize:
+        mat_label = "paint3d materialize-pbr"
         plan_table.add_row(
-            "4. Materialize PBR", str(mat_pending), "text3d materialize-pbr" if mat_pending > 0 else "[green]OK[/green]"
+            "4. Materialize PBR", str(mat_pending), mat_label if mat_pending > 0 else "[green]OK[/green]"
         )
     plan_table.add_row("[green]Concluídos[/green]", str(counts[DONE]), "[green]skip[/green]")
     console.print(plan_table)
@@ -1841,6 +2125,10 @@ def resume_cmd(
             console.print("[yellow]AVISO: text2d não encontrado — linhas text2d serão saltadas.[/yellow]")
     if (counts[NEED_SHAPE] + counts[NEED_PAINT] + counts[NEED_MATERIALIZE]) > 0 and not text3d_bin:
         raise click.ClickException("text3d não encontrado. Define TEXT3D_BIN ou instala o pacote.")
+    if items and (want_texture or want_materialize) and not paint3d_bin:
+        raise click.ClickException(
+            "Perfil com text3d.texture ou materialize requer paint3d no PATH ou PAINT3D_BIN."
+        )
 
     if dry_run:
         for it in items:
@@ -1976,7 +2264,7 @@ def resume_cmd(
 
     # --- Fase 3: Paint ---
     need_paint = [it for it in items if it["state"] == NEED_PAINT]
-    if need_paint and text3d_bin:
+    if need_paint and paint3d_bin:
         console.print(f"\n[bold cyan]Fase 3: Paint ({len(need_paint)} texturas)[/bold cyan]")
         with Progress(
             SpinnerColumn(),
@@ -1991,8 +2279,8 @@ def resume_cmd(
                 row = it["row"]
                 progress.update(task, description=f"[cyan]{row.id}[/cyan] · Paint")
                 mesh_out = it["mesh_final"] if not want_materialize else it["painted_path"]
-                t_tex = _text3d_texture_argv(
-                    text3d_bin,
+                t_tex = _texture_subprocess_argv(
+                    paint3d_bin,
                     profile,
                     it["shape_path"],
                     it["img_final"],
@@ -2020,7 +2308,7 @@ def resume_cmd(
 
     # --- Fase 4: Materialize PBR ---
     need_mat = [it for it in items if it["state"] == NEED_MATERIALIZE]
-    if need_mat and text3d_bin and want_materialize:
+    if need_mat and want_materialize and paint3d_bin:
         console.print(f"\n[bold cyan]Fase 4: Materialize PBR ({len(need_mat)} assets)[/bold cyan]")
         with Progress(
             SpinnerColumn(),
@@ -2035,8 +2323,8 @@ def resume_cmd(
                 row = it["row"]
                 progress.update(task, description=f"[cyan]{row.id}[/cyan] · Materialize")
                 maps_tmp = it["row_work"] / "pbr_maps"
-                t_mat = _text3d_materialize_pbr_argv(
-                    text3d_bin,
+                t_mat = _materialize_pbr_subprocess_argv(
+                    paint3d_bin,
                     profile,
                     it["painted_path"],
                     it["mesh_final"],
@@ -2110,7 +2398,9 @@ def _extract_json_from_output(text: str) -> dict[str, Any]:
 @debug_group.command("screenshot")
 @click.argument("input_path", type=click.Path(exists=True, path_type=Path))
 @click.option("--output-dir", "-o", type=click.Path(path_type=Path), default=None, help="Pasta destino.")
-@click.option("--views", default="front,three_quarter,right,back", show_default=True, help="Vistas separadas por virgula.")
+@click.option(
+    "--views", default="front,three_quarter,right,back", show_default=True, help="Vistas separadas por virgula."
+)
 @click.option("--resolution", "-r", default=512, show_default=True, type=int, help="Resolucao px.")
 @click.option("--show-bones", is_flag=True, help="Mostrar armature wireframe.")
 @click.option("--frame", default=None, type=int, help="Um frame para todas as vistas.")
@@ -2140,10 +2430,15 @@ def debug_screenshot(
         output_dir = input_path.parent / f"{input_path.stem}_debug"
 
     argv = [
-        abin, "screenshot", str(input_path),
-        "--output-dir", str(output_dir),
-        "--views", views,
-        "--resolution", str(resolution),
+        abin,
+        "screenshot",
+        str(input_path),
+        "--output-dir",
+        str(output_dir),
+        "--views",
+        views,
+        "--resolution",
+        str(resolution),
     ]
     if show_bones:
         argv.append("--show-bones")
@@ -2210,10 +2505,15 @@ def debug_bundle(
 
     shot_dir = output_dir / "screenshots"
     argv_sh = [
-        abin, "screenshot", str(input_path),
-        "--output-dir", str(shot_dir),
-        "--views", views,
-        "--resolution", str(resolution),
+        abin,
+        "screenshot",
+        str(input_path),
+        "--output-dir",
+        str(shot_dir),
+        "--views",
+        views,
+        "--resolution",
+        str(resolution),
     ]
     if show_bones:
         argv_sh.append("--show-bones")
@@ -2331,15 +2631,22 @@ def debug_compare(
     reports = {}
     for label, fpath, d in [("a", file_a, dir_a), ("b", file_b, dir_b)]:
         argv = [
-            abin, "screenshot", str(fpath),
-            "--output-dir", str(d),
-            "--views", views,
-            "--resolution", str(resolution),
+            abin,
+            "screenshot",
+            str(fpath),
+            "--output-dir",
+            str(d),
+            "--views",
+            views,
+            "--resolution",
+            str(resolution),
             "--show-bones",
         ]
         r = run_cmd(argv)
         if r.returncode != 0:
-            console.print(f"[red]Erro ao gerar screenshots de {label}:[/red] {merge_subprocess_output(r, max_chars=500)}")
+            console.print(
+                f"[red]Erro ao gerar screenshots de {label}:[/red] {merge_subprocess_output(r, max_chars=500)}"
+            )
             sys.exit(1)
         reports[label] = _extract_json_from_output(r.stdout)
 

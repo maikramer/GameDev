@@ -31,7 +31,7 @@ class Text3DProfile:
     no_mesh_repair: bool = False
     mesh_smooth: int | None = None
     mc_level: float | None = None
-    # PBR: Text3D --materialize (Materialize CLI → normal, AO, metallic-roughness no GLB)
+    # PBR: fase ``paint3d materialize-pbr`` no batch (após textura)
     materialize: bool = False
     materialize_save_maps: bool = False
     # Se true, o batch copia mapas gerados (staging em tmp) para output_dir/materialize_maps_subdir.
@@ -39,17 +39,17 @@ class Text3DProfile:
     materialize_maps_subdir: str = "pbr_maps"
     materialize_bin: str | None = None
     materialize_no_invert: bool = False
-    # Repasse ao CLI text3d generate (VRAM / exclusividade GPU)
+    # Repasse aos CLIs text3d generate / paint3d (VRAM / exclusividade GPU)
     allow_shared_gpu: bool = False
     gpu_kill_others: bool = True
-    # True: batch em 3 passes — shape (generate) → Paint (texture) → PBR (materialize-pbr)
-    # Liberta VRAM entre Hunyuan e Paint; só um tipo de pipeline pesado por subprocesso.
+    # Documentação legada: com textura o batch já corre em fases (shape → paint3d → materialize).
     phased_batch: bool = False
-    # GPU pura: desativa CPU offload onde possível (Text2D, Paint).
-    # NOTA: O volume decoding do Hunyuan3D shape pode continuar com CPU por limitações da biblioteca hy3dgen.
+    # GPU pura: Text2D inteiro na GPU; no paint3d activa --paint-full-gpu quando aplicável.
     full_gpu: bool = False
     # Subpasta do modelo Hunyuan3D shape (ex.: hunyuan3d-dit-v2-mini-turbo para modo turbo)
     model_subfolder: str | None = None
+    # Preset Materialize (CLI paint3d materialize-pbr / texture --materialize).
+    materialize_preset: str = "default"
 
 
 @dataclass
@@ -115,6 +115,22 @@ class Rigging3DProfile:
 
 
 @dataclass
+class Part3DProfile:
+    """Opções para ``part3d decompose`` após Text3D (GLB → partes semânticas + mesh segmentada)."""
+
+    octree_resolution: int | None = None
+    steps: int | None = None
+    num_chunks: int | None = None
+    # True: só P3-SAM (mesh com cores por parte); não gera GLB multi-parte X-Part
+    segment_only: bool = False
+    no_cpu_offload: bool = False
+    verbose: bool = False
+    # hero.glb → hero_parts.glb e hero_segmented.glb (sufixos antes de .glb)
+    parts_suffix: str = "_parts"
+    segmented_suffix: str = "_segmented"
+
+
+@dataclass
 class Skymap2DProfile:
     """Opções passadas ao CLI skymap2d generate (HF equirectangular 360°)."""
 
@@ -153,6 +169,7 @@ class GameProfile:
     text3d: Text3DProfile | None = None
     text2sound: Text2SoundProfile | None = None
     rigging3d: Rigging3DProfile | None = None
+    part3d: Part3DProfile | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> GameProfile:
@@ -365,6 +382,11 @@ class GameProfile:
             full_gpu = bool(raw_t3.get("full_gpu", False))
             model_sub = raw_t3.get("model_subfolder")
             model_sub_s = str(model_sub).strip() if model_sub not in (None, "") else None
+            mp_preset = raw_t3.get("materialize_preset") or "default"
+            mp_s = str(mp_preset).strip() if isinstance(mp_preset, str) else "default"
+            _preset_ok = ("default", "skin", "floor", "metal", "fabric", "wood", "stone")
+            if mp_s not in _preset_ok:
+                raise ValueError(f"text3d.materialize_preset deve ser um de: {', '.join(_preset_ok)}")
             t3 = Text3DProfile(
                 preset=pr,
                 low_vram=bool(raw_t3.get("low_vram", False)),
@@ -386,6 +408,7 @@ class GameProfile:
                 phased_batch=phased,
                 full_gpu=full_gpu,
                 model_subfolder=model_sub_s,
+                materialize_preset=mp_s,
             )
         rg3: Rigging3DProfile | None = None
         raw_rg = data.get("rigging3d")
@@ -402,6 +425,34 @@ class GameProfile:
                 output_suffix=sfx_s,
                 root=rg_root_s,
                 python=rg_py_s,
+            )
+        p3: Part3DProfile | None = None
+        raw_p3 = data.get("part3d")
+        if isinstance(raw_p3, dict):
+            oc = raw_p3.get("octree_resolution")
+            st = raw_p3.get("steps")
+            nc = raw_p3.get("num_chunks")
+            try:
+                oc_i = int(oc) if oc is not None else None
+                st_i = int(st) if st is not None else None
+                nc_i = int(nc) if nc is not None else None
+            except (TypeError, ValueError) as e:
+                raise ValueError(
+                    "part3d.octree_resolution, steps e num_chunks devem ser inteiros válidos"
+                ) from e
+            ps = raw_p3.get("parts_suffix")
+            ss = raw_p3.get("segmented_suffix")
+            ps_s = str(ps).strip() if ps not in (None, "") else "_parts"
+            ss_s = str(ss).strip() if ss not in (None, "") else "_segmented"
+            p3 = Part3DProfile(
+                octree_resolution=oc_i,
+                steps=st_i,
+                num_chunks=nc_i,
+                segment_only=bool(raw_p3.get("segment_only", False)),
+                no_cpu_offload=bool(raw_p3.get("no_cpu_offload", False)),
+                verbose=bool(raw_p3.get("verbose", False)),
+                parts_suffix=ps_s,
+                segmented_suffix=ss_s,
             )
         sb = data.get("seed_base")
         if sb is not None:
@@ -440,6 +491,7 @@ class GameProfile:
             text3d=t3,
             text2sound=ts2,
             rigging3d=rg3,
+            part3d=p3,
         )
 
 

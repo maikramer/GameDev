@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Conveniência para dev: venv local e `pip install -e`. Instalação oficial: ../../docs/INSTALLING.md (`./install.sh gameassets` na raiz GameDev).
+#
 # GameAssets — venv local e instalação do pacote (paridade com Text2D/Text3D)
 
 set -euo pipefail

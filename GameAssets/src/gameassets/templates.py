@@ -61,13 +61,15 @@ text2d:
 #   cfg_scale: 4.5
 #   audio_format: wav
 
-# Text3D com --with-3d: preset fast equilibra tempo/VRAM; texture=true activa Paint.
+# Text3D com --with-3d: preset fast equilibra tempo/VRAM; texture=true => paint3d texture após o shape.
 # low_vram=true no text3d => Hunyuan *shape* em CPU (forma muito pior — evita salvo último recurso).
-# phased_batch: true (com texture) => batch em 3 passos: shape (todos) → Paint (todos) → materialize-pbr (todos).
+# phased_batch: true (com texture) => batch em 3 passos: shape (todos) → paint3d texture (todos) → materialize-pbr (todos).
+# Requer PAINT3D_BIN ou paint3d no PATH quando texture ou materialize estão activos.
 text3d:
   preset: fast
   low_vram: false
   texture: true
+  # materialize_preset: default
   # phased_batch: false
   # materialize: true
   # materialize_save_maps: true
@@ -77,11 +79,19 @@ text3d:
 # Rigging3D após Text3D (--with-rig + coluna generate_rig=true no CSV). Requer bash, GPU CUDA; ver Rigging3D/README.md.
 # rigging3d:
 #   output_suffix: "_rigged"
+
+# Part3D (Hunyuan3D-Part) após Text3D: --with-parts + coluna generate_parts=true. Requer PART3D_BIN ou part3d no PATH.
+# part3d:
+#   steps: 50
+#   octree_resolution: 256
+#   segment_only: false
+#   parts_suffix: "_parts"
+#   segmented_suffix: "_segmented"
 """
 
-MANIFEST_CSV = """id,idea,kind,generate_3d,generate_audio,generate_rig,image_source
-chest_01,"baú de madeira com ferrolhos dourados",prop,false,false,false,
-hero_sword,"espada longa com gema azul no punho",prop,true,false,false,
-forest_bg,"floresta densa ao entardecer",environment,false,false,false,
-sky_sunset,"pôr do sol sobre montanhas, nuvens douradas",skymap,false,false,false,skymap2d
+MANIFEST_CSV = """id,idea,kind,generate_3d,generate_audio,generate_rig,generate_parts,image_source
+chest_01,"baú de madeira com ferrolhos dourados",prop,false,false,false,false,
+hero_sword,"espada longa com gema azul no punho",prop,true,false,false,false,
+forest_bg,"floresta densa ao entardecer",environment,false,false,false,false,
+sky_sunset,"pôr do sol sobre montanhas, nuvens douradas",skymap,false,false,false,false,skymap2d
 """
