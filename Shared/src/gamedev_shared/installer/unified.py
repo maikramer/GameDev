@@ -5,6 +5,7 @@ instalar qualquer ferramenta (Python ou Rust) registada no registry.
 """
 
 from __future__ import annotations
+from typing import Union
 
 import argparse
 import platform
@@ -51,7 +52,7 @@ class _ToolPythonInstaller(PythonProjectInstaller):
         self.text2d_venv_only = text2d_venv_only
         self._monorepo_root = monorepo
 
-    def check_python(self) -> bool:
+    def check_python(self, min_version: tuple[int, int] = (3, 10)) -> bool:
         return super().check_python(min_version=self.spec.min_python)
 
     def install_in_venv(self) -> None:
@@ -225,7 +226,7 @@ def install_tool(
         return False
 
     if spec.kind == ToolKind.PYTHON:
-        inst = _ToolPythonInstaller(
+        inst: Union[PythonProjectInstaller, RustProjectInstaller] = _ToolPythonInstaller(
             spec,
             monorepo,
             install_prefix=install_prefix,
@@ -251,12 +252,12 @@ def install_tool(
         return inst.run()
     elif action == "uninstall":
         if spec.kind == ToolKind.RUST:
-            return inst.run_uninstall()
+            return inst.run_uninstall()  # type: ignore[union-attr]
         Logger().warn("Uninstall para Python: pip uninstall <pacote>")
         return True
     elif action == "reinstall":
         if spec.kind == ToolKind.RUST:
-            return inst.run_reinstall()
+            return inst.run_reinstall()  # type: ignore[union-attr]
         Logger().warn("Reinstall: use --force com install")
         return install_tool(
             name,

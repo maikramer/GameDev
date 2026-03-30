@@ -19,7 +19,10 @@ from pathlib import Path
 from typing import Any
 
 
-def _torch():
+import types
+
+
+def _torch() -> types.ModuleType:
     """Import lazy de torch — falha clara se não instalado."""
     try:
         import torch
