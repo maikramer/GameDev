@@ -108,9 +108,11 @@ jobs:
         run: cargo test --manifest-path Materialize/Cargo.toml
 
   # Smoke: editable install + import do pacote (nomes de módulo reais).
+  # Paint3D excluded: has bpy (huge) + pytorch deps, too heavy for CI.
   smoke-heavy:
     name: smoke (${{ matrix.dir }} → ${{ matrix.module }})
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -119,8 +121,6 @@ jobs:
             module: text2d
           - dir: Text3D
             module: text3d
-          - dir: Paint3D
-            module: paint3d
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
