@@ -12,48 +12,43 @@
 # fine-tuning enabling code and other elements of the foregoing made publicly available
 # by Tencent in accordance with TENCENT HUNYUAN COMMUNITY LICENSE AGREEMENT.
 
-from typing import Any, Dict, Optional
-from diffusers.models import AutoencoderKL, UNet2DConditionModel
-from diffusers.schedulers import KarrasDiffusionSchedulers
+from collections.abc import Callable
+from typing import Any
 
 import numpy
-import torch
-import torch.utils.checkpoint
-import torch.distributed
 import numpy as np
-import transformers
-from PIL import Image
-from einops import rearrange
-from transformers import CLIPImageProcessor, CLIPTextModel, CLIPTokenizer, CLIPVisionModelWithProjection
-from typing import Any, Callable, Dict, List, Optional, Union, Tuple
-
-import diffusers
+import torch
+import torch.distributed
+import torch.utils.checkpoint
 from diffusers import (
     AutoencoderKL,
     DiffusionPipeline,
     UNet2DConditionModel,
 )
-from diffusers.image_processor import VaeImageProcessor
-
+from diffusers.callbacks import MultiPipelineCallbacks, PipelineCallback
+from diffusers.image_processor import PipelineImageInput, VaeImageProcessor
+from diffusers.models import AutoencoderKL, UNet2DConditionModel
+from diffusers.pipelines.stable_diffusion.pipeline_output import StableDiffusionPipelineOutput
 from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import (
     StableDiffusionPipeline,
-    retrieve_timesteps,
     rescale_noise_cfg,
+    retrieve_timesteps,
 )
-
+from diffusers.schedulers import KarrasDiffusionSchedulers
 from diffusers.utils import deprecate
-from diffusers.callbacks import MultiPipelineCallbacks, PipelineCallback
-from diffusers.image_processor import PipelineImageInput
-from diffusers.pipelines.stable_diffusion.pipeline_output import StableDiffusionPipelineOutput
+from einops import rearrange
+from PIL import Image
+from transformers import CLIPImageProcessor, CLIPTextModel, CLIPTokenizer
+
+from .unet.attn_processor import PoseRoPEAttnProcessor2_0, RefAttnProcessor2_0, SelfAttnProcessor2_0
 from .unet.modules import UNet2p5DConditionModel
-from .unet.attn_processor import SelfAttnProcessor2_0, RefAttnProcessor2_0, PoseRoPEAttnProcessor2_0
 
 __all__ = [
     "HunyuanPaintPipeline",
-    "UNet2p5DConditionModel",
-    "SelfAttnProcessor2_0",
-    "RefAttnProcessor2_0",
     "PoseRoPEAttnProcessor2_0",
+    "RefAttnProcessor2_0",
+    "SelfAttnProcessor2_0",
+    "UNet2p5DConditionModel",
 ]
 
 
@@ -73,7 +68,7 @@ def to_rgb_image(maybe_rgba: Image.Image):
 class HunyuanPaintPipeline(StableDiffusionPipeline):
 
     """Custom pipeline for multiview PBR texture generation.
-    
+
     Extends Stable Diffusion with:
     - Material-specific conditioning
     - Multiview processing
@@ -115,17 +110,17 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
         self.unet.eval()
         self.vae.eval()
 
-    def set_pbr_settings(self, pbr_settings: List[str]):
+    def set_pbr_settings(self, pbr_settings: list[str]):
         self.pbr_settings = pbr_settings
 
     def set_learned_parameters(self):
 
         """Configures parameter freezing strategy.
-        
+
         Freezes:
         - Standard attention layers
         - Dual-stream reference UNet
-        
+
         Unfreezes:
         - Material-specific parameters
         - DINO integration components
@@ -150,10 +145,10 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
     def encode_images(self, images):
 
         """Encodes multiview image batches into latent space.
-        
+
         Args:
             images: Input images [B, N_views, C, H, W]
-            
+
         Returns:
             torch.Tensor: Latent representations [B, N_views, C, H_latent, W_latent]
         """
@@ -176,9 +171,9 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
         prompt=None,
         negative_prompt="watermark, ugly, deformed, noisy, blurry, low contrast",
         *args,
-        num_images_per_prompt: Optional[int] = 1,
+        num_images_per_prompt: int | None = 1,
         guidance_scale=3.0,
-        output_type: Optional[str] = "pil",
+        output_type: str | None = "pil",
         width=512,
         height=512,
         num_inference_steps=15,
@@ -188,7 +183,7 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
     ):
 
         """Main generation method for multiview PBR textures.
-        
+
         Steps:
         1. Input validation and preparation
         2. Reference image encoding
@@ -196,14 +191,14 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
         4. Prompt embedding setup
         5. Classifier-free guidance preparation
         6. Diffusion sampling loop
-        
+
         Args:
             images: List of reference PIL images
             prompt: Text prompt (overridden by learned embeddings)
             cached_condition: Dictionary containing:
                 - images_normal: Normal maps (PIL or tensor)
                 - images_position: Position maps (PIL or tensor)
-            
+
         Returns:
             List[PIL.Image]: Generated multiview PBR textures
         """
@@ -213,7 +208,7 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
             raise ValueError("Inputting embeddings not supported for this pipeline. Please pass an image.")
         assert not isinstance(images, torch.Tensor)
 
-        if not isinstance(images, List):
+        if not isinstance(images, list):
             images = [images]
 
         images = [to_rgb_image(image) for image in images]
@@ -223,7 +218,7 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
         images_vae = images_vae.to(device=self.vae.device, dtype=self.unet.dtype)
 
         batch_size = images_vae.shape[0]
-        N_ref = images_vae.shape[1]
+        images_vae.shape[1]
 
         assert batch_size == 1
         assert num_images_per_prompt == 1
@@ -251,14 +246,14 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
             return images_tensor
 
         if "images_normal" in cached_condition:
-            if isinstance(cached_condition["images_normal"], List):
+            if isinstance(cached_condition["images_normal"], list):
                 cached_condition["images_normal"] = convert_pil_list_to_tensor(cached_condition["images_normal"])
 
             cached_condition["embeds_normal"] = self.encode_images(cached_condition["images_normal"])
 
         if "images_position" in cached_condition:
 
-            if isinstance(cached_condition["images_position"], List):
+            if isinstance(cached_condition["images_position"], list):
                 cached_condition["images_position"] = convert_pil_list_to_tensor(cached_condition["images_position"])
 
             cached_condition["position_maps"] = cached_condition["images_position"]
@@ -346,31 +341,29 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
 
     def denoise(
         self,
-        prompt: Union[str, List[str]] = None,
-        height: Optional[int] = None,
-        width: Optional[int] = None,
+        prompt: str | list[str] | None = None,
+        height: int | None = None,
+        width: int | None = None,
         num_inference_steps: int = 50,
-        timesteps: List[int] = None,
-        sigmas: List[float] = None,
+        timesteps: list[int] | None = None,
+        sigmas: list[float] | None = None,
         guidance_scale: float = 7.5,
-        negative_prompt: Optional[Union[str, List[str]]] = None,
-        num_images_per_prompt: Optional[int] = 1,
+        negative_prompt: str | list[str] | None = None,
+        num_images_per_prompt: int | None = 1,
         eta: float = 0.0,
-        generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
-        latents: Optional[torch.Tensor] = None,
-        prompt_embeds: Optional[torch.Tensor] = None,
-        negative_prompt_embeds: Optional[torch.Tensor] = None,
-        ip_adapter_image: Optional[PipelineImageInput] = None,
-        ip_adapter_image_embeds: Optional[List[torch.Tensor]] = None,
-        output_type: Optional[str] = "pil",
+        generator: torch.Generator | list[torch.Generator] | None = None,
+        latents: torch.Tensor | None = None,
+        prompt_embeds: torch.Tensor | None = None,
+        negative_prompt_embeds: torch.Tensor | None = None,
+        ip_adapter_image: PipelineImageInput | None = None,
+        ip_adapter_image_embeds: list[torch.Tensor] | None = None,
+        output_type: str | None = "pil",
         return_dict: bool = True,
-        cross_attention_kwargs: Optional[Dict[str, Any]] = None,
+        cross_attention_kwargs: dict[str, Any] | None = None,
         guidance_rescale: float = 0.0,
-        clip_skip: Optional[int] = None,
-        callback_on_step_end: Optional[
-            Union[Callable[[int, int, Dict], None], PipelineCallback, MultiPipelineCallbacks]
-        ] = None,
-        callback_on_step_end_tensor_inputs: List[str] = ["latents"],
+        clip_skip: int | None = None,
+        callback_on_step_end: Callable[[int, int, dict], None] | PipelineCallback | MultiPipelineCallbacks | None = None,
+        callback_on_step_end_tensor_inputs: list[str] | None = None,
         **kwargs,
     ):
         r"""
@@ -458,16 +451,16 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
                 otherwise a `tuple` is returned where the first element is a list with the generated images and the
                 second element is a list of `bool`s indicating whether the corresponding generated image contains
                 "not-safe-for-work" (nsfw) content.
-                
+
         Core denoising procedure for multiview PBR texture generation.
-        
+
         Handles the complete diffusion process including:
         - Input validation and preparation
         - Timestep scheduling
         - Latent noise initialization
         - Iterative denoising with specialized guidance
         - Output decoding and post-processing
-        
+
         Key innovations:
         1. Triple-batch classifier-free guidance:
            - Negative (unconditional)
@@ -479,21 +472,23 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
            - Maintains material/view separation throughout
         4. Optimized VRAM management:
            - Selective tensor reshaping
-        
+
         Processing Stages:
         1. Setup & Validation: Configures pipeline components and validates inputs
         2. Prompt Encoding: Processes text/material conditioning
         3. Latent Initialization: Prepares noise for denoising process
-        4. Iterative Denoising: 
+        4. Iterative Denoising:
             a) Scales and organizes latent variables
             b) Predicts noise at current timestep
             c) Applies view-dependent guidance
             d) Computes previous latent state
         5. Output Decoding: Converts latents to final images
         6. Cleanup: Releases resources and formats output
-        
+
         """
 
+        if callback_on_step_end_tensor_inputs is None:
+            callback_on_step_end_tensor_inputs = ["latents"]
         callback = kwargs.pop("callback", None)
         callback_steps = kwargs.pop("callback_steps", None)
 
@@ -662,10 +657,7 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
                     # noise_pred = noise_pred_uncond + self.guidance_scale * (noise_pred_text - noise_pred_uncond)
                     noise_pred_uncond, noise_pred_ref, noise_pred_full = noise_pred.chunk(3)
 
-                    if "camera_azims" in kwargs.keys():
-                        camera_azims = kwargs["camera_azims"]
-                    else:
-                        camera_azims = [0] * kwargs["num_in_batch"]
+                    camera_azims = kwargs["camera_azims"] if "camera_azims" in kwargs else [0] * kwargs["num_in_batch"]
 
                     def cam_mapping(azim):
                         if azim < 90 and azim >= 0:
@@ -713,7 +705,7 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
                         step_idx = i // getattr(self.scheduler, "order", 1)
                         callback(step_idx, t, latents)
 
-        if not output_type == "latent":
+        if output_type != "latent":
             image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False, generator=generator)[0]
             image, has_nsfw_concept = self.run_safety_checker(image, device, prompt_embeds.dtype)
         else:

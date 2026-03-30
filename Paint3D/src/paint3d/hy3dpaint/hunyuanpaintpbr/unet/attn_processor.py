@@ -12,13 +12,15 @@
 # fine-tuning enabling code and other elements of the foregoing made publicly available
 # by Tencent in accordance with TENCENT HUNYUAN COMMUNITY LICENSE AGREEMENT.
 
+from collections.abc import Callable
+from typing import Literal, Optional
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Optional, Dict, Tuple, Union, Literal, List, Callable
-from einops import rearrange
-from diffusers.utils import deprecate
 from diffusers.models.attention_processor import Attention, AttnProcessor
+from diffusers.utils import deprecate
+from einops import rearrange
 
 
 class AttnUtils:
@@ -197,22 +199,22 @@ class BaseAttnProcessor(nn.Module):
     def __init__(
         self,
         query_dim: int,
-        pbr_setting: List[str] = ["albedo", "mr"],
-        cross_attention_dim: Optional[int] = None,
+        pbr_setting: list[str] | None = None,
+        cross_attention_dim: int | None = None,
         heads: int = 8,
-        kv_heads: Optional[int] = None,
+        kv_heads: int | None = None,
         dim_head: int = 64,
         dropout: float = 0.0,
         bias: bool = False,
         upcast_attention: bool = False,
         upcast_softmax: bool = False,
-        cross_attention_norm: Optional[str] = None,
+        cross_attention_norm: str | None = None,
         cross_attention_norm_num_groups: int = 32,
-        qk_norm: Optional[str] = None,
-        added_kv_proj_dim: Optional[int] = None,
-        added_proj_bias: Optional[bool] = True,
-        norm_num_groups: Optional[int] = None,
-        spatial_norm_dim: Optional[int] = None,
+        qk_norm: str | None = None,
+        added_kv_proj_dim: int | None = None,
+        added_proj_bias: bool | None = True,
+        norm_num_groups: int | None = None,
+        spatial_norm_dim: int | None = None,
         out_bias: bool = True,
         scale_qk: bool = True,
         only_cross_attention: bool = False,
@@ -221,8 +223,8 @@ class BaseAttnProcessor(nn.Module):
         residual_connection: bool = False,
         _from_deprecated_attn_block: bool = False,
         processor: Optional["AttnProcessor"] = None,
-        out_dim: int = None,
-        out_context_dim: int = None,
+        out_dim: int | None = None,
+        out_context_dim: int | None = None,
         context_pre_only=None,
         pre_only=False,
         elementwise_affine: bool = True,
@@ -266,6 +268,8 @@ class BaseAttnProcessor(nn.Module):
             is_causal: Whether to use causal attention masking
             **kwargs: Additional keyword arguments
         """
+        if pbr_setting is None:
+            pbr_setting = ["albedo", "mr"]
         super().__init__()
         AttnUtils.check_pytorch_compatibility()
 
@@ -305,7 +309,7 @@ class BaseAttnProcessor(nn.Module):
                 "Make sure to set either `only_cross_attention=False` or define `added_kv_proj_dim`."
             )
 
-    def register_pbr_modules(self, module_types: List[str], **kwargs):
+    def register_pbr_modules(self, module_types: list[str], **kwargs):
         """
         Generic PBR module registration to eliminate code repetition.
 
@@ -440,7 +444,7 @@ class RotaryEmbedding:
         return cos, sin
 
     @staticmethod
-    def apply_rotary_emb(x: torch.Tensor, freqs_cis: Union[torch.Tensor, Tuple[torch.Tensor]]):
+    def apply_rotary_emb(x: torch.Tensor, freqs_cis: torch.Tensor | tuple[torch.Tensor]):
         """
         Apply rotary position embeddings to input tensor.
 
@@ -476,11 +480,11 @@ class AttnCore:
     def process_attention_base(
         attn: Attention,
         hidden_states: torch.Tensor,
-        encoder_hidden_states: Optional[torch.Tensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        temb: Optional[torch.Tensor] = None,
-        get_qkv_fn: Callable = None,
-        apply_rope_fn: Optional[Callable] = None,
+        encoder_hidden_states: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,
+        temb: torch.Tensor | None = None,
+        get_qkv_fn: Callable | None = None,
+        apply_rope_fn: Callable | None = None,
         **kwargs,
     ):
         """
@@ -566,10 +570,10 @@ class PoseRoPEAttnProcessor2_0:
         self,
         attn: Attention,
         hidden_states: torch.Tensor,
-        encoder_hidden_states: Optional[torch.Tensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_indices: Dict = None,
-        temb: Optional[torch.Tensor] = None,
+        encoder_hidden_states: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,
+        position_indices: dict | None = None,
+        temb: torch.Tensor | None = None,
         n_pbrs=1,
         *args,
         **kwargs,
@@ -657,9 +661,9 @@ class SelfAttnProcessor2_0(BaseAttnProcessor):
         self,
         attn: Attention,
         hidden_states: torch.Tensor,
-        encoder_hidden_states: Optional[torch.Tensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        temb: Optional[torch.Tensor] = None,
+        encoder_hidden_states: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,
+        temb: torch.Tensor | None = None,
         token: Literal["albedo", "mr"] = "albedo",
         multiple_devices=False,
         *args,
@@ -715,9 +719,9 @@ class SelfAttnProcessor2_0(BaseAttnProcessor):
         self,
         attn: Attention,
         hidden_states: torch.Tensor,
-        encoder_hidden_states: Optional[torch.Tensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        temb: Optional[torch.Tensor] = None,
+        encoder_hidden_states: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,
+        temb: torch.Tensor | None = None,
         *args,
         **kwargs,
     ) -> torch.Tensor:
@@ -746,7 +750,7 @@ class SelfAttnProcessor2_0(BaseAttnProcessor):
 
         # Process each PBR setting
         results = []
-        for token, pbr_hs in zip(self.pbr_setting, pbr_hidden_states):
+        for token, pbr_hs in zip(self.pbr_setting, pbr_hidden_states, strict=False):
             processed_hs = rearrange(pbr_hs, "b n_pbrs n l c -> (b n_pbrs n) l c").to("cuda:0")
             result = self.process_single(attn, processed_hs, None, attention_mask, temb, token, False)
             results.append(result)
@@ -778,9 +782,9 @@ class RefAttnProcessor2_0(BaseAttnProcessor):
         self,
         attn: Attention,
         hidden_states: torch.Tensor,
-        encoder_hidden_states: Optional[torch.Tensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        temb: Optional[torch.Tensor] = None,
+        encoder_hidden_states: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,
+        temb: torch.Tensor | None = None,
         *args,
         **kwargs,
     ) -> torch.Tensor:

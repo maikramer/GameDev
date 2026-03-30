@@ -10,7 +10,6 @@ de ``tencent/Hunyuan3D-2.1`` (pasta ``hunyuan3d-paintpbr-v2-1``).
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 

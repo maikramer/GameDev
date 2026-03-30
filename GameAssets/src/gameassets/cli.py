@@ -30,7 +30,6 @@ from .profile import (
     Part3DProfile,
     Rigging3DProfile,
     Text2SoundProfile,
-    Text3DProfile,
     Texture2DProfile,
     load_profile,
 )

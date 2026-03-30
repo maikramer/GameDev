@@ -12,21 +12,22 @@
 # fine-tuning enabling code and other elements of the foregoing made publicly available
 # by Tencent in accordance with TENCENT HUNYUAN COMMUNITY LICENSE AGREEMENT.
 
-import os
-import torch
 import copy
-import trimesh
+import os
+import warnings
+
 import numpy as np
+import torch
+import trimesh
 from PIL import Image
-from typing import List
+
+from .DifferentiableRenderer.mesh_utils import convert_obj_to_glb
 from .DifferentiableRenderer.MeshRender import MeshRender
-from .utils.simplify_mesh_utils import remesh_mesh
+from .utils.image_super_utils import imageSuperNet
 from .utils.multiview_utils import multiviewDiffusionNet
 from .utils.pipeline_utils import ViewProcessor
-from .utils.image_super_utils import imageSuperNet
+from .utils.simplify_mesh_utils import remesh_mesh
 from .utils.uvwrap_utils import mesh_uv_wrap
-from .DifferentiableRenderer.mesh_utils import convert_obj_to_glb
-import warnings
 
 warnings.filterwarnings("ignore")
 from diffusers.utils import logging as diffusers_logging
@@ -98,10 +99,7 @@ class Hunyuan3DPaintPipeline:
             image_prompt = Image.open(image_path)
         elif isinstance(image_path, Image.Image):
             image_prompt = image_path
-        if not isinstance(image_prompt, List):
-            image_prompt = [image_prompt]
-        else:
-            image_prompt = image_path
+        image_prompt = [image_prompt] if not isinstance(image_prompt, list) else image_path
 
         # Process mesh
         path = os.path.dirname(mesh_path)
@@ -113,7 +111,7 @@ class Hunyuan3DPaintPipeline:
 
         # Output path
         if output_mesh_path is None:
-            output_mesh_path = os.path.join(path, f"textured_mesh.obj")
+            output_mesh_path = os.path.join(path, "textured_mesh.obj")
 
         # Load mesh
         mesh = trimesh.load(processed_mesh_path)
@@ -188,6 +186,6 @@ class Hunyuan3DPaintPipeline:
 
         if save_glb:
             convert_obj_to_glb(output_mesh_path, output_mesh_path.replace(".obj", ".glb"))
-            output_glb_path = output_mesh_path.replace(".obj", ".glb")
+            output_mesh_path.replace(".obj", ".glb")
 
         return output_mesh_path

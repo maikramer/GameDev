@@ -12,8 +12,8 @@
 # fine-tuning enabling code and other elements of the foregoing made publicly available
 # by Tencent in accordance with TENCENT HUNYUAN COMMUNITY LICENSE AGREEMENT.
 
-import torch
 import numpy as np
+import torch
 
 
 class ViewProcessor:
@@ -23,7 +23,7 @@ class ViewProcessor:
 
     def render_normal_multiview(self, camera_elevs, camera_azims, use_abs_coor=True):
         normal_maps = []
-        for elev, azim in zip(camera_elevs, camera_azims):
+        for elev, azim in zip(camera_elevs, camera_azims, strict=False):
             normal_map = self.render.render_normal(elev, azim, use_abs_coor=use_abs_coor, return_type="pl")
             normal_maps.append(normal_map)
 
@@ -31,7 +31,7 @@ class ViewProcessor:
 
     def render_position_multiview(self, camera_elevs, camera_azims):
         position_maps = []
-        for elev, azim in zip(camera_elevs, camera_azims):
+        for elev, azim in zip(camera_elevs, camera_azims, strict=False):
             position_map = self.render.render_position(elev, azim, return_type="pl")
             position_maps.append(position_map)
 
@@ -59,7 +59,7 @@ class ViewProcessor:
         candidate_view_num = len(candidate_camera_elevs)
         self.render.set_boundary_unreliable_scale(2)
 
-        for elev, azim in zip(candidate_camera_elevs, candidate_camera_azims):
+        for elev, azim in zip(candidate_camera_elevs, candidate_camera_azims, strict=False):
             viewed_tri_idx = self.render.render_alpha(elev, azim, return_type="np")
             viewed_tri_idxs.append(set(np.unique(viewed_tri_idx.flatten())))
             viewed_masks.append(viewed_tri_idx[0, :, :, 0] > 0)
@@ -77,12 +77,12 @@ class ViewProcessor:
             total_viewed_tri_idxs.update(viewed_tri_idxs[idx])
 
         total_viewed_area = face_area_ratios[list(total_viewed_tri_idxs)].sum()
-        for iter in range(max_selected_view_num - len(selected_view_weights)):
+        for _iter in range(max_selected_view_num - len(selected_view_weights)):
             max_inc = 0
             max_idx = -1
 
-            for idx, (elev, azim, weight) in enumerate(
-                zip(candidate_camera_elevs, candidate_camera_azims, candidate_view_weights)
+            for idx, (elev, azim, _weight) in enumerate(
+                zip(candidate_camera_elevs, candidate_camera_azims, candidate_view_weights, strict=False)
             ):
                 if is_selected[idx]:
                     continue
@@ -112,7 +112,7 @@ class ViewProcessor:
         project_textures, project_weighted_cos_maps = [], []
         project_boundary_maps = []
 
-        for view, camera_elev, camera_azim, weight in zip(views, camera_elevs, camera_azims, view_weights):
+        for view, camera_elev, camera_azim, weight in zip(views, camera_elevs, camera_azims, view_weights, strict=False):
             project_texture, project_cos_map, project_boundary_map = self.render.back_project(
                 view, camera_elev, camera_azim
             )

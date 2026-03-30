@@ -12,9 +12,10 @@
 # fine-tuning enabling code and other elements of the foregoing made publicly available
 # by Tencent in accordance with TENCENT HUNYUAN COMMUNITY LICENSE AGREEMENT.
 
-import os
-import cv2
 import math
+import os
+
+import cv2
 import numpy as np
 
 try:
@@ -22,7 +23,7 @@ try:
 except ImportError:
     bpy = None  # type: ignore[misc, assignment]
 from io import StringIO
-from typing import Optional, Tuple, Dict, Any
+from typing import Any
 
 
 def _safe_extract_attribute(obj: Any, attr_path: str, default: Any = None) -> Any:
@@ -35,7 +36,7 @@ def _safe_extract_attribute(obj: Any, attr_path: str, default: Any = None) -> An
         return default
 
 
-def _convert_to_numpy(data: Any, dtype: np.dtype) -> Optional[np.ndarray]:
+def _convert_to_numpy(data: Any, dtype: np.dtype) -> np.ndarray | None:
     """Convert data to numpy array with specified dtype, handling None values."""
     if data is None:
         return None
@@ -62,7 +63,7 @@ def load_mesh(mesh):
     return vtx_pos, pos_idx, vtx_uv, uv_idx, texture_data
 
 
-def _get_base_path_and_name(mesh_path: str) -> Tuple[str, str]:
+def _get_base_path_and_name(mesh_path: str) -> tuple[str, str]:
     """Get base path without extension and mesh name."""
     base_path = os.path.splitext(mesh_path)[0]
     name = os.path.basename(base_path)
@@ -74,7 +75,7 @@ def _save_texture_map(
     base_path: str,
     suffix: str = "",
     image_format: str = ".jpg",
-    color_convert: Optional[int] = None,
+    color_convert: int | None = None,
 ) -> str:
     """Save texture map with optional color conversion."""
     path = f"{base_path}{suffix}{image_format}"
@@ -89,7 +90,7 @@ def _save_texture_map(
     return os.path.basename(path)
 
 
-def _write_mtl_properties(f, properties: Dict[str, Any]):
+def _write_mtl_properties(f, properties: dict[str, Any]):
     """Write material properties to MTL file."""
     for key, value in properties.items():
         if isinstance(value, (list, tuple)):
@@ -153,7 +154,7 @@ def save_obj_mesh(mesh_path, vtx_pos, pos_idx, vtx_uv, uv_idx, texture, metallic
     _create_mtl_file(base_path, texture_maps, metallic is not None)
 
 
-def _create_mtl_file(base_path: str, texture_maps: Dict[str, str], is_pbr: bool):
+def _create_mtl_file(base_path: str, texture_maps: dict[str, str], is_pbr: bool):
     """Create MTL material file."""
     mtl_path = f"{base_path}.mtl"
 

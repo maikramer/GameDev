@@ -20,10 +20,7 @@ import torch
 
 def transform_pos(mtx, pos, keepdim=False):
     t_mtx = torch.from_numpy(mtx).to(pos.device) if isinstance(mtx, np.ndarray) else mtx
-    if pos.shape[-1] == 3:
-        posw = torch.cat([pos, torch.ones([pos.shape[0], 1]).to(pos.device)], axis=1)
-    else:
-        posw = pos
+    posw = torch.cat([pos, torch.ones([pos.shape[0], 1]).to(pos.device)], axis=1) if pos.shape[-1] == 3 else pos
 
     if keepdim:
         return torch.matmul(posw, t_mtx.t())[...]
@@ -46,10 +43,7 @@ def get_mv_matrix(elev, azim, camera_distance, center=None):
         ]
     )
 
-    if center is None:
-        center = np.array([0, 0, 0])
-    else:
-        center = np.array(center)
+    center = np.array([0, 0, 0]) if center is None else np.array(center)
 
     lookat = center - camera_position
     lookat = lookat / np.linalg.norm(lookat)

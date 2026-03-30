@@ -12,29 +12,26 @@
 # fine-tuning enabling code and other elements of the foregoing made publicly available
 # by Tencent in accordance with TENCENT HUNYUAN COMMUNITY LICENSE AGREEMENT.
 
+import math
 import os
 
 # import ipdb
 import numpy as np
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
 import pytorch_lightning as pl
-from tqdm import tqdm
-from torchvision.transforms import v2
-from torchvision.utils import make_grid, save_image
-from einops import rearrange
-
+import torch
+import torch.nn.functional as F
 from diffusers import (
+    ControlNetModel,
+    DDPMScheduler,
     DiffusionPipeline,
     EulerAncestralDiscreteScheduler,
-    DDPMScheduler,
     UNet2DConditionModel,
-    ControlNetModel,
 )
+from einops import rearrange
+from torchvision.transforms import v2
+from torchvision.utils import make_grid, save_image
 
 from .modules import Dino_v2, UNet2p5DConditionModel
-import math
 
 
 def extract_into_tensor(a, t, x_shape):
@@ -53,7 +50,7 @@ class HunyuanPaint(pl.LightningModule):
         drop_cond_prob=0.1,
         with_normal_map=None,
         with_position_map=None,
-        pbr_settings=["albedo", "mr"],
+        pbr_settings=None,
         **kwargs,
     ):
         """Initializes the HunyuanPaint Lightning Module.
@@ -69,7 +66,9 @@ class HunyuanPaint(pl.LightningModule):
             pbr_settings: List of PBR materials to generate (e.g., albedo, metallic-roughness)
             **kwargs: Additional keyword arguments
         """
-        super(HunyuanPaint, self).__init__()
+        if pbr_settings is None:
+            pbr_settings = ["albedo", "mr"]
+        super().__init__()
 
         self.num_view = num_view
         self.view_size = view_size
@@ -220,7 +219,7 @@ class HunyuanPaint(pl.LightningModule):
         B = images.shape[0]
         image_ndims = images.ndim
         if image_ndims != 5:
-            N_pbrs, N = images.shape[1:3]
+            N_pbrs, _N = images.shape[1:3]
         images = (
             rearrange(images, "b n c h w -> (b n) c h w")
             if image_ndims == 5
@@ -313,8 +312,8 @@ class HunyuanPaint(pl.LightningModule):
 
         cond_imgs, cond_imgs_another, target_imgs, normal_imgs, position_imgs = self.prepare_batch_data(batch)
 
-        B, N_ref = cond_imgs.shape[:2]
-        _, N_gen, _, H, W = target_imgs["albedo"].shape
+        B, _N_ref = cond_imgs.shape[:2]
+        _, N_gen, _, _H, _W = target_imgs["albedo"].shape
         N_pbrs = len(self.pbr_settings)
         t = torch.randint(0, self.num_timesteps, size=(B,)).long().to(self.device)
         t = t.unsqueeze(-1).repeat(1, N_pbrs, N_gen)
@@ -369,11 +368,10 @@ class HunyuanPaint(pl.LightningModule):
                     )
 
             prob = np.random.rand()
-            if prob < self.drop_cond_prob:
-                if "position_maps" in cached_condition:
-                    cached_condition["position_maps"][b, ...] = torch.zeros_like(
-                        cached_condition["position_maps"][b, ...]
-                    )
+            if prob < self.drop_cond_prob and "position_maps" in cached_condition:
+                cached_condition["position_maps"][b, ...] = torch.zeros_like(
+                    cached_condition["position_maps"][b, ...]
+                )
 
             prob = np.random.rand()
             if prob < self.drop_cond_prob:
@@ -446,15 +444,15 @@ class HunyuanPaint(pl.LightningModule):
             mr_loss = (mr_loss_1 + mr_loss_2) * 0.5
 
             log_loss_dict = {}
-            log_loss_dict.update({f"train/albedo_loss": albedo_loss})
-            log_loss_dict.update({f"train/mr_loss": mr_loss})
-            log_loss_dict.update({f"train/cons_loss": consistency_loss})
+            log_loss_dict.update({"train/albedo_loss": albedo_loss})
+            log_loss_dict.update({"train/mr_loss": mr_loss})
+            log_loss_dict.update({"train/cons_loss": consistency_loss})
 
             loss_dict = log_loss_dict
 
         elif self.train_scheduler.config.prediction_type == "epsilon":
             e_pred = self.forward_unet(latents_noisy, t, **cached_condition)
-            loss, loss_dict = self.compute_loss(e_pred, noise)
+            _loss, loss_dict = self.compute_loss(e_pred, noise)
         else:
             raise f"No {self.train_scheduler.config.prediction_type}"
 

@@ -13,15 +13,13 @@
 # by Tencent in accordance with TENCENT HUNYUAN COMMUNITY LICENSE AGREEMENT.
 
 import os
-import torch
 import random
-import numpy as np
-from PIL import Image
-from typing import List
+
 import huggingface_hub
+import numpy as np
+import torch
+from diffusers import DiffusionPipeline, UniPCMultistepScheduler
 from omegaconf import OmegaConf
-from diffusers import DiffusionPipeline
-from diffusers import EulerAncestralDiscreteScheduler, DDIMScheduler, UniPCMultistepScheduler
 
 
 def _quantize_model_nf4(model: "torch.nn.Module") -> "torch.nn.Module":
@@ -89,7 +87,7 @@ class multiviewDiffusionNet:
         )
         pipeline.set_progress_bar_config(disable=True)
         pipeline.eval()
-        setattr(pipeline, "view_size", cfg.model.params.get("view_size", 320))
+        pipeline.view_size = cfg.model.params.get("view_size", 320)
 
         self.pipeline = pipeline.to(self.device)
 
@@ -128,7 +126,7 @@ class multiviewDiffusionNet:
     def forward_one(self, input_images, control_images, prompt=None, custom_view_size=None, resize_input=False):
         self.seed_everything(0)
         custom_view_size = custom_view_size if custom_view_size is not None else self.pipeline.view_size
-        if not isinstance(input_images, List):
+        if not isinstance(input_images, list):
             input_images = [input_images]
         if not resize_input:
             input_images = [

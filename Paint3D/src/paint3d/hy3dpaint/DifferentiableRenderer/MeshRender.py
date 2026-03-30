@@ -12,20 +12,21 @@
 # fine-tuning enabling code and other elements of the foregoing made publicly available
 # by Tencent in accordance with TENCENT HUNYUAN COMMUNITY LICENSE AGREEMENT.
 
-import cv2
-import torch
-import trimesh
-import numpy as np
-from PIL import Image
-import torch.nn.functional as F
-from typing import Union, Optional, Tuple, List, Any, Callable
 from dataclasses import dataclass
 from enum import Enum
+
+import cv2
+import numpy as np
+import torch
+import torch.nn.functional as F
+import trimesh
+from PIL import Image
+
 from .camera_utils import (
-    transform_pos,
     get_mv_matrix,
     get_orthographic_projection_matrix,
     get_perspective_projection_matrix,
+    transform_pos,
 )
 
 try:
@@ -66,12 +67,12 @@ class RenderConfig:
     """Unified rendering configuration."""
     elev: float = 0
     azim: float = 0
-    camera_distance: Optional[float] = None
-    center: Optional[List[float]] = None
-    resolution: Optional[Union[int, Tuple[int, int]]] = None
-    bg_color: List[float] = None
+    camera_distance: float | None = None
+    center: list[float] | None = None
+    resolution: int | tuple[int, int] | None = None
+    bg_color: list[float] = None
     return_type: str = "th"
-    
+
     def __post_init__(self):
         if self.bg_color is None:
             self.bg_color = [1, 1, 1]
@@ -84,16 +85,16 @@ class ViewState:
     mv_mat: torch.Tensor
     pos_camera: torch.Tensor
     pos_clip: torch.Tensor
-    resolution: Tuple[int, int]
+    resolution: tuple[int, int]
 
 
 def stride_from_shape(shape):
     """
     Calculate stride values from a given shape for multi-dimensional indexing.
-    
+
     Args:
         shape: Tuple or list representing tensor dimensions
-        
+
     Returns:
         List of stride values for each dimension
     """
@@ -106,14 +107,14 @@ def stride_from_shape(shape):
 def scatter_add_nd_with_count(input, count, indices, values, weights=None):
     """
     Perform scatter-add operation on N-dimensional tensors with counting.
-    
+
     Args:
         input: Input tensor [..., C] with D dimensions + C channels
-        count: Count tensor [..., 1] with D dimensions  
+        count: Count tensor [..., 1] with D dimensions
         indices: Index tensor [N, D] of type long
         values: Value tensor [N, C] to scatter
         weights: Optional weight tensor [N, C], defaults to ones if None
-        
+
     Returns:
         Tuple of (updated_input, updated_count) tensors
     """
@@ -146,14 +147,14 @@ def scatter_add_nd_with_count(input, count, indices, values, weights=None):
 def linear_grid_put_2d(H, W, coords, values, return_count=False):
     """
     Place values on a 2D grid using bilinear interpolation.
-    
+
     Args:
         H: Grid height
-        W: Grid width  
+        W: Grid width
         coords: Coordinate tensor [N, 2] with values in range [0, 1]
         values: Value tensor [N, C] to place on grid
         return_count: Whether to return count information
-        
+
     Returns:
         2D grid tensor [H, W, C] with interpolated values, optionally with count tensor
     """
@@ -206,15 +207,15 @@ def linear_grid_put_2d(H, W, coords, values, return_count=False):
 def mipmap_linear_grid_put_2d(H, W, coords, values, min_resolution=128, return_count=False):
     """
     Place values on 2D grid using mipmap-based multiresolution interpolation to fill holes.
-    
+
     Args:
         H: Grid height
         W: Grid width
-        coords: Coordinate tensor [N, 2] with values in range [0, 1] 
+        coords: Coordinate tensor [N, 2] with values in range [0, 1]
         values: Value tensor [N, C] to place on grid
         min_resolution: Minimum resolution for mipmap levels
         return_count: Whether to return count information
-        
+
     Returns:
         2D grid tensor [H, W, C] with filled values, optionally with count tensor
     """
@@ -265,7 +266,7 @@ def mipmap_linear_grid_put_2d(H, W, coords, values, min_resolution=128, return_c
 
 # ============ Core utility functions for reducing duplication ============
 
-def _normalize_image_input(image: Union[np.ndarray, torch.Tensor, Image.Image]) -> Union[np.ndarray, torch.Tensor]:
+def _normalize_image_input(image: np.ndarray | torch.Tensor | Image.Image) -> np.ndarray | torch.Tensor:
     """Normalize image input to consistent format."""
     if isinstance(image, Image.Image):
         return np.array(image) / 255.0
@@ -274,8 +275,8 @@ def _normalize_image_input(image: Union[np.ndarray, torch.Tensor, Image.Image]) 
     return image
 
 
-def _convert_texture_format(tex: Union[np.ndarray, torch.Tensor, Image.Image], 
-                          texture_size: Tuple[int, int], device: str, force_set: bool = False) -> torch.Tensor:
+def _convert_texture_format(tex: np.ndarray | torch.Tensor | Image.Image,
+                          texture_size: tuple[int, int], device: str, force_set: bool = False) -> torch.Tensor:
     """Unified texture format conversion logic."""
     if not force_set:
         if isinstance(tex, np.ndarray):
@@ -283,7 +284,7 @@ def _convert_texture_format(tex: Union[np.ndarray, torch.Tensor, Image.Image],
         elif isinstance(tex, torch.Tensor):
             tex_np = tex.cpu().numpy()
             tex = Image.fromarray((tex_np * 255).astype(np.uint8))
-        
+
         tex = tex.resize(texture_size).convert("RGB")
         tex = np.array(tex) / 255.0
         return torch.from_numpy(tex).to(device).float()
@@ -293,7 +294,7 @@ def _convert_texture_format(tex: Union[np.ndarray, torch.Tensor, Image.Image],
         return tex.to(device).float()
 
 
-def _format_output(image: torch.Tensor, return_type: str) -> Union[torch.Tensor, np.ndarray, Image.Image]:
+def _format_output(image: torch.Tensor, return_type: str) -> torch.Tensor | np.ndarray | Image.Image:
     """Convert output to requested format."""
     if return_type == ReturnType.NUMPY.value:
         return image.cpu().numpy()
@@ -303,8 +304,8 @@ def _format_output(image: torch.Tensor, return_type: str) -> Union[torch.Tensor,
     return image
 
 
-def _ensure_resolution_format(resolution: Optional[Union[int, Tuple[int, int]]], 
-                             default: Tuple[int, int]) -> Tuple[int, int]:
+def _ensure_resolution_format(resolution: int | tuple[int, int] | None,
+                             default: tuple[int, int]) -> tuple[int, int]:
     """Ensure resolution is in (height, width) format."""
     if resolution is None:
         return default
@@ -313,8 +314,8 @@ def _ensure_resolution_format(resolution: Optional[Union[int, Tuple[int, int]]],
     return tuple(resolution)
 
 
-def _apply_background_mask(content: torch.Tensor, visible_mask: torch.Tensor, 
-                          bg_color: List[float], device: str) -> torch.Tensor:
+def _apply_background_mask(content: torch.Tensor, visible_mask: torch.Tensor,
+                          bg_color: list[float], device: str) -> torch.Tensor:
     """Apply background color to masked regions."""
     bg_tensor = torch.tensor(bg_color, dtype=torch.float32, device=device)
     return content * visible_mask + bg_tensor * (1 - visible_mask)
@@ -338,10 +339,10 @@ class MeshRender:
     ):
         """
         Initialize mesh renderer with configurable parameters.
-        
+
         Args:
             camera_distance: Distance from camera to object center
-            camera_type: Type of camera projection ("orth" or "perspective") 
+            camera_type: Type of camera projection ("orth" or "perspective")
             default_resolution: Default rendering resolution
             texture_size: Size of texture maps
             use_antialias: Whether to use antialiasing
@@ -396,11 +397,11 @@ class MeshRender:
             camera_distance=self.camera_distance if config.camera_distance is None else config.camera_distance,
             center=config.center,
         )
-        
+
         pos_camera = transform_pos(r_mv, self.vtx_pos, keepdim=True)
         pos_clip = transform_pos(proj, pos_camera)
         resolution = _ensure_resolution_format(config.resolution, self.default_resolution)
-        
+
         return ViewState(proj, r_mv, pos_camera, pos_clip, resolution)
 
     def _compute_face_normals(self, triangles: torch.Tensor) -> torch.Tensor:
@@ -421,12 +422,12 @@ class MeshRender:
         else:
             pos_camera = view_state.pos_camera[:, :3] / view_state.pos_camera[:, 3:4]
             mesh_triangles = pos_camera[self.pos_idx[:, :3], :]
-        
+
         face_normals = self._compute_face_normals(mesh_triangles)
-        
+
         # Common rasterization
         rast_out, _ = self.raster_rasterize(view_state.pos_clip, self.pos_idx, resolution=view_state.resolution)
-        
+
         if self.shader_type == "vertex":
             vertex_normals = trimesh.geometry.mean_vertex_normals(
                 vertex_count=self.vtx_pos.shape[0],
@@ -435,64 +436,64 @@ class MeshRender:
             )
             vertex_normals = torch.from_numpy(vertex_normals).float().to(self.device).contiguous()
             normal, _ = self.raster_interpolate(vertex_normals[None, ...], rast_out, self.pos_idx)
-        
+
         elif self.shader_type == "face":
             tri_ids = rast_out[..., 3]
             tri_ids_mask = tri_ids > 0
             tri_ids = ((tri_ids - 1) * tri_ids_mask).long()
             normal = torch.zeros(rast_out.shape[0], rast_out.shape[1], rast_out.shape[2], 3).to(rast_out)
             normal.reshape(-1, 3)[tri_ids_mask.view(-1)] = face_normals.reshape(-1, 3)[tri_ids[tri_ids_mask].view(-1)]
-        
+
         return normal, rast_out
 
     def _unified_render_pipeline(self, config: RenderConfig, mode: RenderMode, **kwargs) -> torch.Tensor:
         """Unified rendering pipeline for all render modes."""
         view_state = self._create_view_state(config)
-        
+
         if mode == RenderMode.ALPHA:
             rast_out, _ = self.raster_rasterize(view_state.pos_clip, self.pos_idx, resolution=view_state.resolution)
             return rast_out[..., -1:].long()
-        
+
         elif mode == RenderMode.UV_POS:
             return self.uv_feature_map(self.vtx_pos * 0.5 + 0.5)
-        
+
         elif mode == RenderMode.NORMAL:
             use_abs_coor = kwargs.get('use_abs_coor', False)
             normalize_rgb = kwargs.get('normalize_rgb', True)
-            
+
             normal, rast_out = self._get_normals_for_shading(view_state, use_abs_coor)
             visible_mask = torch.clamp(rast_out[..., -1:], 0, 1)
-            
+
             result = _apply_background_mask(normal, visible_mask, config.bg_color, self.device)
-            
+
             if normalize_rgb:
                 result = (result + 1) * 0.5
-            
+
             if self.use_antialias:
                 result = self.raster_antialias(result, rast_out, view_state.pos_clip, self.pos_idx)
-            
+
             return result[0, ...]
-        
+
         elif mode == RenderMode.POSITION:
             rast_out, _ = self.raster_rasterize(view_state.pos_clip, self.pos_idx, resolution=view_state.resolution)
-            
+
             tex_position = 0.5 - self.vtx_pos[:, :3] / self.scale_factor
             tex_position = tex_position.contiguous()
-            
+
             position, _ = self.raster_interpolate(tex_position[None, ...], rast_out, self.pos_idx)
             visible_mask = torch.clamp(rast_out[..., -1:], 0, 1)
-            
+
             result = _apply_background_mask(position, visible_mask, config.bg_color, self.device)
-            
+
             if self.use_antialias:
                 result = self.raster_antialias(result, rast_out, view_state.pos_clip, self.pos_idx)
-            
+
             return result[0, ...]
 
     def set_orth_scale(self, ortho_scale):
         """
         Set the orthographic projection scale and update camera projection matrix.
-        
+
         Args:
             ortho_scale: Scale factor for orthographic projection
         """
@@ -509,14 +510,14 @@ class MeshRender:
     def raster_rasterize(self, pos, tri, resolution, ranges=None, grad_db=True):
         """
         Rasterize triangular mesh using the configured rasterization backend.
-        
+
         Args:
             pos: Vertex positions in clip space
             tri: Triangle indices
             resolution: Rendering resolution [height, width]
             ranges: Optional rendering ranges (unused in current implementation)
             grad_db: Whether to compute gradients (unused in current implementation)
-            
+
         Returns:
             Tuple of (rasterization_output, gradient_info)
         """
@@ -545,12 +546,12 @@ class MeshRender:
     def raster_interpolate(self, uv, rast_out, uv_idx):
         """
         Interpolate texture coordinates or vertex attributes across rasterized triangles.
-        
+
         Args:
             uv: UV coordinates or vertex attributes to interpolate
             rast_out: Rasterization output containing barycentric coordinates
             uv_idx: UV or vertex indices for triangles
-            
+
         Returns:
             Tuple of (interpolated_values, gradient_info)
         """
@@ -570,15 +571,15 @@ class MeshRender:
     def raster_antialias(self, color, rast, pos, tri, topology_hash=None, pos_gradient_boost=1.0):
         """
         Apply antialiasing to rendered colors (currently returns input unchanged).
-        
+
         Args:
             color: Input color values
             rast: Rasterization output
             pos: Vertex positions
-            tri: Triangle indices  
+            tri: Triangle indices
             topology_hash: Optional topology hash for optimization
             pos_gradient_boost: Gradient boosting factor
-            
+
         Returns:
             Antialiased color values
         """
@@ -593,7 +594,7 @@ class MeshRender:
     def set_boundary_unreliable_scale(self, scale):
         """
         Set the kernel size for boundary unreliable region detection during texture baking.
-        
+
         Args:
             scale: Scale factor relative to 512 resolution baseline
         """
@@ -609,7 +610,7 @@ class MeshRender:
     ):
         """
         Load mesh from file and set up rendering data structures.
-        
+
         Args:
             mesh: Path to mesh file or mesh object
             scale_factor: Scaling factor for mesh normalization
@@ -625,7 +626,7 @@ class MeshRender:
     def save_mesh(self, mesh_path, downsample=False):
         """
         Save current mesh with textures to file.
-        
+
         Args:
             mesh_path: Output file path
             downsample: Whether to downsample textures by half
@@ -665,12 +666,12 @@ class MeshRender:
     def set_mesh(self, vtx_pos, pos_idx, vtx_uv=None, uv_idx=None, scale_factor=1.15, auto_center=True):
         """
         Set mesh geometry data and perform coordinate transformations.
-        
+
         Args:
             vtx_pos: Vertex positions [N, 3]
             pos_idx: Triangle vertex indices [F, 3]
             vtx_uv: UV coordinates [N, 2], optional
-            uv_idx: Triangle UV indices [F, 3], optional  
+            uv_idx: Triangle UV indices [F, 3], optional
             scale_factor: Scaling factor for mesh normalization
             auto_center: Whether to automatically center and scale the mesh
         """
@@ -723,11 +724,11 @@ class MeshRender:
         if uv_idx is not None:
             self.extract_textiles()
 
-    def _set_texture_unified(self, tex: Union[np.ndarray, torch.Tensor, Image.Image], 
+    def _set_texture_unified(self, tex: np.ndarray | torch.Tensor | Image.Image,
                            texture_type: TextureType, force_set: bool = False):
         """Unified texture setting method."""
         converted_tex = _convert_texture_format(tex, self.texture_size, self.device, force_set)
-        
+
         if texture_type == TextureType.DIFFUSE:
             self.tex = converted_tex
         elif texture_type == TextureType.METALLIC_ROUGHNESS:
@@ -750,7 +751,7 @@ class MeshRender:
     def set_default_render_resolution(self, default_resolution):
         """
         Set the default resolution for rendering operations.
-        
+
         Args:
             default_resolution: Resolution as int (square) or tuple (height, width)
         """
@@ -761,7 +762,7 @@ class MeshRender:
     def set_default_texture_resolution(self, texture_size):
         """
         Set the default texture resolution for UV mapping operations.
-        
+
         Args:
             texture_size: Texture size as int (square) or tuple (height, width)
         """
@@ -772,7 +773,7 @@ class MeshRender:
     def get_face_num(self):
         """
         Get the number of triangular faces in the mesh.
-        
+
         Returns:
             Number of faces as integer
         """
@@ -781,7 +782,7 @@ class MeshRender:
     def get_vertex_num(self):
         """
         Get the number of vertices in the mesh.
-        
+
         Returns:
             Number of vertices as integer
         """
@@ -790,10 +791,10 @@ class MeshRender:
     def get_face_areas(self, from_one_index=False):
         """
         Calculate the area of each triangular face in the mesh.
-        
+
         Args:
             from_one_index: If True, insert zero at beginning for 1-indexed face IDs
-            
+
         Returns:
             Numpy array of face areas
         """
@@ -819,10 +820,10 @@ class MeshRender:
     def get_mesh(self, normalize=True):
         """
         Get mesh geometry with optional coordinate denormalization.
-        
+
         Args:
             normalize: Whether to keep normalized coordinates (True) or restore original scale (False)
-            
+
         Returns:
             Tuple of (vertex_positions, face_indices, uv_coordinates, uv_indices)
         """
@@ -844,7 +845,7 @@ class MeshRender:
     def get_texture(self):
         """
         Get the current diffuse texture as numpy array.
-        
+
         Returns:
             Texture as numpy array in range [0, 1]
         """
@@ -853,7 +854,7 @@ class MeshRender:
     def get_texture_mr(self):
         """
         Get metallic and roughness textures as separate channels.
-        
+
         Returns:
             Tuple of (metallic_texture, roughness_texture) as numpy arrays, or (None, None) if not set
         """
@@ -867,7 +868,7 @@ class MeshRender:
     def get_texture_normal(self):
         """
         Get the normal map texture as numpy array.
-        
+
         Returns:
             Normal map as numpy array, or None if not set
         """
@@ -879,7 +880,7 @@ class MeshRender:
     def to(self, device):
         """
         Move all tensor attributes to the specified device.
-        
+
         Args:
             device: Target device ("cuda", "cpu", etc.)
         """
@@ -893,10 +894,10 @@ class MeshRender:
     def color_rgb_to_srgb(self, image):
         """
         Convert RGB color values to sRGB color space using gamma correction.
-        
+
         Args:
             image: Input image as PIL Image, numpy array, or torch tensor
-            
+
         Returns:
             sRGB corrected image in same format as input
         """
@@ -922,7 +923,7 @@ class MeshRender:
 
     def extract_textiles(self):
         """
-        Extract texture-space position and normal information by rasterizing 
+        Extract texture-space position and normal information by rasterizing
         the mesh in UV coordinate space. Creates texture-space geometry mappings.
         """
 
@@ -932,7 +933,7 @@ class MeshRender:
         )
         vtx_uv = vtx_uv.view(1, vnum, 4) * 2 - 1
 
-        rast_out, rast_out_db = self.raster_rasterize(vtx_uv, self.uv_idx, resolution=self.texture_size)
+        rast_out, _rast_out_db = self.raster_rasterize(vtx_uv, self.uv_idx, resolution=self.texture_size)
         position, _ = self.raster_interpolate(self.vtx_pos, rast_out, self.pos_idx)
 
         v0 = self.vtx_pos[self.pos_idx[:, 0], :]
@@ -979,10 +980,12 @@ class MeshRender:
         self.texture_indices = texture_indices
 
     def render_normal(self, elev, azim, camera_distance=None, center=None, resolution=None,
-                     bg_color=[1, 1, 1], use_abs_coor=False, normalize_rgb=True, return_type="th"):
+                     bg_color=None, use_abs_coor=False, normalize_rgb=True, return_type="th"):
         """Render surface normals of the mesh from specified viewpoint."""
+        if bg_color is None:
+            bg_color = [1, 1, 1]
         config = RenderConfig(elev, azim, camera_distance, center, resolution, bg_color, return_type)
-        image = self._unified_render_pipeline(config, RenderMode.NORMAL, 
+        image = self._unified_render_pipeline(config, RenderMode.NORMAL,
                                             use_abs_coor=use_abs_coor, normalize_rgb=normalize_rgb)
         return _format_output(image, return_type)
 
@@ -990,10 +993,10 @@ class MeshRender:
         """
         Convert normal map from standard format to renderer's coordinate system.
         Applies coordinate transformations for proper normal interpretation.
-        
+
         Args:
             image: Input normal map as PIL Image or numpy array
-            
+
         Returns:
             Converted normal map as PIL Image
         """
@@ -1015,12 +1018,14 @@ class MeshRender:
 
         return Image.fromarray(image)
 
-    def render_position(self, elev, azim, camera_distance=None, center=None, resolution=None, 
-                       bg_color=[1, 1, 1], return_type="th"):
+    def render_position(self, elev, azim, camera_distance=None, center=None, resolution=None,
+                       bg_color=None, return_type="th"):
         """Render world-space positions of visible mesh surface points."""
+        if bg_color is None:
+            bg_color = [1, 1, 1]
         config = RenderConfig(elev, azim, camera_distance, center, resolution, bg_color, return_type)
         image = self._unified_render_pipeline(config, RenderMode.POSITION)
-        
+
         if return_type == ReturnType.PIL.value:
             image = image.squeeze(-1).cpu().numpy() * 255
             return Image.fromarray(image.astype(np.uint8))
@@ -1036,7 +1041,7 @@ class MeshRender:
         """Render binary alpha mask indicating visible mesh regions."""
         config = RenderConfig(elev, azim, camera_distance, center, resolution, return_type=return_type)
         image = self._unified_render_pipeline(config, RenderMode.ALPHA)
-        
+
         if return_type == ReturnType.PIL.value:
             raise Exception("PIL format not supported for alpha rendering")
         return _format_output(image, return_type)
@@ -1044,11 +1049,11 @@ class MeshRender:
     def uv_feature_map(self, vert_feat, bg=None):
         """
         Map per-vertex features to UV texture space using mesh topology.
-        
+
         Args:
             vert_feat: Per-vertex feature tensor [N, C]
             bg: Background value for unmapped regions (optional)
-            
+
         Returns:
             Feature map in UV texture space [H, W, C]
         """
@@ -1056,7 +1061,7 @@ class MeshRender:
         vtx_uv = torch.cat([vtx_uv, torch.zeros_like(self.vtx_uv)], dim=1).unsqueeze(0)
         vtx_uv[..., -1] = 1
         uv_idx = self.uv_idx
-        rast_out, rast_out_db = self.raster_rasterize(vtx_uv, uv_idx, resolution=self.texture_size)
+        rast_out, _rast_out_db = self.raster_rasterize(vtx_uv, uv_idx, resolution=self.texture_size)
         feat_map, _ = self.raster_interpolate(vert_feat[None, ...], rast_out, uv_idx)
         feat_map = feat_map[0, ...]
         if bg is not None:
@@ -1067,11 +1072,11 @@ class MeshRender:
     def render_sketch_from_geometry(self, normal_image, depth_image):
         """
         Generate sketch-style edge image from rendered normal and depth maps.
-        
+
         Args:
             normal_image: Rendered normal map tensor
             depth_image: Rendered depth map tensor
-            
+
         Returns:
             Binary edge sketch image as tensor
         """
@@ -1095,10 +1100,10 @@ class MeshRender:
     def render_sketch_from_depth(self, depth_image):
         """
         Generate sketch-style edge image from depth map using edge detection.
-        
+
         Args:
             depth_image: Input depth map tensor
-            
+
         Returns:
             Binary edge sketch image as tensor
         """
@@ -1114,15 +1119,15 @@ class MeshRender:
         """
         Back-project a rendered image onto the mesh's UV texture space.
         Handles visibility, viewing angle, and boundary detection for texture baking.
-        
+
         Args:
             image: Input image to back-project (PIL Image, numpy array, or tensor)
             elev: Camera elevation angle in degrees used for rendering
             azim: Camera azimuth angle in degrees used for rendering
             camera_distance: Camera distance (uses default if None)
-            center: Camera focus center (uses origin if None) 
+            center: Camera focus center (uses origin if None)
             method: Back-projection method ("linear", "mip-map", "back_sample", uses default if None)
-            
+
         Returns:
             Tuple of (texture, cosine_map, boundary_map) tensors in UV space
         """
@@ -1136,8 +1141,8 @@ class MeshRender:
         image = image.float().to(self.device)
         resolution = image.shape[:2]
         channel = image.shape[-1]
-        texture = torch.zeros(self.texture_size + (channel,)).to(self.device)
-        cos_map = torch.zeros(self.texture_size + (1,)).to(self.device)
+        texture = torch.zeros((*self.texture_size, channel)).to(self.device)
+        cos_map = torch.zeros((*self.texture_size, 1)).to(self.device)
 
         proj = self.camera_proj_mat
         r_mv = get_mv_matrix(
@@ -1156,7 +1161,7 @@ class MeshRender:
         face_normals = F.normalize(torch.cross(v1 - v0, v2 - v0, dim=-1), dim=-1)
 
         tex_depth = pos_camera[:, 2].reshape(1, -1, 1).contiguous()
-        rast_out, rast_out_db = self.raster_rasterize(pos_clip, self.pos_idx, resolution=resolution)
+        rast_out, _rast_out_db = self.raster_rasterize(pos_clip, self.pos_idx, resolution=resolution)
         visible_mask = torch.clamp(rast_out[..., -1:], 0, 1)[0, ...]
 
         if self.shader_type == "vertex":
@@ -1317,7 +1322,7 @@ class MeshRender:
     def bake_texture(self, colors, elevs, azims, camera_distance=None, center=None, exp=6, weights=None):
         """
         Bake multiple view images into a single UV texture using weighted blending.
-        
+
         Args:
             colors: List of input images (tensors, numpy arrays, or PIL Images)
             elevs: List of elevation angles for each view
@@ -1326,7 +1331,7 @@ class MeshRender:
             center: Camera focus center (uses origin if None)
             exp: Exponent for cosine weighting (higher values favor front-facing views)
             weights: Optional per-view weights (defaults to 1.0 for all views)
-            
+
         Returns:
             Tuple of (merged_texture, trust_map) tensors in UV space
         """
@@ -1340,7 +1345,7 @@ class MeshRender:
             weights = [1.0 for _ in range(len(colors))]
         textures = []
         cos_maps = []
-        for color, elev, azim, weight in zip(colors, elevs, azims, weights):
+        for color, elev, azim, weight in zip(colors, elevs, azims, weights, strict=False):
             texture, cos_map, _ = self.back_project(color, elev, azim, camera_distance, center)
             cos_map = weight * (cos_map**exp)
             textures.append(texture)
@@ -1354,19 +1359,19 @@ class MeshRender:
         """
         Efficiently merge multiple textures using cosine-weighted blending.
         Optimizes by skipping views that don't contribute new information.
-        
+
         Args:
             textures: List of texture tensors to merge
             cos_maps: List of corresponding cosine weight maps
-            
+
         Returns:
             Tuple of (merged_texture, valid_mask) tensors
         """
 
         channel = textures[0].shape[-1]
-        texture_merge = torch.zeros(self.texture_size + (channel,)).to(self.device)
-        trust_map_merge = torch.zeros(self.texture_size + (1,)).to(self.device)
-        for texture, cos_map in zip(textures, cos_maps):
+        texture_merge = torch.zeros((*self.texture_size, channel)).to(self.device)
+        trust_map_merge = torch.zeros((*self.texture_size, 1)).to(self.device)
+        for texture, cos_map in zip(textures, cos_maps, strict=False):
             view_sum = (cos_map > 0).sum()
             painted_sum = ((cos_map > 0) * (trust_map_merge > 0)).sum()
             if painted_sum / view_sum > 0.99:
@@ -1381,14 +1386,14 @@ class MeshRender:
     def uv_inpaint(self, texture, mask, vertex_inpaint=True, method="NS", return_float=False):
         """
         Inpaint missing regions in UV texture using mesh-aware and traditional methods.
-        
+
         Args:
             texture: Input texture as tensor, numpy array, or PIL Image
             mask: Binary mask indicating regions to inpaint (1 = keep, 0 = inpaint)
             vertex_inpaint: Whether to use mesh vertex connectivity for inpainting
             method: Inpainting method ("NS" for Navier-Stokes)
             return_float: Whether to return float values (False returns uint8)
-            
+
         Returns:
             Inpainted texture as numpy array
         """
@@ -1409,6 +1414,6 @@ class MeshRender:
 
         if method == "NS":
             texture_np = cv2.inpaint((texture_np * 255).astype(np.uint8), 255 - mask, 3, cv2.INPAINT_NS)
-            assert return_float == False
+            assert not return_float
 
         return texture_np

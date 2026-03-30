@@ -12,42 +12,41 @@
 # fine-tuning enabling code and other elements of the foregoing made publicly available
 # by Tencent in accordance with TENCENT HUNYUAN COMMUNITY LICENSE AGREEMENT.
 
-import os
-import json
 import copy
+import json
+import os
+from typing import Any
+
 import numpy as np
 import torch
 import torch.nn as nn
-from einops import rearrange
-from typing import Any, Callable, Dict, List, Optional, Union, Tuple, Literal
-import diffusers
-from diffusers.utils import deprecate
 from diffusers import (
     DDPMScheduler,
     EulerAncestralDiscreteScheduler,
     UNet2DConditionModel,
 )
 from diffusers.models import UNet2DConditionModel
-from diffusers.models.attention_processor import Attention, AttnProcessor
+from diffusers.models.attention_processor import Attention
 from diffusers.models.transformers.transformer_2d import BasicTransformerBlock
-from .attn_processor import SelfAttnProcessor2_0, RefAttnProcessor2_0, PoseRoPEAttnProcessor2_0
-
+from einops import rearrange
 from transformers import AutoImageProcessor, AutoModel
+
+from .attn_processor import PoseRoPEAttnProcessor2_0, RefAttnProcessor2_0, SelfAttnProcessor2_0
 
 
 class Dino_v2(nn.Module):
 
     """Wrapper for DINOv2 vision transformer (frozen weights).
-    
+
     Provides feature extraction for reference images.
-    
+
     Args:
         dino_v2_path: Custom path to DINOv2 model weights (uses default if None)
     """
 
 
     def __init__(self, dino_v2_path):
-        super(Dino_v2, self).__init__()
+        super().__init__()
         self.dino_processor = AutoImageProcessor.from_pretrained(dino_v2_path)
         self.dino_v2 = AutoModel.from_pretrained(dino_v2_path)
 
@@ -59,10 +58,10 @@ class Dino_v2(nn.Module):
     def forward(self, images):
 
         """Processes input images through DINOv2 ViT.
-        
+
         Handles both tensor input (B, N, C, H, W) and PIL image lists.
         Extracts patch embeddings and flattens spatial dimensions.
-        
+
         Returns:
             torch.Tensor: Feature vectors [B, N*(num_patches), feature_dim]
         """
@@ -90,15 +89,15 @@ def _chunked_feed_forward(ff: nn.Module, hidden_states: torch.Tensor, chunk_dim:
     # "feed_forward_chunk_size" can be used to save memory
 
     """Memory-efficient feedforward execution via chunking.
-    
+
     Divides input along specified dimension for sequential processing.
-    
+
     Args:
         ff: Feedforward module to apply
         hidden_states: Input tensor
         chunk_dim: Dimension to split
         chunk_size: Size of each chunk
-        
+
     Returns:
         torch.Tensor: Reassembled output tensor
     """
@@ -122,25 +121,25 @@ def _chunked_feed_forward(ff: nn.Module, hidden_states: torch.Tensor, chunk_dim:
 def compute_voxel_grid_mask(position, grid_resolution=8):
 
     """Generates view-to-view attention mask based on 3D position similarity.
-    
+
     Uses voxel grid downsampling to determine spatially adjacent regions.
     Mask indicates where features should interact across different views.
-    
+
     Args:
         position: Position maps [B, N, 3, H, W] (normalized 0-1)
         grid_resolution: Spatial reduction factor
-        
+
     Returns:
         torch.Tensor: Attention mask [B, N*grid_res**2, N*grid_res**2]
     """
 
     position = position.half()
-    B, N, _, H, W = position.shape
+    _B, _N, _, H, W = position.shape
     assert H % grid_resolution == 0 and W % grid_resolution == 0
 
     valid_mask = (position != 1).all(dim=2, keepdim=True)
     valid_mask = valid_mask.expand_as(position)
-    position[valid_mask == False] = 0
+    position[not valid_mask] = 0
 
     position = rearrange(
         position,
@@ -177,20 +176,22 @@ def compute_voxel_grid_mask(position, grid_resolution=8):
     return weights
 
 
-def compute_multi_resolution_mask(position_maps, grid_resolutions=[32, 16, 8]):
+def compute_multi_resolution_mask(position_maps, grid_resolutions=None):
 
     """Generates attention masks at multiple spatial resolutions.
-    
+
     Creates pyramid of position-based masks for hierarchical attention.
-    
+
     Args:
         position_maps: Position maps [B, N, 3, H, W]
         grid_resolutions: List of downsampling factors
-        
+
     Returns:
         dict: Resolution-specific masks keyed by flattened dimension size
     """
 
+    if grid_resolutions is None:
+        grid_resolutions = [32, 16, 8]
     position_attn_mask = {}
     with torch.no_grad():
         for grid_resolution in grid_resolutions:
@@ -204,25 +205,25 @@ def compute_multi_resolution_mask(position_maps, grid_resolutions=[32, 16, 8]):
 def compute_discrete_voxel_indice(position, grid_resolution=8, voxel_resolution=128):
 
     """Quantizes position maps to discrete voxel indices.
-    
+
     Creates sparse 3D coordinate representations for efficient hashing.
-    
+
     Args:
         position: Position maps [B, N, 3, H, W]
         grid_resolution: Spatial downsampling factor
         voxel_resolution: Quantization resolution
-        
+
     Returns:
         torch.Tensor: Voxel indices [B, N, grid_res, grid_res, 3]
     """
 
     position = position.half()
-    B, N, _, H, W = position.shape
+    _B, _N, _, H, W = position.shape
     assert H % grid_resolution == 0 and W % grid_resolution == 0
 
     valid_mask = (position != 1).all(dim=2, keepdim=True)
     valid_mask = valid_mask.expand_as(position)
-    position[valid_mask == False] = 0
+    position[not valid_mask] = 0
 
     position = rearrange(
         position,
@@ -250,24 +251,28 @@ def compute_discrete_voxel_indice(position, grid_resolution=8, voxel_resolution=
     return voxel_indices
 
 
-def calc_multires_voxel_idxs(position_maps, grid_resolutions=[64, 32, 16, 8], voxel_resolutions=[512, 256, 128, 64]):
+def calc_multires_voxel_idxs(position_maps, grid_resolutions=None, voxel_resolutions=None):
 
     """Generates multi-resolution voxel indices for position encoding.
-    
+
     Creates pyramid of quantized position representations.
-    
+
     Args:
         position_maps: Input position maps
         grid_resolutions: Spatial resolution levels
         voxel_resolutions: Quantization levels
-        
+
     Returns:
         dict: Voxel indices keyed by flattened dimension size, with resolution metadata
     """
 
+    if voxel_resolutions is None:
+        voxel_resolutions = [512, 256, 128, 64]
+    if grid_resolutions is None:
+        grid_resolutions = [64, 32, 16, 8]
     voxel_indices = {}
     with torch.no_grad():
-        for grid_resolution, voxel_resolution in zip(grid_resolutions, voxel_resolutions):
+        for grid_resolution, voxel_resolution in zip(grid_resolutions, voxel_resolutions, strict=False):
             voxel_indice = compute_discrete_voxel_indice(position_maps, grid_resolution, voxel_resolution)
             voxel_indice = rearrange(voxel_indice, "b n c h w -> b (n h w) c")
             voxel_indices[voxel_indice.shape[1]] = {"voxel_indices": voxel_indice, "voxel_resolution": voxel_resolution}
@@ -278,13 +283,13 @@ class Basic2p5DTransformerBlock(torch.nn.Module):
 
 
     """Enhanced transformer block for multiview 2.5D image generation.
-    
+
     Extends standard transformer blocks with:
     - Material-specific attention (MDA)
     - Multiview attention (MA)
     - Reference attention (RA)
     - DINO feature integration
-    
+
     Args:
         transformer: Base transformer block
         layer_name: Identifier for layer
@@ -305,21 +310,21 @@ class Basic2p5DTransformerBlock(torch.nn.Module):
         use_dino=True,
         pbr_setting=None,
     ) -> None:
-        
+
         """
         Initialization:
         1. Material-Dimension Attention (MDA):
            - Processes each PBR material with separate projection weights
            - Uses custom SelfAttnProcessor2_0 with material awareness
-           
+
         2. Multiview Attention (MA):
            - Adds cross-view attention with PoseRoPE
            - Initialized as zero-initialized residual pathway
-           
+
         3. Reference Attention (RA):
            - Conditions on reference view features
            - Uses RefAttnProcessor2_0 for material-specific conditioning
-           
+
         4. DINO Attention:
            - Incorporates DINO-ViT features
            - Initialized as zero-initialized residual pathway
@@ -405,7 +410,7 @@ class Basic2p5DTransformerBlock(torch.nn.Module):
     def _initialize_attn_weights(self):
 
         """Initializes specialized attention heads with base weights.
-        
+
         Uses weight sharing strategy:
         - Copies base transformer weights to specialized heads
         - Initializes newly-added parameters to zero
@@ -472,17 +477,17 @@ class Basic2p5DTransformerBlock(torch.nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        encoder_hidden_states: Optional[torch.Tensor] = None,
-        encoder_attention_mask: Optional[torch.Tensor] = None,
-        timestep: Optional[torch.LongTensor] = None,
-        cross_attention_kwargs: Dict[str, Any] = None,
-        class_labels: Optional[torch.LongTensor] = None,
-        added_cond_kwargs: Optional[Dict[str, torch.Tensor]] = None,
+        attention_mask: torch.Tensor | None = None,
+        encoder_hidden_states: torch.Tensor | None = None,
+        encoder_attention_mask: torch.Tensor | None = None,
+        timestep: torch.LongTensor | None = None,
+        cross_attention_kwargs: dict[str, Any] | None = None,
+        class_labels: torch.LongTensor | None = None,
+        added_cond_kwargs: dict[str, torch.Tensor] | None = None,
     ) -> torch.Tensor:
 
         """Forward pass with multi-mechanism attention.
-        
+
         Processing stages:
         1. Material-aware self-attention (MDA)
         2. Reference attention (RA)
@@ -491,11 +496,11 @@ class Basic2p5DTransformerBlock(torch.nn.Module):
         5. DINO feature conditioning (optional)
         6. Position-aware conditioning
         7. Feed-forward network
-        
+
         Args:
             hidden_states: Input features [B * N_materials * N_views, Seq_len, Feat_dim]
             See base transformer for other parameters
-            
+
         Returns:
             torch.Tensor: Output features
         """
@@ -679,7 +684,7 @@ class Basic2p5DTransformerBlock(torch.nn.Module):
         # i2vgen doesn't have this norm 🤷‍♂️
         if self.norm_type == "ada_norm_continuous":
             norm_hidden_states = self.norm3(hidden_states, added_cond_kwargs["pooled_text_emb"])
-        elif not self.norm_type == "ada_norm_single":
+        elif self.norm_type != "ada_norm_single":
             norm_hidden_states = self.norm3(hidden_states)
 
         if self.norm_type == "ada_norm_zero":
@@ -710,9 +715,9 @@ class Basic2p5DTransformerBlock(torch.nn.Module):
 class ImageProjModel(torch.nn.Module):
 
     """Projects image embeddings into cross-attention space.
-    
+
     Transforms CLIP embeddings into additional context tokens for conditioning.
-    
+
     Args:
         cross_attention_dim: Dimension of attention space
         clip_embeddings_dim: Dimension of input CLIP embeddings
@@ -731,10 +736,10 @@ class ImageProjModel(torch.nn.Module):
     def forward(self, image_embeds):
 
         """Projects image embeddings to cross-attention context tokens.
-        
+
         Args:
             image_embeds: Input embeddings [B, N, C] or [B, C]
-            
+
         Returns:
             torch.Tensor: Context tokens [B, N*clip_extra_context_tokens, cross_attention_dim]
         """
@@ -758,13 +763,13 @@ class ImageProjModel(torch.nn.Module):
 class UNet2p5DConditionModel(torch.nn.Module):
 
     """2.5D UNet extension for multiview PBR generation.
-    
+
     Enhances standard 2D UNet with:
     - Multiview attention mechanisms
     - Material-aware processing
     - Position-aware conditioning
     - Dual-stream reference processing
-    
+
     Args:
         unet: Base 2D UNet model
         train_sched: Training scheduler (DDPM)
@@ -811,7 +816,7 @@ class UNet2p5DConditionModel(torch.nn.Module):
         torch_dtype = kwargs.pop("torch_dtype", torch.float32)
         config_path = os.path.join(pretrained_model_name_or_path, "config.json")
         unet_ckpt_path = os.path.join(pretrained_model_name_or_path, "diffusion_pytorch_model.bin")
-        with open(config_path, "r", encoding="utf-8") as file:
+        with open(config_path, encoding="utf-8") as file:
             config = json.load(file)
         unet = UNet2DConditionModel(**config)
         unet_2p5d = UNet2p5DConditionModel(unet)
@@ -833,11 +838,11 @@ class UNet2p5DConditionModel(torch.nn.Module):
     def init_condition(self, use_dino):
 
         """Initializes conditioning mechanisms for multiview PBR generation.
-        
+
         Sets up:
         1. Learned text embeddings: Material-specific tokens (albedo, mr) initialized to zeros
         2. DINO projector: Model to process DINO-ViT features for cross-attention
-        
+
         Args:
             use_dino: Flag to enable DINO feature integration
         """
@@ -859,12 +864,12 @@ class UNet2p5DConditionModel(torch.nn.Module):
     def init_attention(self, unet, use_ma=False, use_ra=False, use_mda=False, use_dino=False, pbr_setting=None):
 
         """Recursively replaces standard transformers with enhanced 2.5D blocks.
-        
+
         Processes UNet architecture:
         1. Downsampling blocks: Replaces transformers in attention layers
         2. Middle block: Upgrades central transformers
         3. Upsampling blocks: Modifies decoder transformers
-        
+
         Args:
             unet: UNet model to enhance
             use_ma: Enable multiview attention
@@ -933,14 +938,14 @@ class UNet2p5DConditionModel(torch.nn.Module):
     ):
 
         """Forward pass with multiview/material conditioning.
-        
+
         Key stages:
         1. Input preparation (concat normal/position maps)
         2. Reference feature extraction (dual-stream)
         3. Position encoding (voxel indices)
         4. DINO feature projection
         5. Main UNet processing with attention conditioning
-        
+
         Args:
             sample: Input latents [B, N_pbr, N_gen, C, H, W]
             cached_condition: Dictionary containing:
@@ -951,7 +956,7 @@ class UNet2p5DConditionModel(torch.nn.Module):
                 - position_maps: 3D position maps
                 - mva_scale: Multiview attention scale
                 - ref_scale: Reference attention scale
-                
+
         Returns:
             torch.Tensor: Output features
         """
@@ -1044,10 +1049,7 @@ class UNet2p5DConditionModel(torch.nn.Module):
 
                 noisy_ref_latents = ref_latents
                 timestep_ref = 0
-                if self.use_dual_stream:
-                    unet_ref = self.unet_dual
-                else:
-                    unet_ref = self.unet
+                unet_ref = self.unet_dual if self.use_dual_stream else self.unet
                 unet_ref(
                     noisy_ref_latents,
                     timestep_ref,

@@ -12,12 +12,12 @@
 # fine-tuning enabling code and other elements of the foregoing made publicly available
 # by Tencent in accordance with TENCENT HUNYUAN COMMUNITY LICENSE AGREEMENT.
 
-import trimesh
 import pymeshlab
+import trimesh
 
 
 def remesh_mesh(mesh_path, remesh_path):
-    mesh = mesh_simplify_trimesh(mesh_path, remesh_path)
+    mesh_simplify_trimesh(mesh_path, remesh_path)
 
 
 def mesh_simplify_trimesh(inputpath, outputpath, target_count=40000):
