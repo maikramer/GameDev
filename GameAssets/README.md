@@ -2,7 +2,7 @@
 
 **Language:** English · [Português (`README_PT.md`)](README_PT.md)
 
-CLI for **batched prompts and assets** aligned with your game’s style and concept. Combines a YAML profile (`game.yaml`), a CSV manifest, and style presets, and orchestrates **`text2d`** or **`texture2d`** (seamless textures via API), optionally **`text2sound`** (per-row audio), **`text3d`** (geometry only), **`paint3d`** (texture and PBR in the GLB when the profile requests it), and **Materialize** (PBR maps from the diffuse in the Texture2D flow).
+CLI for **batched prompts and assets** aligned with your game’s style and concept. Combines a YAML profile (`game.yaml`), a CSV manifest, and style presets, and orchestrates **`text2d`** or **`texture2d`** (seamless textures via API), optionally **`text2sound`** (per-row audio), **`text3d`** (geometry only), **`paint3d`** (Hunyuan3D-Paint 2.1 — texture + PBR in the GLB when `text3d.texture` is enabled), and **Materialize** only for **PBR maps from a diffuse image** in the Texture2D flow (`texture2d.materialize`).
 
 ## Requirements
 
@@ -11,9 +11,9 @@ CLI for **batched prompts and assets** aligned with your game’s style and conc
   - `TEXT2D_BIN` — `text2d` executable ([Text2D](../Text2D)) when using **FLUX** 2D generation (`image_source: text2d` or per-row `image_source`)
   - `TEXTURE2D_BIN` — `texture2d` executable ([Texture2D](../Texture2D)) when using **seamless textures** (`image_source: texture2d` or CSV column)
   - `TEXT3D_BIN` — `text3d` executable ([Text3D](../Text3D)) with `--with-3d` (shape only)
-  - `PAINT3D_BIN` — `paint3d` executable ([Paint3D](../Paint3D)) when `game.yaml` has **`text3d.texture: true`** or **`text3d.materialize: true`** (batch calls `paint3d texture` and, when applicable, `paint3d materialize-pbr` after shape)
+  - `PAINT3D_BIN` — `paint3d` executable ([Paint3D](../Paint3D)) when `game.yaml` has **`text3d.texture: true`** (batch calls `paint3d texture` after shape; GLB output is already PBR from Paint 2.1)
   - `TEXT2SOUND_BIN` — `text2sound` executable ([Text2Sound](../Text2Sound)) when CSV rows have **`generate_audio=true`** (and you do not use `--skip-audio`)
-  - `MATERIALIZE_BIN` — optional; **PBR in GLB** via Paint3D (`paint3d … --materialize` / `materialize-pbr` in batch) or **PBR maps from diffuse** in Texture2D + `texture2d.materialize` flow (see [Materialize](../Materialize) and [Paint3D: PBR in GLB](../Paint3D/docs/PBR_MATERIALIZE.md))
+  - `MATERIALIZE_BIN` — optional; **PBR maps from diffuse** when using Texture2D + `texture2d.materialize` (see [Materialize](../Materialize) and [Text3D/docs/PBR_MATERIALIZE.md](../Text3D/docs/PBR_MATERIALIZE.md))
   - `PART3D_BIN` — `part3d` executable ([Part3D](../Part3D)) with **`--with-parts`** and CSV column **`generate_parts=true`** (semantic decomposition after Text3D GLB)
 
 ## Installation
@@ -120,7 +120,7 @@ gameassets batch --profile game.yaml --manifest manifest.csv --with-3d \
 - With **`--with-3d`** and **`--with-parts`**, rows with **`generate_parts=true`** call **Part3D** (`part3d decompose`) on the Text3D GLB **before** rig: outputs **`parts_mesh_path`** (multi-part scene) and **`segmented_mesh_path`** (per-part colors), alongside the main GLB; options under **`part3d`** in `game.yaml`. Requires **`PART3D_BIN`** or `part3d` on `PATH`.
 - `--dry-run` prints commands without executing.
 - `--fail-fast` stops on first error (default: continue).
-- `--log batch-log.jsonl` appends one JSON per processed row, including **`timings_sec`** (wall-clock seconds per subprocess when applicable), e.g. `image_text2d` or `image_texture2d`, `materialize_diffuse`, `text2sound` (when `generate_audio`), `text3d` (single step), or `text3d_shape` / `text3d_texture` / `text3d_materialize_pbr` (with `phased_batch`). Records include **`audio_path`** / **`audio_error`** when applicable. **Texture2D** rows include **`texture2d_api`: true** (HF API cost is not computed by GameAssets).
+- `--log batch-log.jsonl` appends one JSON per processed row, including **`timings_sec`** (wall-clock seconds per subprocess when applicable), e.g. `image_text2d` or `image_texture2d`, `materialize_diffuse`, `text2sound` (when `generate_audio`), `text3d` (single step), or `text3d_shape` / `paint3d_texture` (with `phased_batch` and `text3d.texture`). Records include **`audio_path`** / **`audio_error`** when applicable. **Texture2D** rows include **`texture2d_api`: true** (HF API cost is not computed by GameAssets).
 - **Exclusive lock:** `.gameassets_batch.lock` (`fcntl`) in the manifest folder **prevents two batches in the same folder** — avoids VRAM contention between parallel `text2d`/`text3d`. If the PID in the lock no longer exists, the lock is reclaimed. `--skip-batch-lock` disables (advanced).
 - **VRAM:** before run, if `nvidia-smi` exists and free VRAM is below ~1.8 GiB, a warning is shown. `--skip-gpu-preflight` disables the warning.
 - **CUDA:** `text2d`/`text3d` subprocesses get `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` if unset (reduces fragmentation failures).
@@ -145,9 +145,9 @@ In **`game.yaml`**, **`image_source`** picks the default image tool:
 
 Use **`TEXTURE2D_BIN`** if `texture2d` is not on `PATH`.
 
-### PBR in GLB (Paint3D + Materialize)
+### PBR in GLB (Paint3D 2.1)
 
-With **`text3d`** in `game.yaml` and **`texture: true`**, the batch runs **`paint3d texture`** on the shape GLB (and reference image). With **`materialize: true`**, it adds **`paint3d materialize-pbr`** (or `paint3d texture … --materialize` depending on phase), using the **Materialize CLI** — GLB gets full glTF material.
+With **`text3d`** in `game.yaml` and **`texture: true`**, the batch runs **`paint3d texture`** on the shape GLB (and reference image). **Hunyuan3D-Paint 2.1** writes a **PBR-ready GLB**; the **Materialize CLI is not used** on 3D meshes in this flow.
 
 Minimal example (with `--with-3d` and `generate_3d=true` rows):
 
@@ -155,19 +155,9 @@ Minimal example (with `--with-3d` and `generate_3d=true` rows):
 text3d:
   preset: fast
   texture: true
-  materialize: true
-  materialize_save_maps: true
-  materialize_maps_subdir: pbr_maps
 ```
 
-- **`materialize`:** enables PBR step after texturing (`paint3d` subprocess).
-- **`materialize_save_maps`:** if `true`, Paint3D writes PBR maps to a **staging** dir (temporary in batch); GLB still has full material.
-- **`materialize_export_maps_to_output`:** if `true`, **also** copies those maps to `output_dir/materialize_maps_subdir/<id>/` (useful for engine editing). Default `false` to avoid filling the game folder with `pbr_maps/`.
-- **`materialize_maps_subdir`:** subfolder name under `output_dir` when exporting maps (default: `pbr_maps`).
-- **`materialize_bin`:** optional path to Materialize binary (same as `--materialize-bin` on `paint3d`; else `PATH` / `MATERIALIZE_BIN`).
-- **`materialize_no_invert`:** if `true`, adds `--materialize-no-invert`.
-
-Full guide: [Paint3D/docs/PBR_MATERIALIZE.md](../Paint3D/docs/PBR_MATERIALIZE.md).
+Context and Texture2D + Materialize: [Text3D/docs/PBR_MATERIALIZE.md](../Text3D/docs/PBR_MATERIALIZE.md).
 
 ## Profile (`game.yaml`)
 
@@ -186,7 +176,7 @@ Main fields:
 | `image_source` | `text2d` (default), `texture2d`, or `skymap2d` — default image tool (overridable per CSV column) |
 | `text2d` | Optional block: `low_vram`, `cpu`, `width`, `height` |
 | `texture2d` | Optional block when using Texture2D (global or CSV `texture2d` lines): resolution, `steps`, `guidance_scale`, `preset`, … and **PBR from diffuse:** `materialize`, `materialize_maps_subdir`, `materialize_bin`, `materialize_format`, etc. |
-| `text3d` | Optional block: `preset`, `low_vram`, `texture` (omitted = **`true`**), `steps` / `octree_resolution` / `num_chunks` (mutually exclusive with `preset` in practice), `no_mesh_repair`, `mesh_smooth`, `mc_level`, and **PBR:** `materialize`, `materialize_save_maps`, `materialize_export_maps_to_output`, `materialize_maps_subdir`, `materialize_bin`, `materialize_no_invert` |
+| `text3d` | Optional block: `preset`, `low_vram`, `texture` (omitted = **`true`**), `steps` / `octree_resolution` / `num_chunks` (mutually exclusive with `preset` in practice), `no_mesh_repair`, `mesh_smooth`, `mc_level`, `phased_batch`, `allow_shared_gpu`, `gpu_kill_others`, `full_gpu`, `model_subfolder` |
 | `rigging3d` | Optional block (rig after Text3D): `output_suffix` (e.g. `_rigged`), `root` (Rigging3D package code), `python` (interpreter). Used with `batch --with-rig` and `generate_rig=true` rows |
 | `part3d` | Optional block (Part3D after Text3D, before rig): `steps`, `octree_resolution`, `num_chunks`, `segment_only`, `no_cpu_offload`, `verbose`, `parts_suffix`, `segmented_suffix`. Used with `batch --with-parts` and `generate_parts=true` rows |
 
@@ -234,9 +224,9 @@ GameAssets/
 | `TEXT2D_BIN` | Path to `text2d` (if not on `PATH`) |
 | `TEXTURE2D_BIN` | Path to `texture2d` |
 | `TEXT3D_BIN` | Path to `text3d` |
-| `PAINT3D_BIN` | `paint3d` when profile has `text3d.texture` or `text3d.materialize` |
+| `PAINT3D_BIN` | `paint3d` when profile has `text3d.texture` |
 | `TEXT2SOUND_BIN` | Path to `text2sound` |
-| `MATERIALIZE_BIN` | Path to `materialize` (PBR via Paint3D in Text3D flow or via Texture2D) |
+| `MATERIALIZE_BIN` | Path to `materialize` (only when the profile uses Texture2D + `texture2d.materialize`) |
 | `RIGGING3D_BIN` | Path to `rigging3d` (or `python -m rigging3d`) with `batch --with-rig` |
 | `PART3D_BIN` | Path to `part3d` (or `python -m part3d`) with `batch --with-parts` |
 | `PYTORCH_CUDA_ALLOC_CONF` | Auto-set to `expandable_segments:True` if empty (reduces CUDA fragmentation) |

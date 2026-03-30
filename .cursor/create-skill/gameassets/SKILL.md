@@ -24,7 +24,7 @@ CLI que combina **perfil** (`game.yaml`), **manifest** (`manifest.csv`) e **pres
 | `texture2d` | No `PATH` ou `TEXTURE2D_BIN` quando há linhas com fonte **texture2d** |
 | `text3d` | Com `--with-3d`: no `PATH` ou `TEXT3D_BIN` |
 | `text2sound` | Com `generate_audio` no CSV (e sem `--skip-audio`): no `PATH` ou `TEXT2SOUND_BIN` |
-| Materialize (opcional) | `text3d.materialize` (PBR no GLB via Text3D) e/ou `texture2d.materialize` (PBR a partir da difusa): `PATH` ou `MATERIALIZE_BIN` / `texture2d.materialize_bin` |
+| Materialize (opcional) | Só **`texture2d.materialize`** (PBR a partir da difusa): `PATH` ou `MATERIALIZE_BIN` / `texture2d.materialize_bin`. GLB 3D: PBR via **Paint 2.1** (`paint3d texture`). |
 
 ## Pipeline mental
 
@@ -34,11 +34,11 @@ game.yaml + manifest.csv + presets [+ presets-local.yaml]
               → [se texture2d.materialize] materialize <difusa> -o … (mapas PBR)
         → [se generate_audio e não --skip-audio] text2sound generate …
         → [se generate_3d e --with-3d] text3d generate --from-image …
-              → [se text3d.materialize] Materialize CLI (via Text3D, PBR no GLB)
+              → [se text3d.texture] paint3d texture (GLB PBR)
         → [se generate_rig e --with-rig] rigging3d pipeline (GLB após Text3D → GLB rigado)
 ```
 
-**Nota:** O custo de API do Texture2D (Hugging Face Inference) não é calculado pelo GameAssets. O registo **`--log`** inclui **`timings_sec`** (segundos por fase: `image_text2d` / `image_texture2d`, `materialize_diffuse`, `text2sound`, `text3d` ou subpassos `text3d_*` com `phased_batch`), **`audio_path` / `audio_error`** quando aplicável, e **`texture2d_api`: true** nas linhas geradas via Texture2D.
+**Nota:** O custo de API do Texture2D (Hugging Face Inference) não é calculado pelo GameAssets. O registo **`--log`** inclui **`timings_sec`** (segundos por fase: `image_text2d` / `image_texture2d`, `materialize_diffuse`, `text2sound`, `text3d` ou `text3d_shape` / `paint3d_texture` com `phased_batch` e `text3d.texture`), **`audio_path` / `audio_error`** quando aplicável, e **`texture2d_api`: true** nas linhas geradas via Texture2D.
 
 ## Comandos principais
 
@@ -69,8 +69,7 @@ Sem `--presets-local`, o comando falha com **preset desconhecido**.
 - **`text2d`**: `low_vram`, `cpu`, `width`, `height` (resolução 2D).
 - **`texture2d`**: opções do CLI seamless + **`materialize`** para PBR a partir da difusa (mapas em `materialize_maps_subdir`).
 - **`text2sound`** (opcional): `duration`, `steps`, `cfg_scale`, `audio_format`, etc. — ver Text2Sound; `audio_subdir` no perfil para destino relativo a `output_dir`.
-- **`text3d`**: `preset` (`fast` \| `balanced` \| `hq`), `low_vram`, `texture` (omitido = **`true`**), ou **Hunyuan explícito** (`steps`, `octree_resolution`, `num_chunks` — nesse caso não se passa `--preset` ao CLI), `no_mesh_repair`, `mesh_smooth`, `mc_level`.
-- **PBR no GLB (opcional):** `materialize`, `materialize_save_maps`, `materialize_maps_subdir`, `materialize_bin`, `materialize_no_invert` — ver `Text3D/docs/PBR_MATERIALIZE.md`.
+- **`text3d`**: `preset` (`fast` \| `balanced` \| `hq`), `low_vram`, `texture` (omitido = **`true`**), ou **Hunyuan explícito** (`steps`, `octree_resolution`, `num_chunks` — nesse caso não se passa `--preset` ao CLI), `no_mesh_repair`, `mesh_smooth`, `mc_level`, `phased_batch`, GPU (`allow_shared_gpu`, `full_gpu`, …). PBR no GLB: **Paint 2.1** — ver `Text3D/docs/PBR_MATERIALIZE.md`.
 - **`rigging3d`** (opcional): `output_suffix`, `root`, `python` — usado com `batch --with-rig` e `generate_rig` no CSV.
 
 **Atenção:** `text3d.low_vram: true` em GPU faz o Hunyuan “shape” cair para CPU e **costuma degradar a forma**; preferir reduzir resolução 2D ou fechar outras apps que consumam VRAM.
@@ -87,7 +86,7 @@ Colunas incluem **`id`**, **`idea`**, **`generate_3d`**, opcionalmente **`genera
 | `TEXTURE2D_BIN` | Caminho ao executável `texture2d` se não estiver no `PATH` |
 | `TEXT3D_BIN` | Idem para `text3d` |
 | `TEXT2SOUND_BIN` | Idem para `text2sound` quando há `generate_audio` |
-| `MATERIALIZE_BIN` | Idem para `materialize` (Text3D e/ou fluxo Texture2D+materialize) |
+| `MATERIALIZE_BIN` | Idem para `materialize` (só fluxo Texture2D + `texture2d.materialize`) |
 | `RIGGING3D_BIN` | Idem para `rigging3d` (ou `python -m rigging3d`) com `--with-rig` |
 
 ## Prompt — palavras a evitar para 3D limpo
@@ -128,8 +127,8 @@ O sistema de prompt enhancement (v2) envolve automaticamente o prompt com enquad
 | **Text2D** | Imagens gerais (FLUX) por prompt; referência para 3D. |
 | **Texture2D** | Texturas seamless (HF API); opcional + Materialize para mapas PBR em disco. |
 | **Text2Sound** | Text-to-audio (Stable Audio Open); clipes por linha com `generate_audio`. |
-| **Text3D** | Imagem → mesh + Paint + opcional Materialize no GLB. |
-| **Materialize** | Mapas PBR a partir do diffuse (CLI; via Text3D ou após Texture2D). |
+| **Text3D** | Imagem → mesh (shape); com GameAssets + `text3d.texture` segue-se `paint3d texture` (GLB PBR). |
+| **Materialize** | Mapas PBR a partir do diffuse (CLI; após Texture2D com `texture2d.materialize`). |
 | **Rigging3D** | Rig automático do GLB (após Text3D) com `batch --with-rig` e `generate_rig`. |
 
 ## Referências no repositório

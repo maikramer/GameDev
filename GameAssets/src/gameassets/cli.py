@@ -50,11 +50,10 @@ Preset só num ficheiro teu (ex.: galaxy_orbital em presets-local.yaml):
   gameassets batch --profile game.yaml --manifest manifest.csv --with-3d \\
     --presets-local presets-local.yaml --log run.jsonl
 
-Define TEXT2D_BIN / TEXT3D_BIN / PAINT3D_BIN (se ``text3d.texture`` ou ``materialize``) / RIGGING3D_BIN / PART3D_BIN.
-Text3D gera só geometria; textura e PBR são o CLI ``paint3d``.
-(e MATERIALIZE_BIN se usares text3d.materialize) se não estiverem no PATH.
+Define TEXT2D_BIN / TEXT3D_BIN / PAINT3D_BIN (se ``text3d.texture``) / RIGGING3D_BIN / PART3D_BIN.
+Text3D gera só geometria; textura e PBR no GLB vêm do ``paint3d`` (Hunyuan3D-Paint 2.1).
 Com image_source: texture2d: TEXTURE2D_BIN e, se texture2d.materialize,
-MATERIALIZE_BIN (ou texture2d.materialize_bin).
+MATERIALIZE_BIN (ou texture2d.materialize_bin) — só para mapas PBR a partir da imagem difusa.
 Com generate_audio no CSV: TEXT2SOUND_BIN se text2sound não estiver no PATH.
 """
 
@@ -69,24 +68,6 @@ def _seed_for_row(profile: GameProfile, row_id: str) -> int | None:
 def _safe_row_dirname(row_id: str) -> str:
     """Parte do id do manifest segura para nome de pasta (ex.: Props/crate → Props__crate_01)."""
     return row_id.replace("/", "__").replace("\\", "_")
-
-
-def _materialize_maps_path(profile: GameProfile, row: ManifestRow) -> Path:
-    t3 = profile.text3d
-    sub = (t3.materialize_maps_subdir if t3 else None) or "pbr_maps"
-    return Path(profile.output_dir) / sub / _safe_row_dirname(row.id)
-
-
-def _materialize_maps_path_manifest(
-    profile: GameProfile,
-    manifest_dir: Path,
-    row: ManifestRow,
-) -> Path:
-    """Destino dos mapas PBR com output_dir relativo resolvido face à pasta do manifest."""
-    rel = _materialize_maps_path(profile, row)
-    if rel.is_absolute():
-        return rel.resolve()
-    return (manifest_dir / rel).resolve()
 
 
 def _text2sound_profile_effective(profile: GameProfile) -> Text2SoundProfile:
@@ -497,8 +478,6 @@ def _post_text3d_mesh_extras(
     row: ManifestRow,
     mesh_final: Path,
     rec: dict[str, Any],
-    maps_tmp: Path | None,
-    t3_opts: Text3DProfile | None,
     manifest_dir: Path,
     child_env: dict[str, str],
     part3d_bin: str | None,
@@ -506,11 +485,7 @@ def _post_text3d_mesh_extras(
     rigging3d_bin: str | None,
     with_rig: bool,
 ) -> bool:
-    """Exporta mapas PBR, define mesh_path, part3d, rigging3d. Devolve True se algum passo falhou."""
-    if maps_tmp is not None and t3_opts and t3_opts.materialize_export_maps_to_output:
-        dst_maps = _materialize_maps_path_manifest(profile, manifest_dir, row)
-        dst_maps.mkdir(parents=True, exist_ok=True)
-        _install_maps_dir(maps_tmp, dst_maps)
+    """Define mesh_path, part3d, rigging3d. Devolve True se algum passo falhou."""
     rec["mesh_path"] = _path_for_log(mesh_final, manifest_dir)
     part3d_fail = _part3d_pipeline_failed(
         profile,
@@ -891,12 +866,12 @@ def batch_cmd(
         except FileNotFoundError as e:
             raise click.ClickException(str(e)) from e
         t3_chk = profile.text3d
-        if t3_chk and (t3_chk.texture or t3_chk.materialize):
+        if t3_chk and t3_chk.texture:
             try:
                 paint3d_bin = resolve_binary("PAINT3D_BIN", "paint3d")
             except FileNotFoundError as e:
                 raise click.ClickException(
-                    "Perfil com text3d.texture ou text3d.materialize requer paint3d no PATH ou PAINT3D_BIN."
+                    "Perfil com text3d.texture requer paint3d no PATH ou PAINT3D_BIN."
                 ) from e
 
     rigging3d_bin: str | None = None
@@ -947,10 +922,10 @@ def batch_cmd(
     meta.add_row("text3d", text3d_bin or "[dim](desligado)[/dim]")
     if with_3d:
         t3_meta = profile.text3d
-        if t3_meta and (t3_meta.texture or t3_meta.materialize):
+        if t3_meta and t3_meta.texture:
             meta.add_row("paint3d", paint3d_bin or "[red]em falta[/red]")
         else:
-            meta.add_row("paint3d", "[dim](não necessário — sem textura/PBR)[/dim]")
+            meta.add_row("paint3d", "[dim](não necessário — sem textura 3D)[/dim]")
     meta.add_row("rigging3d", rigging3d_bin or "[dim](desligado)[/dim]")
     meta.add_row("part3d", part3d_bin or "[dim](desligado)[/dim]")
     meta.add_row("Modo", "[cyan]dry-run[/cyan]" if dry_run else "execução")
@@ -1095,7 +1070,7 @@ def batch_cmd(
             t3d = profile.text3d
             phased = bool(t3d and t3d.texture)
             if phased:
-                console.print("[dim]--- Text3D + paint3d: shape → texture → materialize-pbr ---[/dim]")
+                console.print("[dim]--- Text3D + paint3d: shape → texture (PBR no GLB via Paint 2.1) ---[/dim]")
                 for row in rows:
                     if not row.generate_3d:
                         continue
@@ -1113,30 +1088,15 @@ def batch_cmd(
                     if seed is not None:
                         a1 = [*a1, "--seed", str(seed)]
                     console.print(f"[dim]{' '.join(a1)}[/dim]")
-                    out_paint = str(mesh_path) if not (t3d and t3d.materialize) else "<tmp>/painted.glb"
                     pbin = paint3d_bin or "paint3d"
                     a2 = _texture_subprocess_argv(
                         pbin,
                         profile,
                         Path(tw),
                         img_path,
-                        Path(out_paint),
-                        with_materialize=False,
-                        materialize_maps_dir=None,
-                        row=row,
+                        mesh_path,
                     )
                     console.print(f"[dim]{' '.join(a2)}[/dim]")
-                    if t3d and t3d.materialize:
-                        maps_ph = _materialize_maps_path(profile, row)
-                        a3 = _materialize_pbr_subprocess_argv(
-                            pbin,
-                            profile,
-                            Path("<tmp>/painted.glb"),
-                            mesh_path,
-                            materialize_maps_dir=maps_ph,
-                            row=row,
-                        )
-                        console.print(f"[dim]{' '.join(a3)}[/dim]")
             else:
                 console.print("[dim]--- Fase 2: Text3D (generate_3d=true) ---[/dim]")
                 for row in rows:
@@ -1449,7 +1409,7 @@ def batch_cmd(
                             "[bold]text3d.low_vram: true[/bold] no [cyan]game.yaml[/cyan] "
                             "evita OOM (malha pode ser mais grosseira). "
                             "Com [bold]text3d.texture[/bold], o batch corre: shape (text3d) → "
-                            "paint3d texture → materialize-pbr, libertando VRAM entre passos.",
+                            "paint3d texture (PBR no GLB), libertando VRAM entre passos.",
                             border_style="yellow",
                             title="Antes do 3D",
                         )
@@ -1460,7 +1420,6 @@ def batch_cmd(
                     def _finalize_mesh_ok(
                         rec: dict[str, Any],
                         mesh_final: Path,
-                        maps_tmp: Path | None,
                         row: ManifestRow,
                     ) -> None:
                         nonlocal failures
@@ -1469,8 +1428,6 @@ def batch_cmd(
                             row,
                             mesh_final,
                             rec,
-                            maps_tmp,
-                            t3_opts,
                             manifest_dir,
                             child_env,
                             part3d_bin,
@@ -1541,7 +1498,6 @@ def batch_cmd(
                             "[cyan]paint3d texture (todos)[/cyan]",
                             total=len(shape_ok),
                         )
-                        texture_ok: list[int] = []
                         for idx in shape_ok:
                             row = rows[idx]
                             rec = results[idx]
@@ -1552,11 +1508,6 @@ def batch_cmd(
                             row_work = batch_tmp / f"{idx:04d}_{_safe_row_dirname(row.id)}_3d"
                             mesh_shape = row_work / "shape.glb"
                             img_final, mesh_final = _paths_for_row_manifest(profile, manifest_dir, row)
-                            painted = row_work / "painted.glb"
-                            mesh_out = mesh_final if not (t3_opts and t3_opts.materialize) else painted
-                            maps_tmp: Path | None = None
-                            if t3_opts and t3_opts.materialize and t3_opts.materialize_save_maps:
-                                maps_tmp = row_work / "pbr_maps"
                             try:
                                 assert paint3d_bin is not None
                                 t_tex = _texture_subprocess_argv(
@@ -1564,10 +1515,7 @@ def batch_cmd(
                                     profile,
                                     mesh_shape,
                                     img_final,
-                                    mesh_out,
-                                    with_materialize=False,
-                                    materialize_maps_dir=maps_tmp,
-                                    row=row,
+                                    mesh_final,
                                 )
                                 t_paint = time.perf_counter()
                                 r4 = run_cmd(t_tex, extra_env=child_env, cwd=manifest_dir)
@@ -1582,7 +1530,7 @@ def batch_cmd(
                                     append_log(rec)
                                     if not continue_on_error:
                                         raise click.Abort()
-                                elif not mesh_out.is_file():
+                                elif not mesh_final.is_file():
                                     failures += 1
                                     rec["status"] = "error"
                                     rec["error"] = "texture não produziu GLB"
@@ -1591,68 +1539,13 @@ def batch_cmd(
                                     if not continue_on_error:
                                         raise click.Abort()
                                 else:
-                                    if t3_opts and t3_opts.materialize:
-                                        texture_ok.append(idx)
-                                    else:
-                                        _finalize_mesh_ok(rec, mesh_final, None, row)
-                                        append_log(rec)
-                                        if not continue_on_error and rec["status"] == "error":
-                                            raise click.Abort()
-                            finally:
-                                keep_for_mat = t3_opts and t3_opts.materialize and idx in texture_ok
-                                if not keep_for_mat:
-                                    shutil.rmtree(row_work, ignore_errors=True)
-                                progress.advance(task_paint)
-
-                        if t3_opts and t3_opts.materialize:
-                            task_mat = progress.add_task(
-                                "[cyan]Paint3D: Materialize PBR (todos)[/cyan]",
-                                total=len(texture_ok),
-                            )
-                            for idx in texture_ok:
-                                row = rows[idx]
-                                rec = results[idx]
-                                progress.update(
-                                    task_mat,
-                                    description=f"[cyan]{row.id}[/cyan] · Materialize",
-                                )
-                                row_work = batch_tmp / f"{idx:04d}_{_safe_row_dirname(row.id)}_3d"
-                                painted = row_work / "painted.glb"
-                                img_final, mesh_final = _paths_for_row_manifest(profile, manifest_dir, row)
-                                maps_tmp = row_work / "pbr_maps"
-                                try:
-                                    assert paint3d_bin is not None
-                                    t_mat = _materialize_pbr_subprocess_argv(
-                                        paint3d_bin,
-                                        profile,
-                                        painted,
-                                        mesh_final,
-                                        materialize_maps_dir=maps_tmp,
-                                        row=row,
-                                    )
-                                    t_mpbr = time.perf_counter()
-                                    r5 = run_cmd(t_mat, extra_env=child_env, cwd=manifest_dir)
-                                    _timing_append(rec, "paint3d_materialize_pbr", time.perf_counter() - t_mpbr)
-                                    if r5.returncode != 0:
-                                        failures += 1
-                                        err = merge_subprocess_output(r5) or "materialize-pbr falhou"
-                                        rec["status"] = "error"
-                                        rec["error"] = err
-                                        preview = merge_subprocess_output(r5, max_chars=4000) or err
-                                        console.print(f"[red]materialize-pbr falhou[/red] {row.id}: {preview}")
-                                    elif not mesh_final.is_file():
-                                        failures += 1
-                                        rec["status"] = "error"
-                                        rec["error"] = "materialize-pbr não produziu GLB"
-                                        console.print(f"[red]sem GLB após materialize-pbr[/red] {row.id}")
-                                    else:
-                                        _finalize_mesh_ok(rec, mesh_final, maps_tmp, row)
-                                finally:
-                                    shutil.rmtree(row_work, ignore_errors=True)
+                                    _finalize_mesh_ok(rec, mesh_final, row)
                                     append_log(rec)
                                     if not continue_on_error and rec["status"] == "error":
                                         raise click.Abort()
-                                    progress.advance(task_mat)
+                            finally:
+                                shutil.rmtree(row_work, ignore_errors=True)
+                                progress.advance(task_paint)
                     else:
                         task2 = progress.add_task(
                             "[cyan]Fase 2: Text3D[/cyan]",
@@ -1667,10 +1560,7 @@ def batch_cmd(
                             try:
                                 img_final, mesh_final = _paths_for_row_manifest(profile, manifest_dir, row)
                                 mesh_tmp = row_work / "out.glb"
-                                maps_tmp: Path | None = None
                                 seed = _seed_for_row(profile, row.id)
-                                if t3_opts and t3_opts.materialize and t3_opts.materialize_save_maps:
-                                    maps_tmp = row_work / "pbr_maps"
 
                                 t3d_args = _text3d_argv(
                                     text3d_bin,
@@ -1678,7 +1568,6 @@ def batch_cmd(
                                     img_final,
                                     mesh_tmp,
                                     row,
-                                    materialize_maps_dir=maps_tmp,
                                 )
                                 if seed is not None:
                                     t3d_args.extend(["--seed", str(seed)])
@@ -1704,8 +1593,6 @@ def batch_cmd(
                                         row,
                                         mesh_final,
                                         rec,
-                                        maps_tmp,
-                                        t3_opts,
                                         manifest_dir,
                                         child_env,
                                         part3d_bin,
@@ -1749,12 +1636,8 @@ def _paint3d_texture_argv(
     mesh_in: Path,
     image_path: Path,
     mesh_out: Path,
-    *,
-    with_materialize: bool,
-    materialize_maps_dir: Path | None,
-    row: ManifestRow,
 ) -> list[str]:
-    """Subcomando ``paint3d texture`` (Hunyuan3D-Paint); PBR opcional no mesmo passo."""
+    """Subcomando ``paint3d texture`` (Hunyuan3D-Paint 2.1; saída GLB com material PBR)."""
     args = [
         paint3d_bin,
         "texture",
@@ -1767,18 +1650,6 @@ def _paint3d_texture_argv(
     t3 = profile.text3d
     if not t3:
         return args
-    if with_materialize and t3.materialize:
-        args.append("--materialize")
-        args.extend(["--materialize-preset", t3.materialize_preset])
-        if t3.materialize_save_maps:
-            maps_dir = (
-                materialize_maps_dir if materialize_maps_dir is not None else _materialize_maps_path(profile, row)
-            )
-            args.extend(["--materialize-output-dir", str(maps_dir)])
-        if t3.materialize_bin:
-            args.extend(["--materialize-bin", t3.materialize_bin])
-        if t3.materialize_no_invert:
-            args.append("--materialize-no-invert")
     if t3.allow_shared_gpu:
         args.append("--allow-shared-gpu")
     if not t3.gpu_kill_others:
@@ -1788,51 +1659,12 @@ def _paint3d_texture_argv(
     return args
 
 
-def _paint3d_materialize_pbr_argv(
-    paint3d_bin: str,
-    profile: GameProfile,
-    mesh_in: Path,
-    mesh_out: Path,
-    *,
-    materialize_maps_dir: Path | None,
-    row: ManifestRow,
-) -> list[str]:
-    """Subcomando ``paint3d materialize-pbr`` (só Materialize, GLB já pintado)."""
-    args = [
-        paint3d_bin,
-        "materialize-pbr",
-        str(mesh_in),
-        "-o",
-        str(mesh_out),
-    ]
-    t3 = profile.text3d
-    if not t3:
-        return args
-    args.extend(["--preset", t3.materialize_preset])
-    if t3.materialize_save_maps:
-        maps_dir = materialize_maps_dir if materialize_maps_dir is not None else _materialize_maps_path(profile, row)
-        args.extend(["--materialize-output-dir", str(maps_dir)])
-    if t3.materialize_bin:
-        args.extend(["--materialize-bin", t3.materialize_bin])
-    if t3.materialize_no_invert:
-        args.append("--materialize-no-invert")
-    if t3.allow_shared_gpu:
-        args.append("--allow-shared-gpu")
-    if not t3.gpu_kill_others:
-        args.append("--no-gpu-kill-others")
-    return args
-
-
 def _texture_subprocess_argv(
     paint3d_bin: str,
     profile: GameProfile,
     mesh_in: Path,
     image_path: Path,
     mesh_out: Path,
-    *,
-    with_materialize: bool,
-    materialize_maps_dir: Path | None,
-    row: ManifestRow,
 ) -> list[str]:
     return _paint3d_texture_argv(
         paint3d_bin,
@@ -1840,28 +1672,6 @@ def _texture_subprocess_argv(
         mesh_in,
         image_path,
         mesh_out,
-        with_materialize=with_materialize,
-        materialize_maps_dir=materialize_maps_dir,
-        row=row,
-    )
-
-
-def _materialize_pbr_subprocess_argv(
-    paint3d_bin: str,
-    profile: GameProfile,
-    mesh_in: Path,
-    mesh_out: Path,
-    *,
-    materialize_maps_dir: Path | None,
-    row: ManifestRow,
-) -> list[str]:
-    return _paint3d_materialize_pbr_argv(
-        paint3d_bin,
-        profile,
-        mesh_in,
-        mesh_out,
-        materialize_maps_dir=materialize_maps_dir,
-        row=row,
     )
 
 
@@ -1872,12 +1682,11 @@ def _text3d_argv(
     mesh_path: Path,
     row: ManifestRow | None = None,
     *,
-    materialize_maps_dir: Path | None = None,
     shape_only: bool = False,
 ) -> list[str]:
     """
-    ``shape_only=True``: só Hunyuan (imagem → mesh), sem --texture/--materialize
-    (batch em fases: shape → Paint → materialize-pbr).
+    ``shape_only=True``: só Hunyuan (imagem → mesh), sem --texture
+    (batch em fases: shape → ``paint3d texture``).
     """
     args = [
         text3d_bin,
@@ -1950,7 +1759,7 @@ def _text3d_argv(
     "--work-dir",
     type=click.Path(file_okay=False, path_type=Path),
     default=None,
-    help="Pasta de trabalho persistente para shapes/painted (defeito: .gameassets_work/ junto ao manifest)",
+    help="Pasta de trabalho persistente para shapes (defeito: .gameassets_work/ junto ao manifest)",
 )
 def resume_cmd(
     profile_path: Path,
@@ -1965,10 +1774,9 @@ def resume_cmd(
 
     \b
     Detecta automaticamente por item:
-      - PNG em falta  → text2d
+      - PNG em falta  → text2d / texture2d
       - shape em falta → text3d generate (shape)
-      - paint em falta → paint3d texture
-      - GLB final em falta → paint3d materialize-pbr + copiar
+      - paint em falta → paint3d texture (GLB final com PBR)
       - tudo OK       → skip
     """
 
@@ -1989,7 +1797,7 @@ def resume_cmd(
     except FileNotFoundError:
         text3d_bin = None
     paint3d_bin: str | None = None
-    if t3_opts and (t3_opts.texture or t3_opts.materialize):
+    if t3_opts and t3_opts.texture:
         paint3d_bin = _try_paint3d_bin()
 
     work_dir = manifest_dir / ".gameassets_work" if work_dir is None else work_dir.resolve()
@@ -2010,11 +1818,9 @@ def resume_cmd(
     NEED_IMAGE = "need_image"
     NEED_SHAPE = "need_shape"
     NEED_PAINT = "need_paint"
-    NEED_MATERIALIZE = "need_materialize"
     DONE = "done"
 
     want_texture = bool(t3_opts and t3_opts.texture)
-    want_materialize = bool(t3_opts and t3_opts.materialize)
 
     items: list[dict[str, Any]] = []
     for idx, row in enumerate(rows):
@@ -2023,16 +1829,9 @@ def resume_cmd(
         img_final, mesh_final = _paths_for_row_manifest(profile, manifest_dir, row)
         row_work = work_dir / _safe_row_dirname(row.id)
         shape_path = row_work / "shape.glb"
-        painted_path = row_work / "painted.glb"
-
-        maps_dir: Path | None = None
-        if want_materialize and t3_opts and t3_opts.materialize_save_maps:
-            maps_dir = _materialize_maps_path_manifest(profile, manifest_dir, row)
 
         if mesh_final.is_file():
             state = DONE
-        elif want_materialize and painted_path.is_file():
-            state = NEED_MATERIALIZE
         elif want_texture and shape_path.is_file():
             state = NEED_PAINT
         elif img_final.is_file():
@@ -2049,13 +1848,11 @@ def resume_cmd(
                 "mesh_final": mesh_final,
                 "row_work": row_work,
                 "shape_path": shape_path,
-                "painted_path": painted_path,
-                "maps_dir": maps_dir,
             }
         )
 
     # --- Relatório ---
-    counts = {NEED_IMAGE: 0, NEED_SHAPE: 0, NEED_PAINT: 0, NEED_MATERIALIZE: 0, DONE: 0}
+    counts = {NEED_IMAGE: 0, NEED_SHAPE: 0, NEED_PAINT: 0, DONE: 0}
     for it in items:
         counts[it["state"]] += 1
 
@@ -2085,16 +1882,10 @@ def resume_cmd(
     paint_pending = counts[NEED_PAINT] + counts[NEED_SHAPE] + counts[NEED_IMAGE]
     paint_label = "paint3d texture"
     plan_table.add_row(
-        "3. Paint (textura)",
+        "3. Paint (textura + PBR no GLB)",
         str(paint_pending),
         paint_label if paint_pending > 0 else "[green]OK[/green]",
     )
-    mat_pending = counts[NEED_MATERIALIZE] + paint_pending
-    if want_materialize:
-        mat_label = "paint3d materialize-pbr"
-        plan_table.add_row(
-            "4. Materialize PBR", str(mat_pending), mat_label if mat_pending > 0 else "[green]OK[/green]"
-        )
     plan_table.add_row("[green]Concluídos[/green]", str(counts[DONE]), "[green]skip[/green]")
     console.print(plan_table)
 
@@ -2113,10 +1904,10 @@ def resume_cmd(
             console.print("[yellow]AVISO: texture2d não encontrado — linhas texture2d serão saltadas.[/yellow]")
         if need_text2d and not text2d_bin:
             console.print("[yellow]AVISO: text2d não encontrado — linhas text2d serão saltadas.[/yellow]")
-    if (counts[NEED_SHAPE] + counts[NEED_PAINT] + counts[NEED_MATERIALIZE]) > 0 and not text3d_bin:
+    if (counts[NEED_SHAPE] + counts[NEED_PAINT]) > 0 and not text3d_bin:
         raise click.ClickException("text3d não encontrado. Define TEXT3D_BIN ou instala o pacote.")
-    if items and (want_texture or want_materialize) and not paint3d_bin:
-        raise click.ClickException("Perfil com text3d.texture ou materialize requer paint3d no PATH ou PAINT3D_BIN.")
+    if items and want_texture and not paint3d_bin:
+        raise click.ClickException("Perfil com text3d.texture requer paint3d no PATH ou PAINT3D_BIN.")
 
     if dry_run:
         for it in items:
@@ -2266,70 +2057,22 @@ def resume_cmd(
             for it in need_paint:
                 row = it["row"]
                 progress.update(task, description=f"[cyan]{row.id}[/cyan] · Paint")
-                mesh_out = it["mesh_final"] if not want_materialize else it["painted_path"]
+                mesh_out = it["mesh_final"]
                 t_tex = _texture_subprocess_argv(
                     paint3d_bin,
                     profile,
                     it["shape_path"],
                     it["img_final"],
                     mesh_out,
-                    with_materialize=False,
-                    materialize_maps_dir=None,
-                    row=row,
                 )
                 r = run_cmd(t_tex, extra_env=child_env, cwd=manifest_dir)
                 if r.returncode == 0 and mesh_out.is_file():
-                    if want_materialize:
-                        it["state"] = NEED_MATERIALIZE
-                    else:
-                        it["state"] = DONE
-                        append_log({"id": row.id, "status": "ok", "mesh_path": str(it["mesh_final"])})
-                    console.print(f"  [green]OK[/green] {row.id}")
-                else:
-                    failures += 1
-                    err = merge_subprocess_output(r, max_chars=200) or "paint falhou"
-                    console.print(f"  [red]FAIL[/red] {row.id}: {err}")
-                    append_log({"id": row.id, "status": "error", "error": err})
-                    if not continue_on_error:
-                        break
-                progress.advance(task)
-
-    # --- Fase 4: Materialize PBR ---
-    need_mat = [it for it in items if it["state"] == NEED_MATERIALIZE]
-    if need_mat and want_materialize and paint3d_bin:
-        console.print(f"\n[bold cyan]Fase 4: Materialize PBR ({len(need_mat)} assets)[/bold cyan]")
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("{task.description}"),
-            BarColumn(),
-            TextColumn("{task.completed}/{task.total}"),
-            TimeElapsedColumn(),
-            console=console,
-        ) as progress:
-            task = progress.add_task("[cyan]Materialize[/cyan]", total=len(need_mat))
-            for it in need_mat:
-                row = it["row"]
-                progress.update(task, description=f"[cyan]{row.id}[/cyan] · Materialize")
-                maps_tmp = it["row_work"] / "pbr_maps"
-                t_mat = _materialize_pbr_subprocess_argv(
-                    paint3d_bin,
-                    profile,
-                    it["painted_path"],
-                    it["mesh_final"],
-                    materialize_maps_dir=maps_tmp,
-                    row=row,
-                )
-                r = run_cmd(t_mat, extra_env=child_env, cwd=manifest_dir)
-                if r.returncode == 0 and it["mesh_final"].is_file():
                     it["state"] = DONE
-                    if it["maps_dir"] and maps_tmp.is_dir():
-                        it["maps_dir"].mkdir(parents=True, exist_ok=True)
-                        _install_maps_dir(maps_tmp, it["maps_dir"])
                     append_log({"id": row.id, "status": "ok", "mesh_path": str(it["mesh_final"])})
                     console.print(f"  [green]OK[/green] {row.id}")
                 else:
                     failures += 1
-                    err = merge_subprocess_output(r, max_chars=200) or "materialize falhou"
+                    err = merge_subprocess_output(r, max_chars=200) or "paint falhou"
                     console.print(f"  [red]FAIL[/red] {row.id}: {err}")
                     append_log({"id": row.id, "status": "error", "error": err})
                     if not continue_on_error:

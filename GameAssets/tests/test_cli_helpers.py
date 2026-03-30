@@ -7,7 +7,6 @@ from pathlib import Path
 
 from gameassets.cli import (
     _extract_json_from_output,
-    _paint3d_materialize_pbr_argv,
     _paint3d_texture_argv,
     _paths_for_row,
     _rigging3d_output_path,
@@ -149,11 +148,10 @@ def test_text3d_argv_shape_only_skips_texture() -> None:
         genre="G",
         tone="t",
         style_preset="lowpoly",
-        text3d=Text3DProfile(preset="fast", texture=True, materialize=True),
+        text3d=Text3DProfile(preset="fast", texture=True),
     )
     argv = _text3d_argv("text3d", p, Path("i.png"), Path("o.glb"), shape_only=True)
     assert "--texture" not in argv
-    assert "--materialize" not in argv
 
 
 def test_text3d_argv_explicit_hunyuan_skips_preset() -> None:
@@ -173,18 +171,17 @@ def test_text3d_argv_explicit_hunyuan_skips_preset() -> None:
     assert "--steps" in argv and "28" in argv
 
 
-def test_paint3d_texture_argv_includes_preset_when_materialize() -> None:
-    row = ManifestRow(id="x1", idea="x", kind=None, generate_3d=True)
+def test_paint3d_texture_argv_gpu_flags() -> None:
     p = GameProfile(
         title="T",
         genre="G",
         tone="t",
         style_preset="lowpoly",
-        output_dir="out",
         text3d=Text3DProfile(
             texture=True,
-            materialize=True,
-            materialize_preset="metal",
+            allow_shared_gpu=True,
+            gpu_kill_others=False,
+            full_gpu=True,
         ),
     )
     argv = _paint3d_texture_argv(
@@ -193,19 +190,16 @@ def test_paint3d_texture_argv_includes_preset_when_materialize() -> None:
         Path("/shape.glb"),
         Path("/ref.png"),
         Path("/out.glb"),
-        with_materialize=True,
-        materialize_maps_dir=None,
-        row=row,
     )
     assert argv[0] == "/bin/paint3d"
     assert argv[1] == "texture"
-    assert "--materialize" in argv
-    idx = argv.index("--materialize-preset") + 1
-    assert argv[idx] == "metal"
+    assert "--materialize" not in argv
+    assert "--allow-shared-gpu" in argv
+    assert "--no-gpu-kill-others" in argv
+    assert "--paint-full-gpu" in argv
 
 
 def test_texture_subprocess_delegates_to_paint3d() -> None:
-    row = ManifestRow(id="r", idea="x", kind=None, generate_3d=True)
     p = GameProfile(
         title="T",
         genre="G",
@@ -219,34 +213,9 @@ def test_texture_subprocess_delegates_to_paint3d() -> None:
         Path("/a.glb"),
         Path("/b.png"),
         Path("/c.glb"),
-        with_materialize=False,
-        materialize_maps_dir=None,
-        row=row,
     )
     assert argv[0] == "/bin/paint3d"
     assert argv[1] == "texture"
-
-
-def test_paint3d_materialize_pbr_argv_preset() -> None:
-    row = ManifestRow(id="p", idea="x", kind=None, generate_3d=True)
-    p = GameProfile(
-        title="T",
-        genre="G",
-        tone="t",
-        style_preset="lowpoly",
-        text3d=Text3DProfile(materialize_preset="wood"),
-    )
-    argv = _paint3d_materialize_pbr_argv(
-        "paint3d",
-        p,
-        Path("/in.glb"),
-        Path("/out.glb"),
-        materialize_maps_dir=None,
-        row=row,
-    )
-    assert argv[:3] == ["paint3d", "materialize-pbr", str(Path("/in.glb"))]
-    i = argv.index("--preset") + 1
-    assert argv[i] == "wood"
 
 
 def test_text3d_argv_allow_shared_and_no_gpu_kill() -> None:
@@ -284,32 +253,6 @@ def test_text3d_argv_mesh_flags() -> None:
     argv = _text3d_argv("text3d", p, Path("i.png"), Path("o.glb"))
     assert "--no-mesh-repair" in argv
     assert "--mesh-smooth" in argv and "1" in argv
-
-
-def test_paint3d_materialize_pbr_argv_maps_dir() -> None:
-    row = ManifestRow(id="x", idea="x", kind=None, generate_3d=True)
-    p = GameProfile(
-        title="T",
-        genre="G",
-        tone="t",
-        style_preset="lowpoly",
-        output_dir="out",
-        text3d=Text3DProfile(
-            materialize_save_maps=True,
-            materialize_preset="default",
-        ),
-    )
-    maps = Path("/tmp/pbr_maps")
-    argv = _paint3d_materialize_pbr_argv(
-        "paint3d",
-        p,
-        Path("/in.glb"),
-        Path("/out.glb"),
-        materialize_maps_dir=maps,
-        row=row,
-    )
-    idx = argv.index("--materialize-output-dir") + 1
-    assert argv[idx] == str(maps)
 
 
 def test_rigging3d_output_path() -> None:

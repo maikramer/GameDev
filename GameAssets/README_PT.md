@@ -2,7 +2,7 @@
 
 **Documentação:** [English (`README.md`)](README.md) · Português (esta página)
 
-CLI para **batches de prompts e assets** alinhados ao estilo e à ideia do teu jogo. Combina um perfil YAML (`game.yaml`), um manifest CSV e presets de estilo, e orquestra **`text2d`** ou **`texture2d`** (texturas seamless via API), opcionalmente **`text2sound`** (áudio por linha), **`text3d`** (só geometria), **`paint3d`** (textura e PBR no GLB quando o perfil pede) e **Materialize** (mapas PBR a partir da difusa no fluxo Texture2D).
+CLI para **batches de prompts e assets** alinhados ao estilo e à ideia do teu jogo. Combina um perfil YAML (`game.yaml`), um manifest CSV e presets de estilo, e orquestra **`text2d`** ou **`texture2d`** (texturas seamless via API), opcionalmente **`text2sound`** (áudio por linha), **`text3d`** (só geometria), **`paint3d`** (Hunyuan3D-Paint 2.1 — textura + PBR no GLB com `text3d.texture`) e **Materialize** só para **mapas PBR a partir da imagem difusa** no fluxo Texture2D (`texture2d.materialize`).
 
 ## Requisitos
 
@@ -11,9 +11,9 @@ CLI para **batches de prompts e assets** alinhados ao estilo e à ideia do teu j
   - `TEXT2D_BIN` — executável `text2d` ([Text2D](../Text2D)) quando usas geração 2D **FLUX** (`image_source: text2d` ou coluna `image_source` por linha)
   - `TEXTURE2D_BIN` — executável `texture2d` ([Texture2D](../Texture2D)) quando usas **texturas seamless** (`image_source: texture2d` ou por linha no CSV)
   - `TEXT3D_BIN` — executável `text3d` ([Text3D](../Text3D)) com `--with-3d` (gera só o shape)
-  - `PAINT3D_BIN` — executável `paint3d` ([Paint3D](../Paint3D)) quando no `game.yaml` tiveres **`text3d.texture: true`** ou **`text3d.materialize: true`** (o batch chama `paint3d texture` e, se aplicável, `paint3d materialize-pbr` após o shape)
+  - `PAINT3D_BIN` — executável `paint3d` ([Paint3D](../Paint3D)) quando no `game.yaml` tiveres **`text3d.texture: true`** (o batch chama `paint3d texture` após o shape; o GLB já sai PBR do Paint 2.1)
   - `TEXT2SOUND_BIN` — executável `text2sound` ([Text2Sound](../Text2Sound)) quando há linhas com **`generate_audio=true`** no CSV (e não usas `--skip-audio`)
-  - `MATERIALIZE_BIN` — opcional; **PBR no GLB** via Paint3D (`paint3d … --materialize` / `materialize-pbr` no batch) ou **mapas PBR a partir da difusa** no fluxo Texture2D+`texture2d.materialize` (ver [Materialize](../Materialize) e [Paint3D: PBR no GLB](../Paint3D/docs/PBR_MATERIALIZE.md))
+  - `MATERIALIZE_BIN` — opcional; **mapas PBR a partir da difusa** com Texture2D + `texture2d.materialize` (ver [Materialize](../Materialize) e [Text3D/docs/PBR_MATERIALIZE.md](../Text3D/docs/PBR_MATERIALIZE.md))
   - `PART3D_BIN` — executável `part3d` ([Part3D](../Part3D)) com **`--with-parts`** e coluna **`generate_parts=true`** no CSV (decomposição semântica após o GLB do Text3D)
 
 ## Instalação
@@ -120,7 +120,7 @@ gameassets batch --profile game.yaml --manifest manifest.csv --with-3d \
 - Com **`--with-3d`** e **`--with-parts`**, linhas com **`generate_parts=true`** chamam o **Part3D** (`part3d decompose`) sobre o GLB do Text3D **antes** do rig: saídas **`parts_mesh_path`** (cena multi-parte) e **`segmented_mesh_path`** (malha com cores por parte), junto ao GLB principal; opções em **`part3d`** no `game.yaml`. Requer **`PART3D_BIN`** ou `part3d` no `PATH`.
 - `--dry-run` mostra os comandos sem executar.
 - `--fail-fast` para no primeiro erro (defeito: continua).
-- `--log batch-log.jsonl` acrescenta um JSON por linha processada, incluindo **`timings_sec`** (segundos, tempos de parede por subprocesso quando aplicável), por exemplo: `image_text2d` ou `image_texture2d`, `materialize_diffuse`, `text2sound` (quando `generate_audio`), `text3d` (passo único), ou `text3d_shape` / `text3d_texture` / `text3d_materialize_pbr` (com `phased_batch`). Registos incluem **`audio_path`** / **`audio_error`** quando aplicável. Linhas **Texture2D** incluem **`texture2d_api`: true** (custo da API Hugging Face não é calculado pelo GameAssets).
+- `--log batch-log.jsonl` acrescenta um JSON por linha processada, incluindo **`timings_sec`** (segundos, tempos de parede por subprocesso quando aplicável), por exemplo: `image_text2d` ou `image_texture2d`, `materialize_diffuse`, `text2sound` (quando `generate_audio`), `text3d` (passo único), ou `text3d_shape` / `paint3d_texture` (com `phased_batch` e `text3d.texture`). Registos incluem **`audio_path`** / **`audio_error`** quando aplicável. Linhas **Texture2D** incluem **`texture2d_api`: true** (custo da API Hugging Face não é calculado pelo GameAssets).
 - **Lock exclusivo:** na pasta do manifest é criado `.gameassets_batch.lock` (ficheiro `fcntl`) para **impedir dois batches na mesma pasta** — evita disputa de VRAM entre `text2d`/`text3d` em paralelo. Se o PID no lock já não existir, o lock é recuperado. `--skip-batch-lock` desliga (avançado).
 - **VRAM:** antes da execução, se `nvidia-smi` existir e a VRAM livre for inferior a ~1,8 GiB, mostra-se um aviso. `--skip-gpu-preflight` desliga o aviso.
 - **CUDA:** os subprocessos `text2d`/`text3d` recebem `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` se a variável ainda não estiver definida no ambiente (reduz falhas por fragmentação).
@@ -145,9 +145,9 @@ No **`game.yaml`**, **`image_source`** escolhe a ferramenta de imagem por defeit
 
 Variável **`TEXTURE2D_BIN`** se `texture2d` não estiver no `PATH`.
 
-### PBR no GLB (Paint3D + Materialize)
+### PBR no GLB (Paint3D 2.1)
 
-Com **`text3d` no `game.yaml`** e **`texture: true`**, o batch corre **`paint3d texture`** sobre o GLB do shape (e a imagem de referência). Com **`materialize: true`**, acrescenta **`paint3d materialize-pbr`** (ou `paint3d texture … --materialize` conforme a fase), usando o **Materialize CLI** por baixo — o GLB fica com material glTF completo.
+Com **`text3d` no `game.yaml`** e **`texture: true`**, o batch corre **`paint3d texture`** sobre o GLB do shape (e a imagem de referência). O **Hunyuan3D-Paint 2.1** gera um **GLB PBR**; o **Materialize CLI não entra** no fluxo 3D.
 
 Exemplo mínimo (com `--with-3d` e linhas `generate_3d=true`):
 
@@ -155,19 +155,9 @@ Exemplo mínimo (com `--with-3d` e linhas `generate_3d=true`):
 text3d:
   preset: fast
   texture: true
-  materialize: true
-  materialize_save_maps: true
-  materialize_maps_subdir: pbr_maps
 ```
 
-- **`materialize`:** activa o passo PBR após a textura (subprocesso `paint3d`).
-- **`materialize_save_maps`:** se `true`, o Paint3D grava mapas PBR num diretório de **staging** (temporário no batch); o GLB fica com material completo.
-- **`materialize_export_maps_to_output`:** se `true`, **além** disso copia esses mapas para `output_dir/materialize_maps_subdir/<id>/` (útil para editar texturas no motor). Por defeito `false`, para não encher a pasta do jogo com `pbr_maps/`.
-- **`materialize_maps_subdir`:** nome da subpasta sob `output_dir` quando exportas mapas (defeito: `pbr_maps`).
-- **`materialize_bin`:** caminho opcional ao binário Materialize (equivale a `--materialize-bin` no `paint3d`; senão usa `PATH` / `MATERIALIZE_BIN`).
-- **`materialize_no_invert`:** se `true`, adiciona `--materialize-no-invert`.
-
-Guia completo: [Paint3D/docs/PBR_MATERIALIZE.md](../Paint3D/docs/PBR_MATERIALIZE.md).
+Contexto e Texture2D + Materialize: [Text3D/docs/PBR_MATERIALIZE.md](../Text3D/docs/PBR_MATERIALIZE.md).
 
 ## Perfil (`game.yaml`)
 
@@ -186,7 +176,7 @@ Campos principais:
 | `image_source` | `text2d` (defeito), `texture2d` ou `skymap2d` — ferramenta de imagem por defeito (sobreponível por coluna no CSV) |
 | `text2d` | Bloco opcional: `low_vram`, `cpu`, `width`, `height` |
 | `texture2d` | Bloco opcional se usas Texture2D (global ou só com linhas CSV `texture2d`): resolução, `steps`, `guidance_scale`, `preset`, … e **PBR em difusa:** `materialize`, `materialize_maps_subdir`, `materialize_bin`, `materialize_format`, etc. |
-| `text3d` | Bloco opcional: `preset`, `low_vram`, `texture` (omitido = **`true`**), `steps` / `octree_resolution` / `num_chunks` (alternativa mútua a `preset`), `no_mesh_repair`, `mesh_smooth`, `mc_level`, e **PBR:** `materialize`, `materialize_save_maps`, `materialize_export_maps_to_output`, `materialize_maps_subdir`, `materialize_bin`, `materialize_no_invert` |
+| `text3d` | Bloco opcional: `preset`, `low_vram`, `texture` (omitido = **`true`**), `steps` / `octree_resolution` / `num_chunks` (alternativa mútua a `preset`), `no_mesh_repair`, `mesh_smooth`, `mc_level`, `phased_batch`, `allow_shared_gpu`, `gpu_kill_others`, `full_gpu`, `model_subfolder` |
 | `rigging3d` | Bloco opcional (rig após Text3D): `output_suffix` (ex. `_rigged`), `root` (código do pacote Rigging3D), `python` (interprete). Usado com `batch --with-rig` e linhas `generate_rig=true` |
 | `part3d` | Bloco opcional (Part3D após Text3D, antes do rig): `steps`, `octree_resolution`, `num_chunks`, `segment_only`, `no_cpu_offload`, `verbose`, `parts_suffix`, `segmented_suffix`. Usado com `batch --with-parts` e linhas `generate_parts=true` |
 
@@ -234,9 +224,9 @@ GameAssets/
 | `TEXT2D_BIN` | Caminho para o binário `text2d` (se não estiver no `PATH`) |
 | `TEXTURE2D_BIN` | Caminho para o binário `texture2d` |
 | `TEXT3D_BIN` | Caminho para o binário `text3d` |
-| `PAINT3D_BIN` | Binário `paint3d` quando o perfil tem `text3d.texture` ou `text3d.materialize` |
+| `PAINT3D_BIN` | Binário `paint3d` quando o perfil tem `text3d.texture` |
 | `TEXT2SOUND_BIN` | Caminho para o binário `text2sound` |
-| `MATERIALIZE_BIN` | Caminho para o binário `materialize` (para PBR via Paint3D no fluxo Text3D ou via Texture2D) |
+| `MATERIALIZE_BIN` | Caminho para o binário `materialize` (só com Texture2D + `texture2d.materialize`) |
 | `RIGGING3D_BIN` | Caminho para `rigging3d` (ou `python -m rigging3d`) quando usas `batch --with-rig` |
 | `PART3D_BIN` | Caminho para `part3d` (ou `python -m part3d`) quando usas `batch --with-parts` |
 | `PYTORCH_CUDA_ALLOC_CONF` | Auto-definida como `expandable_segments:True` se vazia (reduz fragmentação CUDA) |

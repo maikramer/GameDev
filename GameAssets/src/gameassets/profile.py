@@ -31,26 +31,15 @@ class Text3DProfile:
     no_mesh_repair: bool = False
     mesh_smooth: int | None = None
     mc_level: float | None = None
-    # PBR: fase ``paint3d materialize-pbr`` no batch (após textura)
-    materialize: bool = False
-    materialize_save_maps: bool = False
-    # Se true, o batch copia mapas gerados (staging em tmp) para output_dir/materialize_maps_subdir.
-    materialize_export_maps_to_output: bool = False
-    materialize_maps_subdir: str = "pbr_maps"
-    materialize_bin: str | None = None
-    materialize_no_invert: bool = False
     # Repasse aos CLIs text3d generate / paint3d (VRAM / exclusividade GPU)
     allow_shared_gpu: bool = False
     gpu_kill_others: bool = True
-    # Documentação legada: com textura o batch já corre em fases (shape → paint3d → materialize).
+    # Com textura o batch corre em fases (shape → paint3d texture).
     phased_batch: bool = False
     # GPU pura: Text2D inteiro na GPU; no paint3d activa --paint-full-gpu quando aplicável.
     full_gpu: bool = False
     # Subpasta do modelo Hunyuan3D shape (ex.: hunyuan3d-dit-v2-mini-turbo para modo turbo)
     model_subfolder: str | None = None
-    # Preset Materialize (CLI paint3d materialize-pbr / texture --materialize).
-    materialize_preset: str = "default"
-
 
 @dataclass
 class Text2DProfile:
@@ -365,16 +354,6 @@ class GameProfile:
                 raise ValueError(
                     "text3d.steps, octree_resolution, num_chunks, mesh_smooth e mc_level devem ser números válidos"
                 ) from e
-            mat = bool(raw_t3.get("materialize", False))
-            if mat:
-                tx = True
-            mat_save = bool(raw_t3.get("materialize_save_maps", False))
-            mat_export = bool(raw_t3.get("materialize_export_maps_to_output", False))
-            msd = raw_t3.get("materialize_maps_subdir")
-            msd_s = str(msd).strip() if msd not in (None, "") else "pbr_maps"
-            mat_bin = raw_t3.get("materialize_bin")
-            mat_bin_s = str(mat_bin).strip() if mat_bin not in (None, "") else None
-            mat_noinv = bool(raw_t3.get("materialize_no_invert", False))
             allow_sg = bool(raw_t3.get("allow_shared_gpu", False))
             gko = raw_t3.get("gpu_kill_others")
             g_kill = True if gko is None else bool(gko)
@@ -382,11 +361,6 @@ class GameProfile:
             full_gpu = bool(raw_t3.get("full_gpu", False))
             model_sub = raw_t3.get("model_subfolder")
             model_sub_s = str(model_sub).strip() if model_sub not in (None, "") else None
-            mp_preset = raw_t3.get("materialize_preset") or "default"
-            mp_s = str(mp_preset).strip() if isinstance(mp_preset, str) else "default"
-            _preset_ok = ("default", "skin", "floor", "metal", "fabric", "wood", "stone")
-            if mp_s not in _preset_ok:
-                raise ValueError(f"text3d.materialize_preset deve ser um de: {', '.join(_preset_ok)}")
             t3 = Text3DProfile(
                 preset=pr,
                 low_vram=bool(raw_t3.get("low_vram", False)),
@@ -397,18 +371,11 @@ class GameProfile:
                 no_mesh_repair=bool(raw_t3.get("no_mesh_repair", False)),
                 mesh_smooth=ms_i,
                 mc_level=mcl_f,
-                materialize=mat,
-                materialize_save_maps=mat_save,
-                materialize_export_maps_to_output=mat_export,
-                materialize_maps_subdir=msd_s,
-                materialize_bin=mat_bin_s,
-                materialize_no_invert=mat_noinv,
                 allow_shared_gpu=allow_sg,
                 gpu_kill_others=g_kill,
                 phased_batch=phased,
                 full_gpu=full_gpu,
                 model_subfolder=model_sub_s,
-                materialize_preset=mp_s,
             )
         rg3: Rigging3DProfile | None = None
         raw_rg = data.get("rigging3d")

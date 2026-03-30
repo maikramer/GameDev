@@ -138,21 +138,6 @@ def test_from_dict_invalid_preset() -> None:
         )
 
 
-def test_text3d_materialize_forces_texture() -> None:
-    p = GameProfile.from_dict(
-        {
-            "title": "A",
-            "genre": "B",
-            "tone": "C",
-            "style_preset": "lowpoly",
-            "text3d": {"texture": False, "materialize": True},
-        }
-    )
-    assert p.text3d is not None
-    assert p.text3d.texture is True
-    assert p.text3d.materialize is True
-
-
 def test_from_dict_texture2d_defaults() -> None:
     p = GameProfile.from_dict(
         {
@@ -201,28 +186,6 @@ def test_from_dict_image_source_invalid() -> None:
                 "image_source": "flux",
             }
         )
-
-
-def test_text3d_materialize_options() -> None:
-    p = GameProfile.from_dict(
-        {
-            "title": "A",
-            "genre": "B",
-            "tone": "C",
-            "style_preset": "lowpoly",
-            "text3d": {
-                "materialize": True,
-                "materialize_save_maps": True,
-                "materialize_maps_subdir": "maps_pbr",
-                "materialize_no_invert": True,
-            },
-        }
-    )
-    assert p.text3d is not None
-    assert p.text3d.materialize_save_maps is True
-    assert p.text3d.materialize_export_maps_to_output is False
-    assert p.text3d.materialize_maps_subdir == "maps_pbr"
-    assert p.text3d.materialize_no_invert is True
 
 
 def test_load_profile_roundtrip() -> None:

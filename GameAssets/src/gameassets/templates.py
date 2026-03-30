@@ -62,20 +62,16 @@ text2d:
 #   audio_format: wav
 
 # Text3D with --with-3d: preset fast balances time/VRAM.
-# texture=true => paint3d texture after shape.
+# texture=true => paint3d texture after shape (Hunyuan3D-Paint 2.1; GLB já PBR).
 # low_vram=true => Hunyuan shape on CPU (much worse quality).
-# phased_batch: true (with texture) => batch in 3 steps.
-# Requires PAINT3D_BIN or paint3d in PATH when active.
+# phased_batch: true (with texture) => batch em 2 passos (shape → paint).
+# Requires PAINT3D_BIN or paint3d in PATH when texture is true.
+# PBR a partir de PNG (não GLB): texture2d.materialize — ver bloco texture2d.
 text3d:
   preset: fast
   low_vram: false
   texture: true
-  # materialize_preset: default
   # phased_batch: false
-  # materialize: true
-  # materialize_save_maps: true
-  # materialize_export_maps_to_output: false
-  # materialize_maps_subdir: pbr_maps
 
 # Rigging3D após Text3D (--with-rig + coluna generate_rig=true no CSV). Requer bash, GPU CUDA; ver Rigging3D/README.md.
 # rigging3d:
