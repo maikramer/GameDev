@@ -7,7 +7,6 @@ instalar qualquer ferramenta (Python ou Rust) registada no registry.
 from __future__ import annotations
 
 import argparse
-import os
 import platform
 import sys
 from pathlib import Path
@@ -32,6 +31,8 @@ class _ToolPythonInstaller(PythonProjectInstaller):
         skip_deps: bool = False,
         skip_models: bool = False,
         force: bool = False,
+        skip_env_config: bool = False,
+        text2d_venv_only: bool = False,
     ) -> None:
         super().__init__(
             project_name=spec.name,
@@ -46,11 +47,58 @@ class _ToolPythonInstaller(PythonProjectInstaller):
             skip_pytorch=not spec.needs_pytorch,
         )
         self.spec = spec
+        self.skip_env_config = skip_env_config
+        self.text2d_venv_only = text2d_venv_only
+        self._monorepo_root = monorepo
 
     def check_python(self) -> bool:
         return super().check_python(min_version=self.spec.min_python)
 
+    def install_in_venv(self) -> None:
+        if self.spec.cli_name == "text2sound":
+            from .text2sound_extras import text2sound_install_in_venv
+
+            text2sound_install_in_venv(self)
+            return
+        if self.spec.cli_name == "text3d":
+            text2d = self.project_root.parent / "Text2D"
+            if not text2d.is_dir():
+                self.logger.warn("Monorepo: espera-se Text2D ao lado de Text3D (ex.: GameDev/Text2D + GameDev/Text3D).")
+        super().install_in_venv()
+
     def run(self) -> bool:
+        if self.spec.cli_name == "text3d":
+            text2d_dir = self._monorepo_root / "Text2D"
+            if not text2d_dir.is_dir():
+                self.logger.error(
+                    "Text3D precisa da pasta Text2D no monorepo (ex.: GameDev/Text2D). Clone o repositório completo."
+                )
+                return False
+            if not self.text2d_venv_only:
+                self.logger.warn(
+                    "Text2D é indispensável para text-to-3D: o Text3D importa o pacote `text2d` e gera a imagem 2D."
+                )
+                self.logger.step("Instalando Text2D primeiro (equivalente a ./install.sh text2d)...")
+                if not install_tool(
+                    "text2d",
+                    monorepo=self._monorepo_root,
+                    install_prefix=self.install_prefix,
+                    python_cmd=self.python_cmd,
+                    use_venv=self.use_venv,
+                    skip_deps=self.skip_deps,
+                    skip_models=self.skip_models,
+                    force=self.force,
+                    text2d_venv_only=False,
+                ):
+                    self.logger.error("A instalação do Text2D falhou; não é possível concluir o Text3D.")
+                    return False
+            else:
+                self.logger.info(
+                    "Opção --text2d-venv-only: a saltar a instalação dedicada do Text2D. "
+                    "O pacote text2d será instalado apenas no venv do Text3D (requirements.txt). "
+                    "Garante `text2d` no PATH (ex.: corre ./install.sh text2d) se precisares do CLI global."
+                )
+
         if not super().run():
             return False
 
@@ -63,6 +111,22 @@ class _ToolPythonInstaller(PythonProjectInstaller):
                 logger=self.logger,
             ):
                 return False
+
+        if self.spec.cli_name == "text3d":
+            from .text3d_extras import Text3DPostInstall
+
+            Text3DPostInstall(self, skip_env_config=self.skip_env_config).run()
+            return True
+
+        if self.spec.cli_name == "part3d":
+            from .part3d_extras import run_part3d_post_install
+
+            return run_part3d_post_install(self)
+
+        if self.spec.cli_name == "paint3d" and not _install_nvdiffrast(
+            self.venv_python, self.project_root, self.logger
+        ):
+            return False
 
         aliases = list(self.spec.extra_aliases) if self.spec.extra_aliases else None
         self.create_cli_wrappers(extra_aliases=aliases)
@@ -103,6 +167,35 @@ class _ToolRustInstaller(RustProjectInstaller):
         self.spec = spec
 
 
+def _install_nvdiffrast(venv_python: Path, project_root: Path, logger: Logger) -> bool:
+    """Instala nvdiffrast com --no-build-isolation (requer PyTorch pré-instalado no venv)."""
+    import subprocess
+
+    logger.step("Instalando nvdiffrast (--no-build-isolation)...")
+    try:
+        subprocess.run(
+            [
+                str(venv_python),
+                "-m",
+                "pip",
+                "install",
+                "git+https://github.com/NVlabs/nvdiffrast.git",
+                "--no-build-isolation",
+            ],
+            check=True,
+            cwd=str(project_root),
+        )
+        logger.success("nvdiffrast instalado")
+        return True
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Falha ao instalar nvdiffrast: {e}")
+        logger.info(
+            "Instala manualmente: .venv/bin/pip install "
+            "git+https://github.com/NVlabs/nvdiffrast.git --no-build-isolation"
+        )
+        return False
+
+
 def install_tool(
     name: str,
     *,
@@ -114,6 +207,8 @@ def install_tool(
     skip_deps: bool = False,
     skip_models: bool = False,
     force: bool = False,
+    skip_env_config: bool = False,
+    text2d_venv_only: bool = False,
 ) -> bool:
     """Instala/desinstala/reinstala uma ferramenta pelo nome.
 
@@ -139,6 +234,8 @@ def install_tool(
             skip_deps=skip_deps,
             skip_models=skip_models,
             force=force,
+            skip_env_config=skip_env_config,
+            text2d_venv_only=text2d_venv_only,
         )
     elif spec.kind == ToolKind.RUST:
         inst = _ToolRustInstaller(
@@ -171,6 +268,8 @@ def install_tool(
             skip_deps=skip_deps,
             skip_models=skip_models,
             force=True,
+            skip_env_config=skip_env_config,
+            text2d_venv_only=text2d_venv_only,
         )
     else:
         Logger().error(f"Acção desconhecida: {action}")
@@ -186,6 +285,8 @@ def install_all(
     skip_deps: bool = False,
     skip_models: bool = False,
     force: bool = False,
+    skip_env_config: bool = False,
+    text2d_venv_only: bool = False,
 ) -> bool:
     """Instala todas as ferramentas disponíveis no monorepo."""
     if monorepo is None:
@@ -211,6 +312,8 @@ def install_all(
             skip_deps=skip_deps,
             skip_models=skip_models,
             force=force,
+            skip_env_config=skip_env_config,
+            text2d_venv_only=text2d_venv_only,
         )
         results[spec.name] = ok
 
@@ -266,6 +369,19 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--skip-deps", action="store_true", help="Não instalar deps de sistema")
     parser.add_argument("--skip-models", action="store_true", help="Não configurar modelos")
+    parser.add_argument(
+        "--skip-env-config",
+        action="store_true",
+        help="Text3D: não escrever ~/.config/text3d/env.sh (ou env.bat)",
+    )
+    parser.add_argument(
+        "--text2d-venv-only",
+        action="store_true",
+        help=(
+            "Só com text3d (ou all): não corre a instalação dedicada do Text2D antes; "
+            "instala o pacote text2d apenas no venv do Text3D (modo editável via requirements)."
+        ),
+    )
     parser.add_argument("--force", action="store_true", help="Forçar reinstalação")
     parser.add_argument(
         "--python",
@@ -295,6 +411,8 @@ def main(argv: list[str] | None = None) -> int:
             skip_deps=args.skip_deps,
             skip_models=args.skip_models,
             force=args.force,
+            skip_env_config=args.skip_env_config,
+            text2d_venv_only=args.text2d_venv_only,
         )
     else:
         ok = install_tool(
@@ -307,6 +425,8 @@ def main(argv: list[str] | None = None) -> int:
             skip_deps=args.skip_deps,
             skip_models=args.skip_models,
             force=args.force,
+            skip_env_config=args.skip_env_config,
+            text2d_venv_only=args.text2d_venv_only,
         )
 
     return 0 if ok else 1
@@ -325,11 +445,14 @@ def _build_epilog(available: list[ToolSpec]) -> str:
             "",
             "Exemplos:",
             "  gamedev-install materialize               # Instalar Materialize (Rust)",
-            "  gamedev-install text2d                    # Com Text2D/.venv, instala no venv do projecto",
+            "  gamedev-install text2d                    # Text2D: venv em Text2D/.venv + wrappers em ~/.local/bin",
+            "  gamedev-install text3d                    # Corre text2d primeiro, depois Text3D (import + venv)",
+            "  gamedev-install text3d --text2d-venv-only # Só text2d editável no venv Text3D (sem passo text2d dedicado)",
             "  gamedev-install gameassets --skip-deps      # Instalar GameAssets (sem deps sistema)",
             "  gamedev-install materialize --action uninstall",
             "  gamedev-install all                        # Instalar tudo",
             "  gamedev-install --list                     # Listar ferramentas",
+            "  gamedev-install part3d                     # Part3D: instala torch-scatter/cluster após PyTorch",
         ]
     )
     return "\n".join(lines)

@@ -25,6 +25,8 @@ class TestToolSpec:
         assert "skymap2d" in TOOLS
         assert "rigging3d" in TOOLS
         assert "animator3d" in TOOLS
+        assert "part3d" in TOOLS
+        assert "paint3d" in TOOLS
         assert "materialize" in TOOLS
 
     def test_text2sound_is_python(self):

@@ -116,7 +116,7 @@ class BaseInstaller:
             self.logger.warn(
                 "Python: python.org ou ``winget install Python.Python.3.12``. "
                 "CUDA: drivers NVIDIA + CUDA Toolkit (nvcc) para compilar extensões. "
-                "Git for Windows para clones sparse (Text3D custom_rasterizer)."
+                "Git for Windows (clones sparse opcionais, ex. Paint3D / rasterizador)."
             )
         else:
             self.logger.warn("SO não reconhecido — instala Python 3.10+, pip e git manualmente.")

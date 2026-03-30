@@ -134,18 +134,17 @@ class PythonProjectInstaller(BaseInstaller):
             cwd=_root,
         )
 
-        if not self.force:
-            try:
-                subprocess.run(
-                    [python, "-c", f"import {self.cli_name}"],
-                    capture_output=True,
-                    check=True,
-                )
-                self.logger.warn(f"{self.project_name} já instalado no venv")
-                self.logger.info("Use --force para reinstalar")
-                return
-            except subprocess.CalledProcessError:
-                pass
+        # Monorepo: o venv deve refletir sempre o checkout actual (incl. novos módulos
+        # em gamedev-shared). Um «já instalado» que saltava pip -r deixava Shared
+        # desactualizado (ex.: ModuleNotFoundError: gamedev_shared.hf).
+        shared_root = (self.project_root.parent / "Shared").resolve()
+        if (shared_root / "pyproject.toml").is_file():
+            self.logger.info(f"Sincronizando gamedev-shared: {shared_root}")
+            subprocess.run(
+                [*pip_cmd, "-e", str(shared_root)],
+                check=True,
+                cwd=_root,
+            )
 
         if not self.skip_pytorch:
             self.install_pytorch(pip_cmd, cwd=self.project_root)

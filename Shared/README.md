@@ -16,6 +16,8 @@ Biblioteca partilhada do monorepo **GameDev** — código comum entre Text2D, Te
 | `gamedev_shared.installer` | Classes base para instaladores (Python e Rust) |
 | `gamedev_shared.installer.registry` | Registry (ToolSpec, TOOLS, `find_monorepo_root`, `try_find_monorepo_root`) |
 | `gamedev_shared.installer.unified` | Instalador unificado — instala qualquer ferramenta (`gamedev-install` CLI) |
+| `gamedev_shared.installer.text3d_extras` | Pós-venv Text3D (nvdiffrast, `~/.config/text3d`, wrappers) |
+| `gamedev_shared.installer.part3d_extras` | Extras PyG (torch-scatter, torch-cluster) e resumo Part3D |
 
 ## Exemplo de uso
 
