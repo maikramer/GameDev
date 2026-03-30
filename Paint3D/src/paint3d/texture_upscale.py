@@ -12,6 +12,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import trimesh
 from PIL import Image
 
 _MODEL_REPO = "ai-forever/Real-ESRGAN"

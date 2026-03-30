@@ -26,7 +26,7 @@ import trimesh
 from tqdm import tqdm
 
 from . import defaults as _d
-from .utils.autotune import autotune_generate, autotune_segment, get_max_parts_for_vram
+from .utils.autotune import autotune_generate, autotune_segment, get_max_parts_for_vram, get_vram_gb
 from .utils.dit_quantization import load_dit_quantized, want_quantized_dit
 from .utils.flash_attn_shim import install_shim as _install_flash_shim
 from .utils.memory import clear_cuda_memory, format_bytes
@@ -369,8 +369,8 @@ class Part3DPipeline:
 
         # ---- FASE A: Encode conditions (Conditioner na GPU, chunked) ----
         try:
-            from spconv.pytorch.conv import ConvAlgo
             import spconv.pytorch as _spconv_pt
+            from spconv.pytorch.conv import ConvAlgo
             _spconv_pt.constants.SPCONV_USE_DIRECT_TABLE = True
             for m in self._conditioner.modules():
                 if hasattr(m, 'algo') and hasattr(ConvAlgo, 'Native'):
@@ -438,7 +438,7 @@ class Part3DPipeline:
         torch.cuda.synchronize()
 
         if self.cpu_offload:
-            self._log(f"  [A] Offloading Conditioner para CPU...")
+            self._log("  [A] Offloading Conditioner para CPU...")
             _offload_to_cpu(self._conditioner)
             # AGRESSIVO: deletar conditioner temporariamente para garantir liberação de memória
             temp_conditioner = self._conditioner
@@ -527,7 +527,7 @@ class Part3DPipeline:
         del latents
 
         if self.cpu_offload and dit_device == "cuda":
-            self._log(f"  [B] Offloading DiT para CPU...")
+            self._log("  [B] Offloading DiT para CPU...")
             _offload_to_cpu(self._model)
             # Restaurar conditioner para próximo batch
             if 'temp_conditioner' in locals() and temp_conditioner is not None:
@@ -573,7 +573,7 @@ class Part3DPipeline:
 
         del latents_cpu
         if self.cpu_offload:
-            self._log(f"  [C] Offloading ShapeVAE para CPU...")
+            self._log("  [C] Offloading ShapeVAE para CPU...")
             _offload_to_cpu(self._vae)
 
         return out
@@ -697,10 +697,8 @@ class Part3DPipeline:
         aabb_t = (aabb_t - torch.from_numpy(center).float()) / scale
 
         # Importar utilidades do XPart
-        from diffusers.utils.torch_utils import randn_tensor
         from partgen.utils.mesh_utils import (
             SampleMesh,
-            fix_mesh,
             load_surface_points,
             sample_bbox_points_from_trimesh,
         )

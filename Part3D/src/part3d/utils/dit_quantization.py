@@ -63,10 +63,9 @@ def load_dit_quantized(model: torch.nn.Module, model_dir: str | Path) -> bool:
     st_path, map_path = dit_quantized_paths(model_dir)
     if not st_path.is_file() or not map_path.is_file():
         return False
-    from safetensors.torch import load_file
-
     # Import directo (evita ``optimum.quanto`` package __init__ → transformers/flash_attn).
     from optimum.quanto.quantize import requantize
+    from safetensors.torch import load_file
 
     with open(map_path, encoding="utf-8") as f:
         qmap: dict[str, Any] = json.load(f)
@@ -118,7 +117,7 @@ def quantize_and_save_dit(
 
     _setup_xpart_imports(model_dir)
 
-    from optimum.quanto.quantize import freeze, quantize, quantization_map
+    from optimum.quanto.quantize import freeze, quantization_map, quantize
     from optimum.quanto.tensor.qtype import qint8
     from partgen.utils.misc import instantiate_from_config
 
