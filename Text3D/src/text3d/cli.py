@@ -518,9 +518,7 @@ def generate(
 
                         def _on_retry_img(attempt, new_seed, quality):
                             issues = ", ".join(quality.get("issues", []))
-                            console.print(
-                                f"[yellow]Tentativa {attempt} falhou: {issues}. Retry...[/yellow]"
-                            )
+                            console.print(f"[yellow]Tentativa {attempt} falhou: {issues}. Retry...[/yellow]")
 
                         result = generator.generate_from_image_with_quality_check(
                             from_image,

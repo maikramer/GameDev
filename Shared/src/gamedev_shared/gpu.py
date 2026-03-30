@@ -17,7 +17,7 @@ import sys
 import time
 import types
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 
 def _torch() -> types.ModuleType:
@@ -25,7 +25,7 @@ def _torch() -> types.ModuleType:
     try:
         import torch
 
-        return torch
+        return cast(types.ModuleType, torch)
     except ImportError:
         raise ImportError("torch não está instalado. Instale com: pip install gamedev-shared[gpu]") from None
 
@@ -309,13 +309,18 @@ def kill_gpu_compute_processes_aggressive(
 
     time.sleep(term_wait_seconds)
 
+    sigkill = getattr(signal, "SIGKILL", None)
+
     for pid, name in targets:
         try:
             os.kill(pid, 0)
         except (ProcessLookupError, OSError):
             continue
+        if sigkill is None:
+            logs.append(f"PID {pid} ({name}): SIGKILL indisponível neste SO; ignorado após SIGTERM")
+            continue
         try:
-            os.kill(pid, signal.SIGKILL)
+            os.kill(pid, sigkill)
             logs.append(f"SIGKILL → PID {pid} ({name})")
         except ProcessLookupError:
             pass

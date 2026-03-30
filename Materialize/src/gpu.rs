@@ -129,11 +129,12 @@ impl GpuContext {
 
     /// Create a GPU buffer initialised with the preset params bytes.
     pub fn create_params_buffer(&self, data: &[u8]) -> wgpu::Buffer {
-        self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("params_buffer"),
-            contents: data,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        })
+        self.device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("params_buffer"),
+                contents: data,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            })
     }
 
     /// Bind group that binds the params buffer to @group(1) @binding(0).
@@ -160,48 +161,53 @@ impl GpuContext {
         output_format: wgpu::TextureFormat,
         params_layout: &wgpu::BindGroupLayout,
     ) -> Result<ComputePipeline> {
-        let shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("compute_shader"),
-            source: wgpu::ShaderSource::Wgsl(shader_code.into()),
-        });
-
-        let filterable = matches!(input_format, wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba8UnormSrgb);
-
-        let bind_group_layout = self
+        let shader = self
             .device
-            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("bind_group_layout"),
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Texture {
-                            multisampled: false,
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            sample_type: wgpu::TextureSampleType::Float { filterable },
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::StorageTexture {
-                            access: wgpu::StorageTextureAccess::WriteOnly,
-                            format: output_format,
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                        },
-                        count: None,
-                    },
-                ],
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("compute_shader"),
+                source: wgpu::ShaderSource::Wgsl(shader_code.into()),
             });
 
-        let pipeline_layout =
+        let filterable = matches!(
+            input_format,
+            wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba8UnormSrgb
+        );
+
+        let bind_group_layout =
             self.device
-                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                    label: Some("pipeline_layout"),
-                    bind_group_layouts: &[&bind_group_layout, params_layout],
-                    push_constant_ranges: &[],
+                .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some("bind_group_layout"),
+                    entries: &[
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 0,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Texture {
+                                multisampled: false,
+                                view_dimension: wgpu::TextureViewDimension::D2,
+                                sample_type: wgpu::TextureSampleType::Float { filterable },
+                            },
+                            count: None,
+                        },
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 1,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::StorageTexture {
+                                access: wgpu::StorageTextureAccess::WriteOnly,
+                                format: output_format,
+                                view_dimension: wgpu::TextureViewDimension::D2,
+                            },
+                            count: None,
+                        },
+                    ],
                 });
+
+        let pipeline_layout = self
+            .device
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("pipeline_layout"),
+                bind_group_layouts: &[&bind_group_layout, params_layout],
+                push_constant_ranges: &[],
+            });
 
         let pipeline = self
             .device
@@ -249,10 +255,12 @@ impl GpuContext {
         output_format: wgpu::TextureFormat,
         params_layout: &wgpu::BindGroupLayout,
     ) -> Result<ComputePipeline> {
-        let shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("compute_shader_2in"),
-            source: wgpu::ShaderSource::Wgsl(shader_code.into()),
-        });
+        let shader = self
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("compute_shader_2in"),
+                source: wgpu::ShaderSource::Wgsl(shader_code.into()),
+            });
 
         let filterable_0 = matches!(
             input_format_0,
@@ -263,55 +271,55 @@ impl GpuContext {
             wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba8UnormSrgb
         );
 
-        let bind_group_layout = self
-            .device
-            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("bind_group_layout_2in"),
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Texture {
-                            multisampled: false,
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            sample_type: wgpu::TextureSampleType::Float {
-                                filterable: filterable_0,
-                            },
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Texture {
-                            multisampled: false,
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            sample_type: wgpu::TextureSampleType::Float {
-                                filterable: filterable_1,
-                            },
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 2,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::StorageTexture {
-                            access: wgpu::StorageTextureAccess::WriteOnly,
-                            format: output_format,
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                        },
-                        count: None,
-                    },
-                ],
-            });
-
-        let pipeline_layout =
+        let bind_group_layout =
             self.device
-                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                    label: Some("pipeline_layout_2in"),
-                    bind_group_layouts: &[&bind_group_layout, params_layout],
-                    push_constant_ranges: &[],
+                .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some("bind_group_layout_2in"),
+                    entries: &[
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 0,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Texture {
+                                multisampled: false,
+                                view_dimension: wgpu::TextureViewDimension::D2,
+                                sample_type: wgpu::TextureSampleType::Float {
+                                    filterable: filterable_0,
+                                },
+                            },
+                            count: None,
+                        },
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 1,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Texture {
+                                multisampled: false,
+                                view_dimension: wgpu::TextureViewDimension::D2,
+                                sample_type: wgpu::TextureSampleType::Float {
+                                    filterable: filterable_1,
+                                },
+                            },
+                            count: None,
+                        },
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 2,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::StorageTexture {
+                                access: wgpu::StorageTextureAccess::WriteOnly,
+                                format: output_format,
+                                view_dimension: wgpu::TextureViewDimension::D2,
+                            },
+                            count: None,
+                        },
+                    ],
                 });
+
+        let pipeline_layout = self
+            .device
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("pipeline_layout_2in"),
+                bind_group_layouts: &[&bind_group_layout, params_layout],
+                push_constant_ranges: &[],
+            });
 
         let pipeline = self
             .device
@@ -445,8 +453,7 @@ impl GpuContext {
 
         let data = buffer_slice.get_mapped_range();
 
-        let mut unpadded_data =
-            Vec::with_capacity((unpadded_bytes_per_row * size.height) as usize);
+        let mut unpadded_data = Vec::with_capacity((unpadded_bytes_per_row * size.height) as usize);
         for row in 0..size.height {
             let start = (row * padded_bytes_per_row) as usize;
             let end = start + unpadded_bytes_per_row as usize;

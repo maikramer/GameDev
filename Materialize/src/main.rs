@@ -63,8 +63,18 @@ async fn run() -> anyhow::Result<()> {
 
     io::save_image(&height_img, &paths.height_path, image_format, args.quality)?;
     io::save_image(&normal_img, &paths.normal_path, image_format, args.quality)?;
-    io::save_image(&metallic_img, &paths.metallic_path, image_format, args.quality)?;
-    io::save_image(&smoothness_img, &paths.smoothness_path, image_format, args.quality)?;
+    io::save_image(
+        &metallic_img,
+        &paths.metallic_path,
+        image_format,
+        args.quality,
+    )?;
+    io::save_image(
+        &smoothness_img,
+        &paths.smoothness_path,
+        image_format,
+        args.quality,
+    )?;
     io::save_image(&edge_img, &paths.edge_path, image_format, args.quality)?;
     io::save_image(&ao_img, &paths.ao_path, image_format, args.quality)?;
 

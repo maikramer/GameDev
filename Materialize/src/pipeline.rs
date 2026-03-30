@@ -101,18 +101,17 @@ impl Pipeline {
         let height = image.height();
 
         let params_buffer = self.gpu.create_params_buffer(bytemuck::bytes_of(params));
-        let params_bind_group = self.gpu.create_params_bind_group(
-            &self.params_bind_group_layout,
-            &params_buffer,
-        );
+        let params_bind_group = self
+            .gpu
+            .create_params_bind_group(&self.params_bind_group_layout, &params_buffer);
 
         let diffuse_texture = self.gpu.create_texture_from_image(image);
         let diffuse_view = diffuse_texture.create_view(&Default::default());
 
         // 1. Height map
-        let height_texture = self
-            .gpu
-            .create_output_texture(width, height, wgpu::TextureFormat::R32Float);
+        let height_texture =
+            self.gpu
+                .create_output_texture(width, height, wgpu::TextureFormat::R32Float);
         let height_view = height_texture.create_view(&Default::default());
 
         let height_bind_group = self.gpu.create_bind_group(
@@ -133,9 +132,9 @@ impl Pipeline {
         );
 
         // 2. Normal map from height
-        let normal_texture = self
-            .gpu
-            .create_output_texture(width, height, wgpu::TextureFormat::Rgba8Unorm);
+        let normal_texture =
+            self.gpu
+                .create_output_texture(width, height, wgpu::TextureFormat::Rgba8Unorm);
         let normal_view = normal_texture.create_view(&Default::default());
 
         let normal_bind_group = self.gpu.create_bind_group(
@@ -153,9 +152,9 @@ impl Pipeline {
         );
 
         // 3. Metallic map from diffuse
-        let metallic_texture = self
-            .gpu
-            .create_output_texture(width, height, wgpu::TextureFormat::Rgba8Unorm);
+        let metallic_texture =
+            self.gpu
+                .create_output_texture(width, height, wgpu::TextureFormat::Rgba8Unorm);
         let metallic_view = metallic_texture.create_view(&Default::default());
 
         let metallic_bind_group = self.gpu.create_bind_group(
@@ -173,9 +172,9 @@ impl Pipeline {
         );
 
         // 4. Smoothness from diffuse + metallic
-        let smoothness_texture = self
-            .gpu
-            .create_output_texture(width, height, wgpu::TextureFormat::Rgba8Unorm);
+        let smoothness_texture =
+            self.gpu
+                .create_output_texture(width, height, wgpu::TextureFormat::Rgba8Unorm);
         let smoothness_view = smoothness_texture.create_view(&Default::default());
 
         let smoothness_bind_group = self.gpu.create_bind_group_2_inputs(
@@ -194,9 +193,9 @@ impl Pipeline {
         );
 
         // 5. Edge from normal
-        let edge_texture = self
-            .gpu
-            .create_output_texture(width, height, wgpu::TextureFormat::Rgba8Unorm);
+        let edge_texture =
+            self.gpu
+                .create_output_texture(width, height, wgpu::TextureFormat::Rgba8Unorm);
         let edge_view = edge_texture.create_view(&Default::default());
 
         let edge_bind_group = self.gpu.create_bind_group(
@@ -214,16 +213,14 @@ impl Pipeline {
         );
 
         // 6. AO from height
-        let ao_texture = self
-            .gpu
-            .create_output_texture(width, height, wgpu::TextureFormat::Rgba8Unorm);
+        let ao_texture =
+            self.gpu
+                .create_output_texture(width, height, wgpu::TextureFormat::Rgba8Unorm);
         let ao_view = ao_texture.create_view(&Default::default());
 
-        let ao_bind_group = self.gpu.create_bind_group(
-            &self.ao_pipeline.bind_group_layout,
-            &height_view,
-            &ao_view,
-        );
+        let ao_bind_group =
+            self.gpu
+                .create_bind_group(&self.ao_pipeline.bind_group_layout, &height_view, &ao_view);
 
         self.gpu.dispatch_compute(
             &self.ao_pipeline.pipeline,

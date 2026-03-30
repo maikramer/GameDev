@@ -451,9 +451,7 @@ def pipeline_cmd(
                 f"merge falhou (código {rc} ou GLB vazio). Confirma bpy/open3d e caminhos acima."
             )
         if rc != 0:
-            console.print(
-                f"[yellow]merge rc={rc}, output={out.stat().st_size}B- prosseguindo.[/yellow]"
-            )
+            console.print(f"[yellow]merge rc={rc}, output={out.stat().st_size}B- prosseguindo.[/yellow]")
     finally:
         if cleanup is not None and not keep_temp:
             shutil.rmtree(cleanup, ignore_errors=True)

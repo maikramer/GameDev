@@ -20,8 +20,8 @@ pub fn load_image(path: &str) -> Result<DynamicImage> {
         anyhow::bail!("Input file '{}' not found", path.display());
     }
 
-    let img = image::open(path)
-        .with_context(|| format!("Failed to load image: {}", path.display()))?;
+    let img =
+        image::open(path).with_context(|| format!("Failed to load image: {}", path.display()))?;
 
     Ok(img)
 }
@@ -62,11 +62,7 @@ pub fn save_image(
     Ok(())
 }
 
-pub fn get_output_paths(
-    input_path: &str,
-    output_dir: &str,
-    format: &str,
-) -> OutputPaths {
+pub fn get_output_paths(input_path: &str, output_dir: &str, format: &str) -> OutputPaths {
     let input_name = Path::new(input_path)
         .file_stem()
         .and_then(|s| s.to_str())
@@ -251,8 +247,8 @@ mod tests {
 
     #[test]
     fn test_output_format_to_image_format_maps() {
-        use image::ImageFormat;
         use crate::cli::OutputFormat;
+        use image::ImageFormat;
         assert_eq!(
             output_format_to_image_format(&OutputFormat::Png),
             ImageFormat::Png
@@ -299,7 +295,13 @@ mod tests {
         let path = dir.path().join("out.png");
         let img = image::RgbImage::from_pixel(2, 2, image::Rgb([1, 2, 3]));
         let dyn_img = image::DynamicImage::ImageRgb8(img);
-        save_image(&dyn_img, path.to_str().unwrap(), image::ImageFormat::Png, 95).expect("save");
+        save_image(
+            &dyn_img,
+            path.to_str().unwrap(),
+            image::ImageFormat::Png,
+            95,
+        )
+        .expect("save");
         assert!(path.exists());
     }
 
@@ -351,7 +353,13 @@ mod tests {
         let path = dir.path().join("q.jpg");
         let img = image::RgbImage::from_pixel(1, 1, image::Rgb([200u8, 100, 50]));
         let dyn_img = image::DynamicImage::ImageRgb8(img);
-        save_image(&dyn_img, path.to_str().unwrap(), image::ImageFormat::Jpeg, 90).expect("jpeg");
+        save_image(
+            &dyn_img,
+            path.to_str().unwrap(),
+            image::ImageFormat::Jpeg,
+            90,
+        )
+        .expect("jpeg");
         assert!(path.exists());
     }
 
