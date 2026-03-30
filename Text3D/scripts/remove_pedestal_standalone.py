@@ -12,6 +12,7 @@ Exemplos:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import sys
 from collections import deque
 from pathlib import Path
@@ -93,7 +94,7 @@ def _remove_connected_ground_plinth(
 
     # Build face adjacency using edges
     face_to_faces = [set() for _ in range(len(mesh.faces))]
-    for edge_idx, face_idx in enumerate(mesh.edges_face):
+    for _edge_idx, _face_idx in enumerate(mesh.edges_face):
         # edges_face gives the face index for each edge
         # We need to find which faces share each edge
         pass  # Will use a different approach below
@@ -116,7 +117,7 @@ def _remove_connected_ground_plinth(
                 edge_to_faces[edge] = []
             edge_to_faces[edge].append(f)
         # Connect faces that share an edge
-        for edge, faces in edge_to_faces.items():
+        for _edge, faces in edge_to_faces.items():
             if len(faces) == 2:
                 f1, f2 = faces
                 face_to_faces[f1].add(f2)
@@ -370,10 +371,8 @@ def remove_ground_shadow_artifacts(
     else:
         m = _peel_bottom_upward_faces(m)
 
-    try:
+    with contextlib.suppress(Exception):
         m.remove_unreferenced_vertices()
-    except Exception:
-        pass
 
     if len(m.faces) == 0:
         return mesh
@@ -421,10 +420,8 @@ def repair_mesh(
             print(f"  Aviso: falha na remoção de sombra: {e}")
 
     if merge_vertices:
-        try:
+        with contextlib.suppress(Exception):
             m.merge_vertices()
-        except Exception:
-            pass
 
     # Fechar buracos pequenos via trimesh
     if fill_small_holes_max_edges > 0:
@@ -438,10 +435,8 @@ def repair_mesh(
     if keep_largest:
         m = keep_largest_component(m)
 
-    try:
+    with contextlib.suppress(Exception):
         m.remove_unreferenced_vertices()
-    except Exception:
-        pass
 
     return m
 

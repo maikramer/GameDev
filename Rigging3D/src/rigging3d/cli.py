@@ -414,7 +414,7 @@ def pipeline_cmd(
         )
         if rc != 0 or not skel.is_file() or skel.stat().st_size == 0:
             raise click.ClickException(
-                "skeleton falhou (código %s ou GLB em falta). Confirma deps inferência, pesos HF e logs acima." % (rc,)
+                f"skeleton falhou (código {rc} ou GLB em falta). Confirma deps inferência, pesos HF e logs acima."
             )
 
         rc = _run_bash(
@@ -425,7 +425,7 @@ def pipeline_cmd(
         )
         if rc != 0 or not skin.is_file() or skin.stat().st_size == 0:
             raise click.ClickException(
-                "skin falhou (código %s ou GLB em falta). Confirma spconv, VRAM e logs acima." % (rc,)
+                f"skin falhou (código {rc} ou GLB em falta). Confirma spconv, VRAM e logs acima."
             )
 
         merge_env = {
@@ -448,11 +448,11 @@ def pipeline_cmd(
         )
         if not out.is_file() or out.stat().st_size == 0:
             raise click.ClickException(
-                "merge falhou (código %s ou GLB vazio). Confirma bpy/open3d e caminhos acima." % (rc,)
+                f"merge falhou (código {rc} ou GLB vazio). Confirma bpy/open3d e caminhos acima."
             )
         if rc != 0:
             console.print(
-                f"[yellow]merge terminou com código {rc} mas o output existe ({out.stat().st_size} bytes) — prosseguindo.[/yellow]"
+                f"[yellow]merge rc={rc}, output={out.stat().st_size}B- prosseguindo.[/yellow]"
             )
     finally:
         if cleanup is not None and not keep_temp:

@@ -523,13 +523,7 @@ def _post_text3d_mesh_extras(
         with_parts,
     )
     rig_mesh_in = mesh_final
-    if (
-        not part3d_fail
-        and with_rig
-        and row.generate_rig
-        and with_parts
-        and row.generate_parts
-    ):
+    if not part3d_fail and with_rig and row.generate_rig and with_parts and row.generate_parts:
         p3 = _part3d_profile_effective(profile)
         out_parts, _out_seg = _part3d_output_paths(mesh_final, p3)
         if not p3.segment_only and out_parts.is_file():
@@ -1175,11 +1169,7 @@ def batch_cmd(
                 rg = profile.rigging3d
                 sfx = rg.output_suffix if rg else "_rigged"
                 rig_in = mesh_path
-                if (
-                    with_parts
-                    and row.generate_parts
-                    and not (_part3d_profile_effective(profile).segment_only)
-                ):
+                if with_parts and row.generate_parts and not (_part3d_profile_effective(profile).segment_only):
                     out_p, _ = _part3d_output_paths(mesh_path, _part3d_profile_effective(profile))
                     rig_in = out_p
                 rig_out = _rigging3d_output_path(rig_in, sfx)
@@ -2126,9 +2116,7 @@ def resume_cmd(
     if (counts[NEED_SHAPE] + counts[NEED_PAINT] + counts[NEED_MATERIALIZE]) > 0 and not text3d_bin:
         raise click.ClickException("text3d não encontrado. Define TEXT3D_BIN ou instala o pacote.")
     if items and (want_texture or want_materialize) and not paint3d_bin:
-        raise click.ClickException(
-            "Perfil com text3d.texture ou materialize requer paint3d no PATH ou PAINT3D_BIN."
-        )
+        raise click.ClickException("Perfil com text3d.texture ou materialize requer paint3d no PATH ou PAINT3D_BIN.")
 
     if dry_run:
         for it in items:

@@ -52,10 +52,7 @@ def main() -> None:
         raw_prompt = test["prompt"]
         seed = test["seed"]
 
-        if args.no_enhance:
-            final_prompt = raw_prompt
-        else:
-            final_prompt = create_optimized_prompt(raw_prompt)
+        final_prompt = raw_prompt if args.no_enhance else create_optimized_prompt(raw_prompt)
 
         print(f"\n--- {label} (seed={seed}) ---")
         print(f"Raw:      {raw_prompt}")

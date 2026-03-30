@@ -355,7 +355,7 @@ def _remove_connected_ground_plinth(
                 if edge not in edge_to_faces:
                     edge_to_faces[edge] = []
                 edge_to_faces[edge].append(f)
-            for edge, faces in edge_to_faces.items():
+            for _edge, faces in edge_to_faces.items():
                 if len(faces) == 2:
                     f1, f2 = faces
                     face_to_faces[f1].add(f2)
@@ -834,7 +834,7 @@ def _component_score(part: trimesh.Trimesh) -> float:
 def keep_largest_component(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
     """Mantém a componente "principal" descartando placas/cascas/ilhas.
 
-    Usa score composto (faces × compacidade × anti-flatness × anti-plate)
+    Usa score composto (faces x compacidade x anti-flatness x anti-plate)
     em vez de apenas volume de bbox, para evitar seleccionar:
     - Cascas ocas que envolvem o modelo (bbox grande, pouca compacidade)
     - Placas separadas (muitas faces mas achatadas)

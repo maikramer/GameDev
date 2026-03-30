@@ -48,9 +48,7 @@ def ensure_part3d_torch_geometric_extras(venv_python: Path, logger: Logger) -> b
             logger.success(f"  {pip_name} — já instalado (import {mod_name} OK).")
             continue
 
-        logger.info(
-            f"  A instalar {pip_name}… (pode compilar vários minutos; não cancele o pip.)"
-        )
+        logger.info(f"  A instalar {pip_name}… (pode compilar vários minutos; não cancele o pip.)")
         try:
             subprocess.run(
                 [python, "-m", "pip", "install", pip_name, "--no-build-isolation"],
@@ -58,15 +56,12 @@ def ensure_part3d_torch_geometric_extras(venv_python: Path, logger: Logger) -> b
             )
         except subprocess.CalledProcessError as e:
             logger.error(f"  pip falhou ao instalar {pip_name}: {e}")
-            logger.info(
-                f"  Tente manualmente: {python} -m pip install {pip_name} --no-build-isolation"
-            )
+            logger.info(f"  Tente manualmente: {python} -m pip install {pip_name} --no-build-isolation")
             return False
 
         if not _import_ok(venv_python, mod_name):
             logger.error(
-                f"  {pip_name} instalou mas import {mod_name} falhou. "
-                "Verifique CUDA Toolkit / versão do PyTorch."
+                f"  {pip_name} instalou mas import {mod_name} falhou. Verifique CUDA Toolkit / versão do PyTorch."
             )
             return False
         logger.success(f"  {pip_name} instalado e importável.")
@@ -126,7 +121,9 @@ def _ensure_part3d_dit_quantized(installer: PythonProjectInstaller) -> None:
             check=False,
         )
     except subprocess.TimeoutExpired:
-        installer.logger.warn("Pré-quantização DiT excedeu o tempo limite. Corre manualmente: python -m part3d.quantize_dit")
+        installer.logger.warn(
+            "Pré-quantização DiT excedeu o tempo limite. Corre manualmente: python -m part3d.quantize_dit"
+        )
         return
     except OSError as e:
         installer.logger.warn(f"Não foi possível executar pré-quantização DiT: {e}")

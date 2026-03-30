@@ -63,10 +63,7 @@ def save_mesh(
 
     if isinstance(mesh_input, trimesh.Trimesh):
         mesh = mesh_input
-        if rotate:
-            mesh = _apply_rotation_trimesh(mesh.copy())
-        else:
-            mesh = mesh.copy()
+        mesh = _apply_rotation_trimesh(mesh.copy()) if rotate else mesh.copy()
         _apply_origin_trimesh(mesh, origin_mode)
         if format == "glb":
             _export_glb_with_normals(mesh, output_path)

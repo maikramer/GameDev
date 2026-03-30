@@ -10,6 +10,7 @@ Para quando encontra camada com menos horizontais (anatomia).
 from __future__ import annotations
 
 import argparse
+import contextlib
 import sys
 from collections import deque
 from pathlib import Path
@@ -162,10 +163,8 @@ def _pymeshlab_topology_and_optional_close(
             except Exception:
                 pass
 
-            try:
+            with contextlib.suppress(Exception):
                 ms.meshing_remove_null_faces()
-            except Exception:
-                pass
 
             ms.meshing_repair_non_manifold_edges()
             ms.meshing_repair_non_manifold_vertices()
@@ -445,10 +444,8 @@ def repair_mesh_complete(
     except Exception as e:
         print(f"    [Pré] componentes: {e}")
 
-    try:
+    with contextlib.suppress(Exception):
         m.merge_vertices()
-    except Exception:
-        pass
 
     boundary = _boundary_edge_count(m)
     boundary_before_cascade = boundary
@@ -517,10 +514,8 @@ def repair_mesh_complete(
         print(f"    [Clean] falhou: {e}")
 
     # Limpeza final
-    try:
+    with contextlib.suppress(Exception):
         trimesh_repair.fix_normals(m, multibody=True)
-    except Exception:
-        pass
 
     # Remove componentes pequenas (artefatos)
     try:
@@ -542,10 +537,8 @@ def repair_mesh_complete(
     except Exception:
         pass
 
-    try:
+    with contextlib.suppress(Exception):
         m.remove_unreferenced_vertices()
-    except Exception:
-        pass
 
     b_pre = _boundary_edge_count(m)
     if b_pre > 0:
@@ -582,10 +575,8 @@ def repair_mesh_complete(
 
                 diag = ms.current_mesh().bounding_box().diagonal()
 
-                try:
+                with contextlib.suppress(Exception):
                     ms.meshing_close_holes(maxholesize=500)
-                except Exception:
-                    pass
 
                 # Isotropic remesh leve (só para suavizar patches reparados)
                 target_edge = diag / 150

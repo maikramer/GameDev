@@ -197,9 +197,7 @@ class Part3DPipeline:
             try:
                 if load_dit_quantized(self._model, model_dir):
                     self._dit_quantized = True
-                    self._log(
-                        "A carregar DiT quantizado (qint8 weight-only, artefactos model-dit-qint8.*)..."
-                    )
+                    self._log("A carregar DiT quantizado (qint8 weight-only, artefactos model-dit-qint8.*)...")
                     self._log(f"  DiT: {_count_params(self._model):.0f}M params [quantizado]")
                 else:
                     self._log("  DiT quantizado em falta; a carregar FP16.")
@@ -319,6 +317,7 @@ class Part3DPipeline:
                 _offload_to_cpu(self._bbox_predictor)
             # Limpar memória após P3-SAM
             import gc
+
             gc.collect()
             torch.cuda.empty_cache()
             torch.cuda.synchronize()
@@ -371,16 +370,17 @@ class Part3DPipeline:
         try:
             import spconv.pytorch as _spconv_pt
             from spconv.pytorch.conv import ConvAlgo
+
             _spconv_pt.constants.SPCONV_USE_DIRECT_TABLE = True
             for m in self._conditioner.modules():
-                if hasattr(m, 'algo') and hasattr(ConvAlgo, 'Native'):
+                if hasattr(m, "algo") and hasattr(ConvAlgo, "Native"):
                     m.algo = ConvAlgo.Native
         except Exception:
             pass
 
         effective_cond_bs = min(cond_bs, total_parts)
         self._log(
-            f"  [A] Conditioner → GPU (batch {batch_offset}-{batch_offset+num_parts}, "
+            f"  [A] Conditioner → GPU (batch {batch_offset}-{batch_offset + num_parts}, "
             f"{num_parts} partes em lotes de {effective_cond_bs})..."
         )
         _to_device(self._conditioner, device)
@@ -400,7 +400,7 @@ class Part3DPipeline:
                 with torch.autocast("cuda", dtype=torch.bfloat16):
                     c = self._conditioner(ps, os_)
                 if isinstance(c, dict):
-                    cond_chunks.append({k: v.cpu() if hasattr(v, 'cpu') else v for k, v in c.items()})
+                    cond_chunks.append({k: v.cpu() if hasattr(v, "cpu") else v for k, v in c.items()})
                 else:
                     cond_chunks.append(c.cpu())
             except RuntimeError as e:
@@ -417,7 +417,7 @@ class Part3DPipeline:
         del part_surf_flat, obj_surf_flat
 
         if not cond_chunks:
-            self._log(f"  [A] Batch {batch_offset}-{batch_offset+num_parts}: todas as partes falharam no encode")
+            self._log(f"  [A] Batch {batch_offset}-{batch_offset + num_parts}: todas as partes falharam no encode")
             return out
 
         # Concatenar condições na CPU
@@ -433,6 +433,7 @@ class Part3DPipeline:
 
         # Limpar todos os tensores temporários da GPU antes de carregar DiT
         import gc
+
         gc.collect()
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
@@ -447,7 +448,7 @@ class Part3DPipeline:
             torch.cuda.empty_cache()
             torch.cuda.synchronize()
             # Forçar liberação de memória reservada do CUDA
-            if hasattr(torch.cuda, 'memory_stats'):
+            if hasattr(torch.cuda, "memory_stats"):
                 torch.cuda.reset_peak_memory_stats()
             if self.verbose:
                 _log_vram("Após remover Conditioner: ")
@@ -466,10 +467,7 @@ class Part3DPipeline:
                 gc.collect()
                 dit_device = "cpu"
                 # Mover condições para CPU também
-                if isinstance(cond_cpu, dict):
-                    cond_cpu = {k: v.cpu() for k, v in cond_cpu.items()}
-                else:
-                    cond_cpu = cond_cpu.cpu()
+                cond_cpu = {k: v.cpu() for k, v in cond_cpu.items()} if isinstance(cond_cpu, dict) else cond_cpu.cpu()
                 _to_device(self._model, "cpu")
                 self._log("  [B] DiT carregado na CPU. Denoising será ~10x mais lento.")
             else:
@@ -505,7 +503,7 @@ class Part3DPipeline:
         # Usar autocast apenas se estiver na GPU
         autocast_ctx = torch.autocast("cuda", dtype=torch.bfloat16) if dit_device == "cuda" else torch.no_grad()
         with autocast_ctx:
-            for i, t in enumerate(tqdm(timesteps, desc="Denoising", mininterval=0.5)):
+            for _i, t in enumerate(tqdm(timesteps, desc="Denoising", mininterval=0.5)):
                 latent_model_input = latents
                 timestep = t.expand(latent_model_input.shape[0]).to(latents.dtype)
                 timestep = timestep / self._scheduler.config.num_train_timesteps
@@ -530,7 +528,7 @@ class Part3DPipeline:
             self._log("  [B] Offloading DiT para CPU...")
             _offload_to_cpu(self._model)
             # Restaurar conditioner para próximo batch
-            if 'temp_conditioner' in locals() and temp_conditioner is not None:
+            if "temp_conditioner" in locals() and temp_conditioner is not None:
                 self._conditioner = temp_conditioner
                 del temp_conditioner
                 gc.collect()
@@ -627,9 +625,7 @@ class Part3DPipeline:
             except Exception:
                 vram_gb = None
         if self.autotune:
-            gt = autotune_generate(
-                mesh, num_parts_aabb, vram_gb=vram_gb, dit_quantized=self._dit_quantized
-            )
+            gt = autotune_generate(mesh, num_parts_aabb, vram_gb=vram_gb, dit_quantized=self._dit_quantized)
             octree_res = gt.octree_resolution if octree_resolution is None else octree_resolution
             n_steps = gt.num_inference_steps if num_inference_steps is None else num_inference_steps
             n_chunks = gt.num_chunks if num_chunks is None else num_chunks
@@ -638,18 +634,12 @@ class Part3DPipeline:
             cond_bs = gt.cond_batch_size if cond_batch_size is None else cond_batch_size
 
             # Se VRAM muito limitada, reduzir steps para acelerar (DiT vai para CPU)
-            if (
-                vram_gb is not None
-                and vram_gb < 8.0
-                and num_inference_steps is None
-                and not self._dit_quantized
-            ):
+            if vram_gb is not None and vram_gb < 8.0 and num_inference_steps is None and not self._dit_quantized:
                 original_steps = n_steps
                 n_steps = min(n_steps, 20)  # Máximo 20 steps se DiT puder ir a CPU
                 if n_steps != original_steps:
                     self._log(
-                        f"  [AUTOTUNE] VRAM limitada ({vram_gb:.1f} GB). "
-                        f"Reduzindo steps: {original_steps} → {n_steps}"
+                        f"  [AUTOTUNE] VRAM limitada ({vram_gb:.1f} GB). Reduzindo steps: {original_steps} → {n_steps}"
                     )
 
             self._log(
@@ -670,15 +660,14 @@ class Part3DPipeline:
             # Calcular max_parts baseado na VRAM disponível
             vram_gb_calc = vram_gb if vram_gb else (get_vram_gb() if torch.cuda.is_available() else None)
             max_parts_calc = (
-                get_max_parts_for_vram(vram_gb_calc, dit_quantized=self._dit_quantized)
-                if vram_gb_calc
-                else None
+                get_max_parts_for_vram(vram_gb_calc, dit_quantized=self._dit_quantized) if vram_gb_calc else None
             )
             max_parts_per_batch = max_parts_calc if max_parts_calc else num_parts_aabb
 
         # Limpar memória antes de começar o processamento X-Part
         if self.device == "cuda":
             import gc
+
             gc.collect()
             torch.cuda.empty_cache()
             torch.cuda.synchronize()
@@ -724,13 +713,10 @@ class Part3DPipeline:
         aabb_t = aabb_t[valid_parts_mask].unsqueeze(0)
         part_surface_inbbox = part_surface_inbbox.unsqueeze(0)
 
-        device = self.device
-        dtype = self.dtype
-
-        batch_size, num_parts, N, dim = part_surface_inbbox.shape
+        _, num_parts, N, _ = part_surface_inbbox.shape
         self._log(f"  Partes válidas: {num_parts}, pontos/parte: {N}")
 
-        batch_size, num_parts, N, dim = part_surface_inbbox.shape
+        _batch_size, num_parts, N, _dim = part_surface_inbbox.shape
         self._log(f"  Partes válidas: {num_parts}, pontos/parte: {N}")
 
         # Decidir se precisamos dividir em múltiplos batches
@@ -749,10 +735,10 @@ class Part3DPipeline:
         for batch_idx in range(num_batches):
             start_idx = batch_idx * max_parts_per_batch
             end_idx = min(start_idx + max_parts_per_batch, num_parts)
-            num_in_batch = end_idx - start_idx
+            end_idx - start_idx
 
             if num_batches > 1:
-                self._log(f"  === Batch {batch_idx + 1}/{num_batches} (partes {start_idx}-{end_idx-1}) ===")
+                self._log(f"  === Batch {batch_idx + 1}/{num_batches} (partes {start_idx}-{end_idx - 1}) ===")
 
             # Extrair dados deste batch
             aabb_batch = aabb_t[0, start_idx:end_idx].unsqueeze(0)  # (1, num_in_batch, 2, 3)
@@ -775,8 +761,8 @@ class Part3DPipeline:
             )
 
             # Adicionar geometrias do batch à cena final
-            for name, geom in batch_scene.geometry.items():
-                final_scene.add_geometry(geom, node_name=name)
+            for geom_name, geom in batch_scene.geometry.items():
+                final_scene.add_geometry(geom, node_name=geom_name)
             total_generated += len(batch_scene.geometry)
 
             if num_batches > 1 and batch_idx < num_batches - 1:
@@ -787,14 +773,12 @@ class Part3DPipeline:
         # Desnormalizar as meshes finais
         if total_generated > 0:
             self._log(f"  Desnormalizando {total_generated} partes...")
-            for name, geom in list(final_scene.geometry.items()):
+            for _name, geom in list(final_scene.geometry.items()):
                 if isinstance(geom, trimesh.Trimesh):
                     geom.vertices = geom.vertices * scale + center
 
         self._log(f"  Total: {total_generated} partes geradas com sucesso")
         return final_scene
-
-
 
     # ------------------------------------------------------------------
     # Pipeline completo: segment + generate
@@ -922,18 +906,21 @@ def _patch_space_hardcodes() -> None:
     # --- 1. Corrigir sonata download root ---
     p3sam_model = os.path.join(space_dir, "P3-SAM", "model.py")
     if os.path.isfile(p3sam_model):
-        content = open(p3sam_model).read()
+        with open(p3sam_model) as f:
+            content = f.read()
         if "download_root='/root/sonata'" in content:
             content = content.replace(
                 "download_root='/root/sonata'",
                 f"download_root='{safe_root}'",
             )
-            open(p3sam_model, "w").write(content)
+            with open(p3sam_model, "w") as f:
+                f.write(content)
 
     # --- 2. Corrigir hardcodes de memória em auto_mask_api.py ---
     api_file = os.path.join(space_dir, "XPart", "partgen", "bbox_estimator", "auto_mask_api.py")
     if os.path.isfile(api_file):
-        content = open(api_file).read()
+        with open(api_file) as f:
+            content = f.read()
         changed = False
 
         # mesh_sam() ignora os argumentos e hardcoda:
@@ -955,7 +942,8 @@ def _patch_space_hardcodes() -> None:
                 changed = True
 
         if changed:
-            open(api_file, "w").write(content)
+            with open(api_file, "w") as f:
+                f.write(content)
 
     # Invalidar módulos já importados
     import sys

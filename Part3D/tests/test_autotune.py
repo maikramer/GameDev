@@ -52,23 +52,28 @@ def test_numpy_types_for_part_count() -> None:
 
 # ---- cond_batch_size (chunked conditioner) ----
 
+
 def test_cond_batch_size_low_vram_is_small() -> None:
     """GPU com 5.6 GB não cabe 7 partes de uma vez."""
     bs = _compute_cond_batch_size(7, vram_gb=5.6)
     assert 1 <= bs < 7
+
 
 def test_cond_batch_size_high_vram_fits_all() -> None:
     """GPU com 24 GB cabe tudo de uma vez."""
     bs = _compute_cond_batch_size(7, vram_gb=24.0)
     assert bs == 7
 
+
 def test_cond_batch_size_never_exceeds_num_parts() -> None:
     bs = _compute_cond_batch_size(3, vram_gb=48.0)
     assert bs == 3
 
+
 def test_cond_batch_size_at_least_1() -> None:
     bs = _compute_cond_batch_size(10, vram_gb=1.0)
     assert bs >= 1
+
 
 def test_autotune_generate_includes_cond_batch() -> None:
     mesh = _box_mesh()

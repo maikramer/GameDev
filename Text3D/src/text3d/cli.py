@@ -261,7 +261,7 @@ def skill_install_cmd(target: Path, force: bool) -> None:
     "ground_shadow_very_aggressive",
     is_flag=True,
     default=False,
-    help="Anti-sombra EXTREMO — para pedestais grudados ao modelo. Usa flood-fill + análise de silhueta. Pode remover mais geometria.",
+    help="Anti-sombra EXTREMO para pedestais. Flood-fill + silhueta.",
 )
 @click.option(
     "--mesh-smooth",
@@ -274,7 +274,7 @@ def skill_install_cmd(target: Path, force: bool) -> None:
     "--remesh/--no-remesh",
     default=_defaults.DEFAULT_REMESH,
     show_default=True,
-    help="Isotropic remeshing: reconstrói topologia com triângulos uniformes, fecha buracos e elimina spikes. Requer pymeshlab.",
+    help="Isotropic remeshing: reconstrói topologia, fecha buracos, elimina spikes. Requer pymeshlab.",
 )
 @click.option(
     "--remesh-resolution",
@@ -519,7 +519,7 @@ def generate(
                         def _on_retry_img(attempt, new_seed, quality):
                             issues = ", ".join(quality.get("issues", []))
                             console.print(
-                                f"[yellow]  Tentativa {attempt} falhou: {issues}. Retry com hy_seed {new_seed}...[/yellow]"
+                                f"[yellow]Tentativa {attempt} falhou: {issues}. Retry...[/yellow]"
                             )
 
                         result = generator.generate_from_image_with_quality_check(
@@ -806,7 +806,7 @@ def info():
     "--remesh/--no-remesh",
     default=_defaults.DEFAULT_REMESH,
     show_default=True,
-    help="Isotropic remeshing: reconstrói topologia com triângulos uniformes, fecha buracos e elimina spikes. Requer pymeshlab.",
+    help="Isotropic remeshing: reconstrói topologia, fecha buracos, elimina spikes. Requer pymeshlab.",
 )
 @click.option(
     "--remesh-resolution",

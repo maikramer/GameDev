@@ -61,10 +61,11 @@ text2d:
 #   cfg_scale: 4.5
 #   audio_format: wav
 
-# Text3D com --with-3d: preset fast equilibra tempo/VRAM; texture=true => paint3d texture após o shape.
-# low_vram=true no text3d => Hunyuan *shape* em CPU (forma muito pior — evita salvo último recurso).
-# phased_batch: true (com texture) => batch em 3 passos: shape (todos) → paint3d texture (todos) → materialize-pbr (todos).
-# Requer PAINT3D_BIN ou paint3d no PATH quando texture ou materialize estão activos.
+# Text3D with --with-3d: preset fast balances time/VRAM.
+# texture=true => paint3d texture after shape.
+# low_vram=true => Hunyuan shape on CPU (much worse quality).
+# phased_batch: true (with texture) => batch in 3 steps.
+# Requires PAINT3D_BIN or paint3d in PATH when active.
 text3d:
   preset: fast
   low_vram: false

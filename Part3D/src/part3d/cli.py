@@ -126,7 +126,9 @@ def decompose(
     def _gen_kwargs() -> dict:
         if no_auto_tune:
             return {
-                "octree_resolution": octree_resolution if octree_resolution is not None else _d.DEFAULT_OCTREE_RESOLUTION,
+                "octree_resolution": octree_resolution
+                if octree_resolution is not None
+                else _d.DEFAULT_OCTREE_RESOLUTION,
                 "num_inference_steps": steps if steps is not None else _d.DEFAULT_NUM_INFERENCE_STEPS,
                 "num_chunks": num_chunks if num_chunks is not None else _d.DEFAULT_NUM_CHUNKS,
             }
@@ -147,7 +149,7 @@ def decompose(
     ) as pipe:
         if segment_only:
             mesh = trimesh.load(mesh_path, force="mesh", process=False)
-            aabb, face_ids, clean_mesh = pipe.segment(mesh, seed=seed)
+            _aabb, face_ids, clean_mesh = pipe.segment(mesh, seed=seed)
 
             color_map = {}
             for uid in np.unique(face_ids):

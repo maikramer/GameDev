@@ -30,7 +30,7 @@ def _ensure_custom_rasterizer_shim() -> None:
     if "custom_rasterizer" in sys.modules:
         return
     try:
-        import custom_rasterizer  # noqa: F401 – extensão nativa já instalada
+        import custom_rasterizer  # noqa: F401 - extensão nativa já instalada
 
         return
     except (ImportError, ModuleNotFoundError, OSError):

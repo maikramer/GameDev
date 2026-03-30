@@ -437,9 +437,7 @@ class GameProfile:
                 st_i = int(st) if st is not None else None
                 nc_i = int(nc) if nc is not None else None
             except (TypeError, ValueError) as e:
-                raise ValueError(
-                    "part3d.octree_resolution, steps e num_chunks devem ser inteiros válidos"
-                ) from e
+                raise ValueError("part3d.octree_resolution, steps e num_chunks devem ser inteiros válidos") from e
             ps = raw_p3.get("parts_suffix")
             ss = raw_p3.get("segmented_suffix")
             ps_s = str(ps).strip() if ps not in (None, "") else "_parts"

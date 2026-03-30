@@ -1,12 +1,12 @@
 """
 Ajuste automático de parâmetros Part3D com base na geometria e VRAM.
 
-Objectivo: reduzir pico de VRAM (Conditioner com muitas partes × pontos, VAE decode)
+Objectivo: reduzir pico de VRAM (Conditioner com muitas partes x pontos, VAE decode)
 sem exigir que o utilizador conheça octree, chunks ou tamanhos de nuvem de pontos.
 
 Estratégia para GPUs com pouca VRAM (≤8 GB):
   O Conditioner codifica ``(num_parts, 81920, dim)`` de uma vez.  Com muitas partes
-  isto excede a VRAM facilmente (cada parte ≈ 81920 × 6 × 2B ≈ 1 MB de input, mas
+  isto excede a VRAM facilmente (cada parte ≈ 81920 x 6 x 2B ≈ 1 MB de input, mas
   as activações intermédias no cross-attention explodem).
   → O autotune calcula ``cond_batch_size``: quantas partes processar de cada vez.
     O pipeline faz um loop, acumula resultados na CPU e concatena no fim.
@@ -36,7 +36,7 @@ _STEPS_LEVELS = (50, 45, 40, 35, 28)
 #
 # Com batch=3 partes: PyTorch alocou 5.29 GB, depois pediu +960 MB → OOM.
 # Pico real por parte ≈ (5290 - 1900) / 3 ≈ 1130 MB de activações persistentes
-# + buffers temporários do cross-attention que puxam mais ~800–960 MB no pico.
+# + buffers temporários do cross-attention que puxam mais ~800-960 MB no pico.
 # Com batch=1 o pico é ≈ 1900 + 1130 + 960 ≈ 3990 MB → cabe em 5.6 GB.
 #
 # Para garantir que o cálculo de batch=1 funciona em ≤6 GB:
@@ -79,7 +79,7 @@ class GenerateAutotune:
 
 
 def mesh_geometry_score(mesh: trimesh.Trimesh) -> float:
-    """Escalar ~0–4+ conforme complexidade (faces, vértices, extensão espacial)."""
+    """Escalar ~0-4+ conforme complexidade (faces, vértices, extensão espacial)."""
     n_f = max(0, len(mesh.faces))
     n_v = max(0, len(mesh.vertices))
     verts = mesh.vertices.astype(np.float64)
