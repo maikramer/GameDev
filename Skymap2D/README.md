@@ -38,37 +38,35 @@ skymap2d generate "clear blue sky" --format exr -o sky_clear.exr
 
 ## Instalação
 
-### Desenvolvimento local
+### Oficial (monorepo)
+
+Na **raiz** do repositório GameDev:
+
+```bash
+cd /caminho/para/GameDev
+./install.sh skymap2d
+# Windows: .\install.ps1 skymap2d
+```
+
+Cria `Skymap2D/.venv` se necessário, instala em modo editável e gera wrappers. `./install.sh --list`. Guia: [docs/INSTALLING.md](../docs/INSTALLING.md).
+
+### Manual / desenvolvimento
 
 ```bash
 ./scripts/setup.sh
 source .venv/bin/activate
 ```
 
-O `setup.sh` instala `gamedev-shared` a partir de `../Shared` (caminho do monorepo) e o pacote `skymap2d` em modo editável.
+O `setup.sh` instala `gamedev-shared` a partir de `../Shared` e o pacote `skymap2d` em modo editável.
 
-### Instalador unificado (raiz do monorepo GameDev)
-
-A partir da raiz do repositório:
-
-```bash
-./install.sh skymap2d
-# Windows: .\install.ps1 skymap2d
-```
-
-(O instalador unificado **cria** `Skymap2D/.venv` se não existir, instala lá em modo editável e os wrappers em `~/.local/bin` apontam para esse Python. `scripts/setup.sh` continua opcional.)
-
-Lista ferramentas: `./install.sh --list`.
-
-### System-wide (script do projeto)
+### Atalho local
 
 ```bash
 python3 scripts/installer.py --prefix ~/.local
-# ou com venv:
 python3 scripts/installer.py --use-venv
 ```
 
-O instalador não usa PyTorch local — apenas dependências em `config/requirements.txt` e `gamedev-shared`.
+Sem PyTorch local — apenas `config/requirements.txt` e `gamedev-shared`.
 
 ## Comandos
 

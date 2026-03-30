@@ -23,7 +23,7 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-echo -e "${CYAN}🚀 Materialize CLI Installer${NC}"
+echo -e "${CYAN}Materialize CLI Installer${NC}"
 echo "================================"
 
 if ! command -v python3 &> /dev/null; then

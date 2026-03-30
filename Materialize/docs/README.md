@@ -13,7 +13,18 @@ Materialize CLI is a command-line tool that converts a diffuse/albedo image into
 
 ## Installation
 
-### Using the installer (recommended)
+### GameDev monorepo
+
+From the **GameDev** repository root (parent of this `Materialize/` folder):
+
+```bash
+cd /path/to/GameDev
+./install.sh materialize
+```
+
+See [docs/INSTALLING.md](../../docs/INSTALLING.md).
+
+### Standalone clone (recommended for upstream-only checkouts)
 
 Requirements: Python 3 (for the installer), Rust/cargo (to build).
 

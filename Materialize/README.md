@@ -36,7 +36,18 @@ From a single diffuse/albedo image, the tool outputs six maps:
 
 ## Quick start
 
-### Install (recommended)
+### Install (GameDev monorepo)
+
+If you have the **GameDev** monorepo (this folder lives under `GameDev/Materialize`), use the unified installer from the **repository root**:
+
+```bash
+cd /path/to/GameDev
+./install.sh materialize
+```
+
+See [docs/INSTALLING.md](../docs/INSTALLING.md). Requires **Rust** (`cargo`) and Python 3 for the installer wrapper.
+
+### Install (standalone clone)
 
 Requires **Python 3** (installer) and **Rust** (cargo) to build. The installer compiles and places the binary in `~/.local/bin/materialize` (ensure it’s on your `PATH`).
 
