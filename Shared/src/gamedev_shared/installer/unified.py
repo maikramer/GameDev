@@ -5,7 +5,6 @@ instalar qualquer ferramenta (Python ou Rust) registada no registry.
 """
 
 from __future__ import annotations
-from typing import Union
 
 import argparse
 import platform
@@ -226,7 +225,7 @@ def install_tool(
         return False
 
     if spec.kind == ToolKind.PYTHON:
-        inst: Union[PythonProjectInstaller, RustProjectInstaller] = _ToolPythonInstaller(
+        inst: PythonProjectInstaller | RustProjectInstaller = _ToolPythonInstaller(
             spec,
             monorepo,
             install_prefix=install_prefix,

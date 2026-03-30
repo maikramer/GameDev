@@ -15,11 +15,9 @@ import signal
 import subprocess
 import sys
 import time
+import types
 from pathlib import Path
 from typing import Any
-
-
-import types
 
 
 def _torch() -> types.ModuleType:
