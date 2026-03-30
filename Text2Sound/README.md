@@ -1,47 +1,49 @@
 # Text2Sound
 
-CLI para geração de áudio estéreo a 44.1 kHz a partir de prompts de texto, com dois checkpoints Hugging Face (mesma biblioteca `stable-audio-tools`):
+**Language:** English · [Português (`README_PT.md`)](README_PT.md)
 
-| Uso | Modelo | Duração máx. | Comando |
-|-----|--------|----------------|---------|
-| Música / ambientes longos | [Stable Audio Open 1.0](https://huggingface.co/stabilityai/stable-audio-open-1.0) | ~47 s | `--profile music` (padrão) |
-| Efeitos / SFX curtos | [Stable Audio Open Small](https://huggingface.co/stabilityai/stable-audio-open-small) | ~11 s | `--profile effects` |
+CLI for stereo **44.1 kHz** audio from text prompts, with two Hugging Face checkpoints (same `stable-audio-tools` library):
 
-Ambos os repositórios podem ser **gated**: aceita os termos no Hub e define `HF_TOKEN`. **Stability AI Community License** (`LICENSE.md` em cada repo): pesquisa e uso não comercial; uso comercial com **teto de receita** (ver texto atual no repositório e [stability.ai/license](https://stability.ai/license)). Resumo: [GameDev/README.md — Licenças](../README.md).
+| Use | Model | Max duration | Command |
+|-----|-------|--------------|---------|
+| Music / long ambience | [Stable Audio Open 1.0](https://huggingface.co/stabilityai/stable-audio-open-1.0) | ~47 s | `--profile music` (default) |
+| Short effects / SFX | [Stable Audio Open Small](https://huggingface.co/stabilityai/stable-audio-open-small) | ~11 s | `--profile effects` |
 
-## Funcionalidades
+Both repos can be **gated**: accept terms on the Hub and set `HF_TOKEN`. **Stability AI Community License** (`LICENSE.md` in each repo): research and non-commercial use; commercial use with **revenue cap** (see current text in the repo and [stability.ai/license](https://stability.ai/license)). Summary: [GameDev/README.md — Licenses](../README.md).
 
-- **Dois perfis** — `music` (Open 1.0, até ~47 s) e `effects` (Open Small, até ~11 s; defaults ~8 steps, CFG 1.0, sampler `pingpong`)
-- **Geração text-to-audio** — áudio estéreo conforme o modelo escolhido
-- **Presets para game dev** — ambient, battle, menu, footsteps, weather, UI, nature, dungeon, tavern, etc.
-- **Múltiplos formatos** — WAV, FLAC, OGG
-- **Batch processing** — gerar vários áudios a partir de ficheiro de prompts
-- **Seed** — reprodutibilidade total
-- **Trim automático** — remoção de silêncio trailing
-- **Metadados JSON** — parâmetros de geração gravados ao lado do áudio (inclui `seed_effective`, sigmas, trim, versão da CLI)
-- **Gestão de VRAM** — limpeza automática após cada geração
+## Features
 
-## Requisitos
+- **Two profiles** — `music` (Open 1.0, up to ~47 s) and `effects` (Open Small, up to ~11 s; defaults ~8 steps, CFG 1.0, `pingpong` sampler)
+- **Text-to-audio** — stereo audio per chosen model
+- **Game-dev presets** — ambient, battle, menu, footsteps, weather, UI, nature, dungeon, tavern, etc.
+- **Multiple formats** — WAV, FLAC, OGG
+- **Batch** — many audios from a prompt file
+- **Seed** — full reproducibility
+- **Auto trim** — trailing silence removal
+- **JSON metadata** — generation params saved next to audio (includes `seed_effective`, sigmas, trim, CLI version)
+- **VRAM management** — automatic cleanup after each generation
+
+## Requirements
 
 - Python 3.10+
-- PyTorch 2.1+ (CUDA recomendado)
-- ~4 GB de VRAM (geração em GPU)
-- Token HF (se o modelo exigir autenticação): `HF_TOKEN`
+- PyTorch 2.1+ (CUDA recommended)
+- ~4 GB VRAM (GPU generation)
+- HF token (if the model requires auth): `HF_TOKEN`
 
-## Instalação
+## Installation
 
-### Oficial (monorepo)
+### Official (monorepo)
 
-Na **raiz** do repositório GameDev:
+At the **GameDev** repo root:
 
 ```bash
-cd /caminho/para/GameDev
+cd /path/to/GameDev
 ./install.sh text2sound
 ```
 
-Guia geral: [docs/INSTALLING.md](../docs/INSTALLING.md).
+General guide: [docs/INSTALLING.md](../docs/INSTALLING.md).
 
-### Manual / desenvolvimento
+### Manual / development
 
 ```bash
 cd Text2Sound
@@ -49,15 +51,15 @@ bash scripts/setup.sh
 source .venv/bin/activate
 ```
 
-### Atalho local
+### Local shortcut
 
 ```bash
 python3 scripts/installer.py --use-venv
 ```
 
-## Uso
+## Usage
 
-### Gerar áudio
+### Generate audio
 
 ```bash
 text2sound generate "ocean waves crashing on a sandy beach at sunset"
@@ -67,130 +69,129 @@ text2sound generate "footsteps on gravel" -d 5 -s 80 --format flac
 text2sound generate "rain and thunder" --seed 42 --cfg-scale 8
 ```
 
-### Modelo e aliases
+### Model and aliases
 
-- **`--profile music`** (padrão): `stabilityai/stable-audio-open-1.0`
+- **`--profile music`** (default): `stabilityai/stable-audio-open-1.0`
 - **`--profile effects`**: `stabilityai/stable-audio-open-small`
-- **`--model`** tem prioridade sobre o perfil: aceita o ID HF completo ou aliases `music`, `full`, `effects`, `small`, `sfx`
+- **`--model`** overrides profile: full HF ID or aliases `music`, `full`, `effects`, `small`, `sfx`
 
 ```bash
 text2sound generate "loop" --model small -d 8
 text2sound generate "score" --model music -d 30
 ```
 
-### Usar presets
+### Presets
 
 ```bash
-text2sound presets                          # listar presets disponíveis
-text2sound generate --preset battle ""      # usar preset diretamente
+text2sound presets                          # list presets
+text2sound generate --preset battle ""      # preset only
 text2sound generate --preset ambient "with gentle river flowing"  # preset + custom
 ```
 
 ### Batch
 
-O diretório de saída usa **`-O` / `--output-dir`** (em `generate`, `-d` é sempre **duração**).
+Output directory uses **`-O` / `--output-dir`** (in `generate`, `-d` is always **duration**).
 
 ```bash
-# Ficheiro prompts.txt (um prompt por linha, # = comentário)
+# prompts.txt (one prompt per line, # = comment)
 text2sound batch prompts.txt --format flac -O sounds/
-text2sound batch prompts.txt --seed 1000   # seeds 1000, 1001, 1002, … por linha
+text2sound batch prompts.txt --seed 1000   # seeds 1000, 1001, 1002, … per line
 ```
 
-### Informações
+### Info
 
 ```bash
-text2sound info     # ambiente, GPU, modelo, configuração
-text2sound --help   # ajuda completa
+text2sound info     # environment, GPU, model, config
+text2sound --help   # full help
 ```
 
-## Presets disponíveis
+## Available presets
 
-| Preset | Tipo | Duração |
-|--------|------|---------|
-| ambient | Ambiente calmo | 45s |
-| battle | Música de combate | 30s |
-| menu | Música de menu | 30s |
-| footsteps-stone | Passos em pedra | 5s |
-| footsteps-grass | Passos em relva | 5s |
-| rain | Chuva com trovão | 45s |
-| wind | Vento forte | 30s |
-| thunder | Trovão isolado | 8s |
-| ui-click | Click de interface | 2s |
-| ui-confirm | Confirmação | 3s |
-| forest | Floresta | 45s |
-| ocean | Ondas do mar | 45s |
-| dungeon | Dungeon escura | 30s |
-| tavern | Taverna medieval | 30s |
-| explosion | Explosão | 5s |
-| sword-clash | Espadas | 3s |
-| magic-spell | Magia | 4s |
-| victory-fanfare | Fanfarra de vitória | 8s |
+| Preset | Type | Duration |
+|--------|------|----------|
+| ambient | Calm ambience | 45s |
+| battle | Combat music | 30s |
+| menu | Menu music | 30s |
+| footsteps-stone | Footsteps on stone | 5s |
+| footsteps-grass | Footsteps on grass | 5s |
+| rain | Rain with thunder | 45s |
+| wind | Strong wind | 30s |
+| thunder | Isolated thunder | 8s |
+| ui-click | UI click | 2s |
+| ui-confirm | Confirmation | 3s |
+| forest | Forest | 45s |
+| ocean | Ocean waves | 45s |
+| dungeon | Dark dungeon | 30s |
+| tavern | Medieval tavern | 30s |
+| explosion | Explosion | 5s |
+| sword-clash | Swords | 3s |
+| magic-spell | Magic | 4s |
+| victory-fanfare | Victory fanfare | 8s |
 
-## Parâmetros avançados
+## Advanced parameters
 
-| Parâmetro | Default | Descrição |
-|-----------|---------|-----------|
-| `--duration` | 30 | Duração em segundos (máx. ~47 música, ~11 efeitos; mín. 0.5) |
-| `--steps` | 100 | Passos de difusão (8–150; efeitos ~8) |
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `--duration` | 30 | Duration in seconds (max ~47 music, ~11 effects; min 0.5) |
+| `--steps` | 100 | Diffusion steps (8–150; effects ~8) |
 | `--cfg-scale` | 7.0 | Classifier-free guidance (1–15) |
-| `--sigma-min` | 0.3 | Noise schedule mínimo |
-| `--sigma-max` | 500 | Noise schedule máximo |
-| `--sampler` | dpmpp-3m-sde | Tipo de sampler |
-| `--seed` | aleatório | Seed para reprodutibilidade |
-| `--trim/--no-trim` | trim | Remover silêncio trailing |
+| `--sigma-min` | 0.3 | Min noise schedule |
+| `--sigma-max` | 500 | Max noise schedule |
+| `--sampler` | dpmpp-3m-sde | Sampler type |
+| `--seed` | random | Reproducibility |
+| `--trim/--no-trim` | trim | Remove trailing silence |
 
-## Estrutura
+## Layout
 
 ```
 Text2Sound/
 ├── src/text2sound/
-│   ├── cli.py             # CLI Click (generate, batch, presets, info)
-│   ├── generator.py       # Pipeline Stable Audio Open
-│   ├── presets.py         # Presets de áudio para game dev
-│   ├── audio_processor.py # Processamento de áudio (trim, etc.)
-│   └── utils.py           # Utilitários
+│   ├── cli.py             # Click CLI (generate, batch, presets, info)
+│   ├── generator.py       # Stable Audio Open pipeline
+│   ├── presets.py         # Game-dev audio presets
+│   ├── audio_processor.py # Audio processing (trim, etc.)
+│   └── utils.py           # Helpers
 ├── config/
 │   ├── requirements.txt
 │   └── requirements-dev.txt
 ├── scripts/
-│   ├── setup.sh           # Setup do venv + deps
-│   └── installer.py       # Instalador standalone
+│   ├── setup.sh           # Venv + deps
+│   └── installer.py       # Standalone installer
 └── tests/
 ```
 
-## Variáveis de Ambiente
+## Environment variables
 
-| Variável | Descrição |
-|----------|-----------|
-| `HF_TOKEN` | Token Hugging Face para autenticação (ou `HUGGINGFACEHUB_API_TOKEN`) |
-| `HF_HOME` | Diretório de cache Hugging Face (padrão: `~/.cache/huggingface`) |
-| `PYTORCH_CUDA_ALLOC_CONF` | Configuração de alocação CUDA (auto-definida se vazia) |
+| Variable | Description |
+|----------|-------------|
+| `HF_TOKEN` | Hugging Face token (or `HUGGINGFACEHUB_API_TOKEN`) |
+| `HF_HOME` | Hugging Face cache (default: `~/.cache/huggingface`) |
+| `PYTORCH_CUDA_ALLOC_CONF` | CUDA allocator config (auto-set if empty) |
 
-## Integração com GameAssets
+## GameAssets integration
 
-O [GameAssets](../GameAssets/) pode invocar `text2sound` automaticamente durante um batch:
+[GameAssets](../GameAssets/) can call `text2sound` automatically during a batch:
 
-1. No `manifest.csv`, adicionar coluna **`generate_audio`** com valor `true` nas linhas desejadas.
-2. No `game.yaml`, configurar o bloco **`text2sound`** (duração, passos, formato, etc.).
-3. Correr `gameassets batch` — o áudio é gerado após a imagem 2D de cada linha.
+1. In `manifest.csv`, add column **`generate_audio`** with `true` on desired rows.
+2. In `game.yaml`, configure the **`text2sound`** block (duration, steps, format, etc.).
+3. Run `gameassets batch` — audio is generated after the 2D image for each row.
 
 ```bash
-# GameAssets invoca text2sound por linha com generate_audio=true
 gameassets batch --profile game.yaml --manifest manifest.csv
 ```
 
-Variável `TEXT2SOUND_BIN` se o comando não estiver no `PATH`.
+Use `TEXT2SOUND_BIN` if the command is not on `PATH`.
 
-## Desenvolvimento
+## Development
 
 ```bash
 pip install -e ".[dev]"
 pytest tests/ -v
-# Excluir testes lentos (carregam modelo/GPU):
+# Exclude slow tests (load model/GPU):
 pytest tests/ -v -m "not slow"
 ```
 
-## Licença
+## License
 
-- **Código:** MIT — [LICENSE](LICENSE).
-- **Pesos:** [Stable Audio Open 1.0](https://huggingface.co/stabilityai/stable-audio-open-1.0) e [Stable Audio Open Small](https://huggingface.co/stabilityai/stable-audio-open-small) — **Stability AI Community License** (aceitar no Hub; condições de uso comercial e limite de receita no `LICENSE.md` de cada repositório e em [stability.ai/license](https://stability.ai/license)).
+- **Code:** MIT — [LICENSE](LICENSE).
+- **Weights:** [Stable Audio Open 1.0](https://huggingface.co/stabilityai/stable-audio-open-1.0) and [Stable Audio Open Small](https://huggingface.co/stabilityai/stable-audio-open-small) — **Stability AI Community License** (accept on Hub; commercial terms and revenue limits in each repo’s `LICENSE.md` and [stability.ai/license](https://stability.ai/license)).

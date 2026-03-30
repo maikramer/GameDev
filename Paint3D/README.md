@@ -1,50 +1,52 @@
 # Paint3D
 
-Texturização 3D: **Hunyuan3D-Paint** (textura multivista) + **Materialize PBR** (normal, AO, metallic-roughness) + **Upscale IA** (Real-ESRGAN).
+**Language:** English · [Português (`README_PT.md`)](README_PT.md)
 
-## Instalação
+3D texturing: **Hunyuan3D-Paint** (multiview) + **Materialize PBR** (normal, AO, metallic-roughness) + **AI upscale** (Real-ESRGAN).
 
-### Oficial (monorepo)
+## Installation
 
-Na raiz do repositório **GameDev**:
+### Official (monorepo)
+
+At the **GameDev** repo root:
 
 ```bash
-cd /caminho/para/GameDev
+cd /path/to/GameDev
 ./install.sh paint3d
 ```
 
-Instala o pacote no `Paint3D/.venv`, PyTorch, **nvdiffrast** e wrappers em `~/.local/bin` (ou equivalente no Windows). Ver [docs/INSTALLING.md](../docs/INSTALLING.md).
+Installs the package in `Paint3D/.venv`, PyTorch, **nvdiffrast**, and wrappers in `~/.local/bin` (or Windows equivalent). See [docs/INSTALLING.md](../docs/INSTALLING.md).
 
-### Manual / avançado
+### Manual / advanced
 
 ```bash
 cd Paint3D
 pip install -e .              # core (paint + materialize)
-pip install -e ".[upscale]"   # + upscale IA (spandrel)
+pip install -e ".[upscale]"   # + AI upscale (spandrel)
 ```
 
-O instalador oficial trata do **nvdiffrast** (`--no-build-isolation`); em instalação manual segue os comentários em `pyproject.toml`.
+The official installer handles **nvdiffrast** (`--no-build-isolation`); for manual install follow comments in `pyproject.toml`.
 
 ## CLI
 
 ```bash
-# Texturizar mesh com imagem de referência
+# Texture mesh with reference image
 paint3d texture mesh.glb -i ref.png -o mesh_textured.glb
 
-# Texturizar + PBR
+# Texture + PBR
 paint3d texture mesh.glb -i ref.png -o mesh_pbr.glb --materialize
 
-# Só PBR (mesh já texturizada)
+# PBR only (already textured mesh)
 paint3d materialize-pbr mesh_textured.glb -o mesh_pbr.glb
 
-# Diagnóstico (rasterizador, GPU)
+# Diagnostics (rasterizer, GPU)
 paint3d doctor
 
-# Modelos usados
+# Models in use
 paint3d models
 ```
 
-## API Python
+## Python API
 
 ```python
 from paint3d import apply_hunyuan_paint, load_mesh_trimesh
@@ -53,14 +55,14 @@ mesh = load_mesh_trimesh("model.glb")
 textured = apply_hunyuan_paint(mesh, "reference.png")
 ```
 
-## Dependências
+## Dependencies
 
-- **gamedev-shared** (monorepo GameDev — GPU, logging)
-- **hy3dgen** (Hunyuan3D-2 — pipeline de textura)
-- **nvdiffrast** (NVIDIA — rasterizador diferenciável)
-- **spandrel** (opcional — upscale IA)
+- **gamedev-shared** (GameDev monorepo — GPU, logging)
+- **hy3dgen** (Hunyuan3D-2 — texture pipeline)
+- **nvdiffrast** (NVIDIA — differentiable rasterizer)
+- **spandrel** (optional — AI upscale)
 
-## Documentação
+## Documentation
 
-- [Setup do rasterizador](docs/PAINT_SETUP.md)
+- [Rasterizer setup](docs/PAINT_SETUP.md)
 - [Materialize PBR](docs/PBR_MATERIALIZE.md)

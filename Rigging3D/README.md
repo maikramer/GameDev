@@ -1,89 +1,91 @@
 # Rigging3D
 
-CLI de **auto-rigging 3D** baseado no [UniRig](https://github.com/VAST-AI-Research/UniRig) (MIT).
+**Language:** English · [Português (`README_PT.md`)](README_PT.md)
 
-## Instalação
+**3D auto-rigging** CLI based on [UniRig](https://github.com/VAST-AI-Research/UniRig) (MIT).
 
-### Oficial (monorepo)
+## Installation
 
-Na **raiz** do repositório GameDev:
+### Official (monorepo)
+
+At the **GameDev** repo root:
 
 ```bash
-cd /caminho/para/GameDev
+cd /path/to/GameDev
 ./install.sh rigging3d
 ```
 
-Este comando **instala sempre** a stack de inferência completa (PyTorch CUDA, `bpy`, Open3D, spconv, PyG, etc.) — mesmo comportamento que `gamedev_shared.installer.unified`. Guia: [docs/INSTALLING.md](../docs/INSTALLING.md).
+This **always** installs the full inference stack (PyTorch CUDA, `bpy`, Open3D, spconv, PyG, etc.) — same behavior as `gamedev_shared.installer.unified`. Guide: [docs/INSTALLING.md](../docs/INSTALLING.md).
 
-### Manual / desenvolvimento (`scripts/setup.sh`)
+### Manual / development (`scripts/setup.sh`)
 
-Um único comando no directório do projecto: venv, PyTorch+CUDA, dependências de inferência, spconv e torch-scatter/cluster.
+One command in the project directory: venv, PyTorch+CUDA, inference deps, spconv, torch-scatter/cluster.
 
 ```bash
 cd Rigging3D
 bash scripts/setup.sh
 ```
 
-O script auto-detecta a versão CUDA do driver. Requer **Python 3.11** (wheels `bpy==5.0.1` e **Open3D** no PyPI; ver nota sobre Blender 5.1 abaixo).
+The script auto-detects the driver CUDA version. Requires **Python 3.11** (PyPI wheels `bpy==5.0.1` and **Open3D**; see Blender 5.1 note below).
 
 ```bash
-bash scripts/setup.sh --python python3.11    # especificar interpretador
-bash scripts/setup.sh --force                # recriar venv do zero
+bash scripts/setup.sh --python python3.11    # specify interpreter
+bash scripts/setup.sh --force                # recreate venv from scratch
 ```
 
-**Atenção:** o pipeline usa `torch.nn.functional.scaled_dot_product_attention` (SDPA) do PyTorch — não é necessário o pacote `flash-attn`.
+**Note:** the pipeline uses PyTorch `torch.nn.functional.scaled_dot_product_attention` (SDPA) — the `flash-attn` package is **not** required.
 
-### Atalho local (`scripts/installer.py`)
+### Local shortcut (`scripts/installer.py`)
 
-- **`./install.sh rigging3d`** (na raiz) equivale a **`python3 scripts/installer.py --inference`** nesta pasta (inferência completa).
-- **Sem** `--inference`: só `pip install -e` + wrappers; o sumário indica como completar (útil para CI mínimo).
+- **`./install.sh rigging3d`** (at repo root) is equivalent to **`python3 scripts/installer.py --inference`** in this folder (full inference).
+- **Without** `--inference`: only `pip install -e` + wrappers; the summary explains how to finish (useful for minimal CI).
 
 ```bash
 cd Rigging3D
 python3 scripts/installer.py --inference
 ```
 
-### Manual (passo a passo)
+### Manual (step by step)
 
 ```bash
 cd Rigging3D && python3.11 -m venv .venv && source .venv/bin/activate
 pip install -e ".[inference]"
 ```
 
-**Windows:** o fluxo de inferência completo foi testado em **Linux**; no Windows usa `python scripts/installer.py --inference` (Python por defeito `python` se `PYTHON_CMD` não estiver definido).
+**Windows:** full inference was tested on **Linux**; on Windows use `python scripts/installer.py --inference` (default Python `python` if `PYTHON_CMD` is unset).
 
-**Se o PyTorch ficar só em CPU** (p.ex. `nvidia-smi` sem linha «CUDA Version» por NVML/driver): define `RIGGING3D_FORCE_CUDA=1` e volta a correr o instalador com `--inference`, ou usa `bash scripts/setup.sh` que aplica a mesma lógica. Opcional: `RIGGING3D_PYTORCH_CUDA_INDEX` para outro índice de wheels CUDA.
+**If PyTorch ends up CPU-only** (e.g. `nvidia-smi` shows no “CUDA Version” line from NVML/driver): set `RIGGING3D_FORCE_CUDA=1` and re-run the installer with `--inference`, or use `bash scripts/setup.sh` which applies the same logic. Optional: `RIGGING3D_PYTORCH_CUDA_INDEX` for another CUDA wheel index.
 
-### Deps CUDA-specific (se instalou manualmente)
+### CUDA-specific deps (if you installed manually)
 
-O `setup.sh` instala tudo automaticamente, mas se precisares instalar manualmente, usa a mesma URL PyG que o script (depende da versão de `torch` e do CUDA runtime). Com **Python 3.11**, confirma que existe wheel `torch-*+cu*` para a tua combinação; caso contrário o `setup.sh` tenta compilação a partir do source.
+`setup.sh` installs everything automatically, but if you install manually, use the same PyG URL as the script (depends on `torch` and CUDA runtime). With **Python 3.11**, confirm a `torch-*+cu*` wheel exists for your combo; otherwise `setup.sh` may try building from source.
 
 ```bash
-# torch-scatter + torch-cluster (ajustar torch e CUDA ao teu venv):
+# torch-scatter + torch-cluster (adjust torch and CUDA to your venv):
 pip install torch-scatter torch-cluster -f https://data.pyg.org/whl/torch-2.11.0+cu130.html
 
-# spconv + cumm (cu121 para CUDA 12.x e 13.x):
+# spconv + cumm (cu121 for CUDA 12.x and 13.x):
 pip install cumm-cu121 spconv-cu121
 ```
 
-### Pesos do modelo
+### Model weights
 
-Os pesos HF são descarregados automaticamente na 1.ª execução: [VAST-AI/UniRig](https://huggingface.co/VAST-AI/UniRig). Confirma termos no card (ver [GameDev/README](../README.md)).
+HF weights download automatically on first run: [VAST-AI/UniRig](https://huggingface.co/VAST-AI/UniRig). Confirm terms on the card (see [GameDev/README](../README.md)).
 
-## Requisitos
+## Requirements
 
-- Python **3.11** (intervalo suportado pelo `pyproject.toml` da inferência; `bpy` 5.0.1 no PyPI)
-- GPU NVIDIA com CUDA (≥6–8 GB VRAM conforme mesh; GPUs mais pequenas podem falhar em meshes muito densos)
-- **bash** para scripts de inferência — no Windows: Git Bash ou MSYS2
+- Python **3.11** (range supported by inference `pyproject.toml`; `bpy` 5.0.1 on PyPI)
+- NVIDIA GPU with CUDA (≥6–8 GB VRAM depending on mesh; smaller GPUs may fail on very dense meshes)
+- **bash** for inference scripts — on Windows: Git Bash or MSYS2
 
-### Blender 5.1.0, `bpy` e Open3D
+### Blender 5.1.0, `bpy`, and Open3D
 
-- No **PyPI**, o wheel **`bpy==5.1.0`** (alinhado ao Blender **5.1.0**) só existe para **Python 3.13**.
-- O pacote **Open3D** usado pelo UniRig **não** publica wheels estáveis para **Python 3.13** (apenas até `cp312` na versão actual).
-- Por isso o Rigging3D mantém **`bpy==5.0.1`** em **Python 3.11** para inferência completa (mesh + merge com Open3D). A API é da linha **Blender 5.0**, próxima da 5.1 para a maior parte dos operadores `bpy.ops` usados no pipeline.
-- Para **`bpy==5.1.0`** igual ao teu Blender 5.1.0, usa o projecto [**Animator3D**](../Animator3D/) com **Python 3.13** (só animação/export, sem Open3D no mesmo venv).
+- On **PyPI**, the **`bpy==5.1.0`** wheel (aligned with Blender **5.1.0**) exists only for **Python 3.13**.
+- **Open3D** used by UniRig does **not** publish stable wheels for **Python 3.13** (only up to `cp312` at current release).
+- Therefore Rigging3D keeps **`bpy==5.0.1`** on **Python 3.11** for full inference (mesh + merge with Open3D). The API is Blender **5.0** line, close to 5.1 for most `bpy.ops` used in the pipeline.
+- For **`bpy==5.1.0`** matching your Blender 5.1.0, use the [**Animator3D**](../Animator3D/) project with **Python 3.13** (animation/export only, no Open3D in the same venv).
 
-## Uso
+## Usage
 
 ```bash
 rigging3d pipeline --input mesh.glb --output rigged.glb
@@ -92,23 +94,23 @@ rigging3d skin    --input skel.glb --output skin.glb
 rigging3d merge   --source skin.glb --target mesh.glb --output rigged.glb
 ```
 
-Para apontar a outra árvore de inferência:
+To point at another inference tree:
 
 ```bash
-export RIGGING3D_ROOT=/outro/caminho
+export RIGGING3D_ROOT=/other/path
 ```
 
-## Comandos
+## Commands
 
-| Comando | Descrição |
-|---------|-----------|
-| `skeleton` | Gera skeleton (GLB; `.fbx` ainda suportado) |
+| Command | Description |
+|---------|-------------|
+| `skeleton` | Generate skeleton (GLB; `.fbx` still supported) |
 | `skin` | Skinning weights |
-| `merge` | Junta skin + mesh original |
+| `merge` | Merge skin + original mesh |
 | `pipeline` | skeleton → skin → merge |
 
-## Licença
+## License
 
 - Rigging3D (CLI): **MIT** — [`LICENSE`](LICENSE)
-- Código UniRig: **MIT** — [`unirig/LICENSE`](src/rigging3d/unirig/LICENSE) · [`THIRD_PARTY.md`](THIRD_PARTY.md)
-- **Pesos HF:** o repositório [VAST-AI/UniRig](https://huggingface.co/VAST-AI/UniRig) pode não incluir `LICENSE` na raiz; valida termos no card e em forks com ficheiro explícito se necessário. Tabela no [README do monorepo](../README.md).
+- UniRig code: **MIT** — [`unirig/LICENSE`](src/rigging3d/unirig/LICENSE) · [`THIRD_PARTY.md`](THIRD_PARTY.md)
+- **HF weights:** the [VAST-AI/UniRig](https://huggingface.co/VAST-AI/UniRig) repo may not include `LICENSE` at root; validate terms on the card and explicit forks if needed. Table in [monorepo README](../README.md).

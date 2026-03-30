@@ -1,27 +1,29 @@
 # Part3D
 
-Decomposição semântica de meshes 3D via **Hunyuan3D-Part** (P3-SAM + X-Part): segmentação e geração de partes.
+**Language:** English · [Português (`README_PT.md`)](README_PT.md)
 
-## Requisitos
+Semantic decomposition of 3D meshes via **Hunyuan3D-Part** (P3-SAM + X-Part): segmentation and part generation.
+
+## Requirements
 
 - Python **3.10+**
-- GPU NVIDIA com CUDA recomendada (~5 GB VRAM pico com offloading; ver CLI)
-- Registo da ferramenta: [`Shared/src/gamedev_shared/installer/registry.py`](../Shared/src/gamedev_shared/installer/registry.py)
+- NVIDIA GPU with CUDA recommended (~5 GB VRAM peak with offloading; see CLI)
+- Tool registration: [`Shared/src/gamedev_shared/installer/registry.py`](../Shared/src/gamedev_shared/installer/registry.py)
 
-## Instalação
+## Installation
 
-### Oficial (monorepo)
+### Official (monorepo)
 
-Na raiz do repositório **GameDev**:
+At the **GameDev** repo root:
 
 ```bash
-cd /caminho/para/GameDev
+cd /path/to/GameDev
 ./install.sh part3d
 ```
 
-Equivalente: `gamedev-install part3d` (com `gamedev-shared` instalado ou `PYTHONPATH=Shared/src`).
+Equivalent: `gamedev-install part3d` (with `gamedev-shared` installed or `PYTHONPATH=Shared/src`).
 
-### Manual / avançado
+### Manual / advanced
 
 ```bash
 cd Part3D
@@ -29,20 +31,20 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
 ```
 
-Nota: o instalador oficial adiciona **torch-scatter** e **torch-cluster** após o PyTorch (ver `gamedev_shared.installer.part3d_extras`).
+Note: the official installer adds **torch-scatter** and **torch-cluster** after PyTorch (see `gamedev_shared.installer.part3d_extras`).
 
-### Atalho local
+### Local shortcut
 
 ```bash
 cd Part3D
 python3 scripts/installer.py
 ```
 
-## Uso
+## Usage
 
 ```bash
 part3d --help
-part3d decompose mesh.glb -o partes.glb -v
+part3d decompose mesh.glb -o parts.glb -v
 ```
 
-Documentação geral de instalação: [docs/INSTALLING.md](../docs/INSTALLING.md).
+General install docs: [docs/INSTALLING.md](../docs/INSTALLING.md).

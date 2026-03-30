@@ -1,71 +1,73 @@
-# Instalação no monorepo GameDev
+# Installing in the GameDev monorepo
 
-## Forma oficial
+**Language:** English · [Português (`INSTALLING_PT.md`)](INSTALLING_PT.md)
 
-Na **raiz** do repositório (pasta que contém `Shared/`, `install.sh`, `.git`):
+## Official method
 
-| Plataforma | Comando |
-|------------|---------|
-| Linux / macOS | `./install.sh <ferramenta>` |
-| Windows PowerShell | `.\install.ps1 <ferramenta>` |
-| Windows CMD | `install.bat <ferramenta>` |
+At the **repository root** (folder containing `Shared/`, `install.sh`, `.git`):
 
-Com o pacote `gamedev-shared` instalado (ou `PYTHONPATH` a apontar para `Shared/src`):
+| Platform | Command |
+|----------|---------|
+| Linux / macOS | `./install.sh <tool>` |
+| Windows PowerShell | `.\install.ps1 <tool>` |
+| Windows CMD | `install.bat <tool>` |
+
+With `gamedev-shared` installed (or `PYTHONPATH` pointing to `Shared/src`):
 
 ```bash
 gamedev-install --list
 gamedev-install text2d
 ```
 
-Pré-requisitos do **instalador**: Python **3.10+**, `pip`, e dependências em [`Shared/config/requirements.txt`](../Shared/config/requirements.txt) (ex.: Rich), instaladas automaticamente por [`install.sh`](../install.sh) antes de carregar o módulo unificado.
+**Installer prerequisites:** Python **3.10+**, `pip`, and dependencies in [`Shared/config/requirements.txt`](../Shared/config/requirements.txt) (e.g. Rich), installed automatically by [`install.sh`](../install.sh) before loading the unified module.
 
-Variável útil: `PYTHON_CMD` — interpretador a usar (por defeito `python3`, ou `python` no Windows nos scripts).
+Useful variable: `PYTHON_CMD` — interpreter to use (default `python3`, or `python` on Windows in the scripts).
 
 ---
 
-## Ferramentas registadas
+## Registered tools
 
-| Comando `./install.sh …` | Pasta | Tipo | Python mín. | Notas |
-|--------------------------|-------|------|---------------|--------|
-| `text2d` | Text2D | Python | 3.10 | PyTorch/CUDA recomendado |
-| `text3d` | Text3D | Python | 3.8 | Depende de Text2D; nvdiffrast pós-venv |
-| `gameassets` | GameAssets | Python | 3.10 | Sem PyTorch no pacote; `batch` orquestra CLIs no PATH (ex.: Part3D com `--with-parts`) |
+| `./install.sh …` command | Folder | Type | Min Python | Notes |
+|--------------------------|--------|------|------------|-------|
+| `text2d` | Text2D | Python | 3.10 | PyTorch/CUDA recommended |
+| `text3d` | Text3D | Python | 3.8 | Depends on Text2D; nvdiffrast after venv |
+| `gameassets` | GameAssets | Python | 3.10 | No PyTorch in package; `batch` orchestrates CLIs on PATH (e.g. Part3D with `--with-parts`) |
 | `text2sound` | Text2Sound | Python | 3.10 | PyTorch/CUDA |
-| `texture2d` | Texture2D | Python | 3.10 | HF API; GPU local opcional |
+| `texture2d` | Texture2D | Python | 3.10 | HF API; local GPU optional |
 | `skymap2d` | Skymap2D | Python | 3.10 | HF API |
-| `rigging3d` | Rigging3D | Python | 3.11 | UniRig; extras de inferência **sempre** via unificado |
+| `rigging3d` | Rigging3D | Python | 3.11 | UniRig; inference extras **always** via unified installer |
 | `animator3d` | Animator3D | Python | 3.13 | `bpy` 5.1 |
-| `part3d` | Part3D | Python | 3.10 | torch-scatter/cluster pós-venv |
-| `paint3d` | Paint3D | Python | 3.10 | nvdiffrast pós-venv |
-| `materialize` | Materialize | Rust | — | Requer `cargo`; binário em `~/.local/bin` por defeito |
+| `part3d` | Part3D | Python | 3.10 | torch-scatter/cluster after venv |
+| `paint3d` | Paint3D | Python | 3.10 | nvdiffrast after venv |
+| `materialize` | Materialize | Rust | — | Needs `cargo`; binary in `~/.local/bin` by default |
 
-Instalar tudo o que estiver presente no checkout: `./install.sh all`.
+Install everything present in the checkout: `./install.sh all`.
 
-Detalhes técnicos: [`Shared/src/gamedev_shared/installer/registry.py`](../Shared/src/gamedev_shared/installer/registry.py).
-
----
-
-## Não confundir dois `install.sh`
-
-| Ficheiro | Função |
-|----------|--------|
-| **`GameDev/install.sh`** (raiz) | Instalador **unificado** de qualquer ferramenta (`gamedev_shared.installer.unified`). |
-| **`<Projeto>/scripts/install.sh`** | Atalho local que apenas chama `scripts/installer.py` **desse** projeto (mesma lógica que o unificado quando equivalente). **Não** é o script da raiz. |
-
-Preferência: usar sempre `./install.sh <nome>` **a partir da raiz**. O wrapper em `scripts/` existe para quem já está dentro da pasta do projecto.
-
-Os projectos Text2D, Text3D e Texture2D expõem também `scripts/run_installer.sh` (implementação); `scripts/install.sh` delega para esse script por compatibilidade.
+Technical details: [`Shared/src/gamedev_shared/installer/registry.py`](../Shared/src/gamedev_shared/installer/registry.py).
 
 ---
 
-## Instalação manual / CI
+## Do not confuse two `install.sh` files
 
-Para pipelines ou debugging, podes criar `venv` e `pip install -e` em cada pasta; vê os READMEs por projecto e secções «Manual» ou `scripts/setup.sh` (conveniência de desenvolvimento: cria `.venv` e instala em modo editável — **não** substitui o contrato documentado acima para «instalação oficial»).
+| File | Role |
+|------|------|
+| **`GameDev/install.sh`** (root) | **Unified** installer for any tool (`gamedev_shared.installer.unified`). |
+| **`<Project>/scripts/install.sh`** | Local shortcut that only calls **that** project’s `scripts/installer.py` (same logic as unified when equivalent). **Not** the root script. |
+
+Prefer `./install.sh <name>` **from the repo root**. The `scripts/` wrapper exists for people already inside the project folder.
+
+Text2D, Text3D, and Texture2D also expose `scripts/run_installer.sh` (implementation); `scripts/install.sh` delegates to it for compatibility.
 
 ---
 
-## Documentação por ferramenta
+## Manual install / CI
 
-- **[Adicionar uma nova ferramenta ao monorepo](NEW_TOOLS.md)** — registry, instalador unificado, Shared, GameAssets, CI, checklist.
-- [Shared/README.md](../Shared/README.md) — pacote `gamedev-shared`, `gamedev-install`
+For pipelines or debugging, you can create a `venv` and `pip install -e` in each folder; see per-project READMEs and “Manual” sections or `scripts/setup.sh` (dev convenience: creates `.venv` and editable install — **does not** replace the “official install” contract documented above).
+
+---
+
+## Documentation per tool
+
+- **[Adding a new tool to the monorepo](NEW_TOOLS.md)** — registry, unified installer, Shared, GameAssets, CI, checklist.
+- [Shared/README.md](../Shared/README.md) — `gamedev-shared`, `gamedev-install`
 - [Text2D/README.md](../Text2D/README.md), [Text3D/README.md](../Text3D/README.md), [GameAssets/README.md](../GameAssets/README.md), [Texture2D/README.md](../Texture2D/README.md), [Skymap2D/README.md](../Skymap2D/README.md), [Text2Sound/README.md](../Text2Sound/README.md), [Rigging3D/README.md](../Rigging3D/README.md), [Animator3D/README.md](../Animator3D/README.md), [Part3D/README.md](../Part3D/README.md), [Paint3D/README.md](../Paint3D/README.md), [Materialize/README.md](../Materialize/README.md)

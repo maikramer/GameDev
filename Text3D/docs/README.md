@@ -1,20 +1,22 @@
-# Documentação Text3D
+# Text3D documentation
 
-O Text3D gera meshes 3D a partir de texto em duas fases: **Text2D** (texto → imagem) e **Hunyuan3D-2mini** (imagem → mesh). Ver o [README principal](../README.md) para instalação e licença.
+**Language:** English · [Português (`README_PT.md`)](README_PT.md)
 
-## Índice
+Text3D generates 3D meshes from text in two phases: **Text2D** (text → image) and **Hunyuan3D-2mini** (image → mesh). See the [main README](../README.md) for installation and licensing.
 
-- [Instalação](INSTALL.md) — pode estar desatualizado em relação ao fluxo Hunyuan; preferir o README raiz
-- [PBR + Materialize no GLB](PBR_MATERIALIZE.md) — fluxo completo, requisitos, flags CLI, achados em hardware modesto
-- [API Python](API.md)
+## Index
+
+- [Installation](INSTALL.md) — may lag behind the Hunyuan flow; prefer the root README
+- [PBR + Materialize in GLB](PBR_MATERIALIZE.md) — full flow, requirements, CLI flags, findings on modest hardware
+- [Python API](API.md)
 - [Paint (custom_rasterizer)](PAINT_SETUP.md)
-- [Troubleshooting](TROUBLESHOOTING.md) — conteúdo legado Shap-E
-- [Exemplos](EXAMPLES.md) — exemplos antigos; usar API em [API.md](API.md)
+- [Troubleshooting](TROUBLESHOOTING.md) — legacy Shap-E content
+- [Examples](EXAMPLES.md) — older examples; use API in [API.md](API.md)
 
-## Visão geral
+## Overview
 
 - **Text-to-3D:** `HunyuanTextTo3DGenerator.generate(prompt)`
-- **Image-to-3D:** `generate_from_image(...)` (só Hunyuan)
-- **Textura (Paint):** mesh + UV + albedo — ver [PAINT_SETUP.md](PAINT_SETUP.md)
-- **PBR no GLB (Materialize):** normal, AO, metallic-roughness embutidos — ver [PBR_MATERIALIZE.md](PBR_MATERIALIZE.md)
-- **Pouca VRAM:** `--low-vram` na CLI; descarrega Text2D antes de Hunyuan; `enable_model_cpu_offload` no Hunyuan quando CUDA
+- **Image-to-3D:** `generate_from_image(...)` (Hunyuan only)
+- **Texture (Paint):** mesh + UV + albedo — see [PAINT_SETUP.md](PAINT_SETUP.md)
+- **PBR in GLB (Materialize):** embedded normal, AO, metallic-roughness — see [PBR_MATERIALIZE.md](PBR_MATERIALIZE.md)
+- **Low VRAM:** `--low-vram` on CLI; unload Text2D before Hunyuan; `enable_model_cpu_offload` on Hunyuan when using CUDA

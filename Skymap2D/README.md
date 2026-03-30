@@ -1,139 +1,141 @@
 # Skymap2D
 
-CLI para geração de skymaps equirectangular 360° via HF Inference API.
+**Language:** English · [Português (`README_PT.md`)](README_PT.md)
 
-Usa o modelo [Flux-LoRA-Equirectangular-v3](https://huggingface.co/MultiTrickFox/Flux-LoRA-Equirectangular-v3) para gerar panorâmicas 360° usáveis como skybox/skymap em engines de jogo — ideal para céus, ambientes exteriores e cenários de fundo.
+CLI for **equirectangular 360° skymaps** via the HF Inference API.
 
-No monorepo [GameDev](../README.md), o pacote depende de [**gamedev-shared**](../Shared/) (`gamedev_shared`): CLI Rich, instalação de skills Cursor e utilitários alinhados com Text2D/Texture2D/GameAssets.
+Uses the [Flux-LoRA-Equirectangular-v3](https://huggingface.co/MultiTrickFox/Flux-LoRA-Equirectangular-v3) model to generate 360° panoramas usable as skybox/skymaps in game engines — ideal for skies, outdoor environments, and backgrounds.
 
-## Características
+In the [GameDev](../README.md) monorepo, the package depends on [**gamedev-shared**](../Shared/) (`gamedev_shared`): Rich CLI, Cursor skill install, and helpers aligned with Text2D/Texture2D/GameAssets.
 
-- **Sem GPU local** — geração 100% cloud via HF Inference API
-- **Prompt equirectangular automático** — acrescenta instruções 360°/equirectangular automaticamente
-- **10 presets de ambiente** — Sunset, Night Sky, Overcast, Clear Day, Storm, Space, etc.
-- **Batch** — gera múltiplos skymaps a partir de um ficheiro de prompts
-- **Metadata JSON** — cada skymap acompanha ficheiro `.json` com seed, prompt final, parâmetros
-- **Ratio 2:1** — defaults optimizados (2048×1024) para projeção equirectangular
-- **Saída EXR (opcional)** — RGB float32 em espaço **linear** (OpenEXR), para motores que preferem `.exr`. O modelo continua a devolver LDR; o EXR empacota o mesmo conteúdo sem segunda curva sRGB. *Não* usamos o [Materialize](../Materialize/) aqui: esse fluxo gera mapas PBR (normal, height, …) a partir de texturas; para panoramas basta o `skymap2d` com `--format exr`.
+## Features
 
-## Arranque rápido
+- **No local GPU** — 100% cloud via HF Inference API
+- **Automatic equirectangular prompt** — appends 360°/equirectangular instructions automatically
+- **10 environment presets** — Sunset, Night Sky, Overcast, Clear Day, Storm, Space, etc.
+- **Batch** — multiple skymaps from a prompt file
+- **JSON metadata** — each skymap has a `.json` sidecar with seed, final prompt, parameters
+- **2:1 ratio** — defaults tuned (2048×1024) for equirectangular projection
+- **EXR output (optional)** — RGB float32 in **linear** space (OpenEXR), for engines that prefer `.exr`. The model still returns LDR; EXR packs the same content without a second sRGB curve. We do **not** use [Materialize](../Materialize/) here: that flow builds PBR maps (normal, height, …) from textures; for panoramas `skymap2d` with `--format exr` is enough.
+
+## Quick start
 
 ```bash
 # 1. Setup (venv + deps)
 ./scripts/setup.sh
 
-# 2. Ativar
+# 2. Activate
 source .venv/bin/activate
 
-# 3. Gerar
+# 3. Generate
 skymap2d generate "sunset over mountains, warm golden light" -o sky_sunset.png
 
-# 4. Usar preset
+# 4. Use a preset
 skymap2d generate "dramatic sky" --preset Storm -o sky_storm.png
 
-# 5. EXR (RGB linear) em vez de PNG
+# 5. EXR (linear RGB) instead of PNG
 skymap2d generate "clear blue sky" --format exr -o sky_clear.exr
-# ou: -o sky_clear.exr  (a extensão .exr define o formato)
+# or: -o sky_clear.exr  (.exr extension sets format)
 ```
 
-## Instalação
+## Installation
 
-### Oficial (monorepo)
+### Official (monorepo)
 
-Na **raiz** do repositório GameDev:
+At the **GameDev** repo root:
 
 ```bash
-cd /caminho/para/GameDev
+cd /path/to/GameDev
 ./install.sh skymap2d
 # Windows: .\install.ps1 skymap2d
 ```
 
-Cria `Skymap2D/.venv` se necessário, instala em modo editável e gera wrappers. `./install.sh --list`. Guia: [docs/INSTALLING.md](../docs/INSTALLING.md).
+Creates `Skymap2D/.venv` if needed, editable install, and wrappers. `./install.sh --list`. Guide: [docs/INSTALLING.md](../docs/INSTALLING.md).
 
-### Manual / desenvolvimento
+### Manual / development
 
 ```bash
 ./scripts/setup.sh
 source .venv/bin/activate
 ```
 
-O `setup.sh` instala `gamedev-shared` a partir de `../Shared` e o pacote `skymap2d` em modo editável.
+`setup.sh` installs `gamedev-shared` from `../Shared` and the `skymap2d` package in editable mode.
 
-### Atalho local
+### Local shortcut
 
 ```bash
 python3 scripts/installer.py --prefix ~/.local
 python3 scripts/installer.py --use-venv
 ```
 
-Sem PyTorch local — apenas `config/requirements.txt` e `gamedev-shared`.
+No local PyTorch — only `config/requirements.txt` and `gamedev-shared`.
 
-## Comandos
+## Commands
 
-| Comando | Descrição |
-|---------|-----------|
-| `skymap2d generate PROMPT` | Gera um skymap equirectangular 360° |
-| `skymap2d presets` | Lista presets de ambiente |
-| `skymap2d batch FILE` | Batch a partir de ficheiro (um prompt por linha) |
-| `skymap2d info` | Configuração e ambiente |
-| `skymap2d skill install` | Instala Agent Skill Cursor |
+| Command | Description |
+|---------|-------------|
+| `skymap2d generate PROMPT` | Generate a 360° equirectangular skymap |
+| `skymap2d presets` | List environment presets |
+| `skymap2d batch FILE` | Batch from file (one prompt per line) |
+| `skymap2d info` | Config and environment |
+| `skymap2d skill install` | Install Cursor Agent Skill |
 
-## Parâmetros de `generate`
+## `generate` parameters
 
-| Parâmetro | Default | Descrição |
-|-----------|---------|-----------|
-| `--output/-o` | auto | Ficheiro de saída (`.png` ou `.exr`) |
-| `--format` | png | `png` ou `exr` (se `-o` não tiver extensão, usa isto) |
-| `--exr-scale` | 1.0 | Multiplica valores lineares ao gravar EXR |
-| `--width/-W` | 2048 | Largura (ratio 2:1 recomendado) |
-| `--height/-H` | 1024 | Altura |
-| `--steps/-s` | 40 | Passos de inferência (10–100) |
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `--output/-o` | auto | Output file (`.png` or `.exr`) |
+| `--format` | png | `png` or `exr` (if `-o` has no extension, this applies) |
+| `--exr-scale` | 1.0 | Multiply linear values when writing EXR |
+| `--width/-W` | 2048 | Width (2:1 ratio recommended) |
+| `--height/-H` | 1024 | Height |
+| `--steps/-s` | 40 | Inference steps (10–100) |
 | `--guidance/-g` | 6.0 | Guidance scale (1.0–20.0) |
-| `--seed` | aleatório | Seed para reprodutibilidade |
-| `--negative-prompt/-n` | "" | Prompt negativo |
-| `--preset/-p` | None | Preset de ambiente |
+| `--seed` | random | Reproducibility |
+| `--negative-prompt/-n` | "" | Negative prompt |
+| `--preset/-p` | None | Environment preset |
 | `--cfg-scale` | guidance | CFG scale |
-| `--lora-strength` | 1.0 | Força do LoRA (0.0–2.0) |
-| `--model/-m` | Flux-LoRA-Equirectangular-v3 | Modelo HF |
+| `--lora-strength` | 1.0 | LoRA strength (0.0–2.0) |
+| `--model/-m` | Flux-LoRA-Equirectangular-v3 | HF model |
 
 ## Presets
 
-| Nome | Descrição |
-|------|-----------|
-| Sunset | Céu ao pôr do sol, nuvens douradas |
-| Night Sky | Noite estrelada, Via Láctea |
-| Overcast | Céu nublado, luz difusa |
-| Clear Day | Céu limpo azul, poucas nuvens |
-| Storm | Tempestade, nuvens escuras, relâmpagos |
-| Space | Espaço exterior, nebulosa, estrelas |
-| Alien World | Céu alienígena, duas luas, cores fantásticas |
-| Dawn | Amanhecer, tons rosa e laranja |
-| Underwater | Vista subaquática, raios de luz, água |
-| Fantasy | Céu mágico, auroras, cristais flutuantes |
+| Name | Description |
+|------|-------------|
+| Sunset | Golden sunset, warm clouds |
+| Night Sky | Starry night, Milky Way |
+| Overcast | Cloudy sky, diffuse light |
+| Clear Day | Clear blue sky, few clouds |
+| Storm | Storm, dark clouds, lightning |
+| Space | Outer space, nebula, stars |
+| Alien World | Alien sky, two moons, fantasy colors |
+| Dawn | Dawn, pink and orange tones |
+| Underwater | Underwater view, light rays, water |
+| Fantasy | Magic sky, auroras, floating crystals |
 
-## Configuração
+## Configuration
 
-| Variável | Descrição |
-|----------|-----------|
-| `HF_TOKEN` | Token Hugging Face (ou `HUGGINGFACEHUB_API_TOKEN`) |
-| `SKYMAP2D_MODEL_ID` | Override do modelo (default: `MultiTrickFox/Flux-LoRA-Equirectangular-v3`) |
+| Variable | Description |
+|----------|-------------|
+| `HF_TOKEN` | Hugging Face token (or `HUGGINGFACEHUB_API_TOKEN`) |
+| `SKYMAP2D_MODEL_ID` | Model override (default: `MultiTrickFox/Flux-LoRA-Equirectangular-v3`) |
 
-## Uso em engines de jogo
+## Using in game engines
 
-O skymap equirectangular gerado pode ser usado directamente como:
+The generated equirectangular skymap can be used directly as:
 - **Godot**: Environment → Sky → PanoramaSky → panorama texture
-- **Unity**: Skybox material com shader Panoramic → assign texture
+- **Unity**: Skybox material with Panoramic shader → assign texture
 - **Unreal Engine**: Sky Sphere → equirectangular texture map
 
-## Testes
+## Tests
 
 ```bash
 pip install -e ".[dev]"
 pytest tests/ -v
 ```
 
-## Licença
+## License
 
-- **Código:** MIT — [LICENSE](LICENSE).
-- **Pesos (default):** [Flux-LoRA-Equirectangular-v3](https://huggingface.co/MultiTrickFox/Flux-LoRA-Equirectangular-v3) — LoRA sobre [FLUX.1-dev](https://huggingface.co/black-forest-labs/FLUX.1-dev) (licença **não comercial** BFL); inferência via [HF Inference API](https://huggingface.co/docs/api-inference/) — aplica-se também os [termos HF](https://huggingface.co/terms-of-service).
-- **Tabela completa:** [GameDev/README.md](../README.md) (secção Licenças).
+- **Code:** MIT — [LICENSE](LICENSE).
+- **Weights (default):** [Flux-LoRA-Equirectangular-v3](https://huggingface.co/MultiTrickFox/Flux-LoRA-Equirectangular-v3) — LoRA on [FLUX.1-dev](https://huggingface.co/black-forest-labs/FLUX.1-dev) (**non-commercial** BFL license); inference via [HF Inference API](https://huggingface.co/docs/api-inference/) — also [HF terms](https://huggingface.co/terms-of-service).
+- **Full table:** [GameDev/README.md](../README.md) (Licenses section).

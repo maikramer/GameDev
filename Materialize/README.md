@@ -2,7 +2,7 @@
 
 A **Rust CLI** that generates PBR (Physically Based Rendering) maps from diffuse textures using GPU compute shaders via [wgpu](https://wgpu.rs/). No GUI, no Unity — just one command and six maps.
 
-Inspired by the original [Materialize](https://github.com/BoundingBoxSoftware/Materialize) (Unity/Windows). For a Portuguese version, see [README_PT.md](README_PT.md).
+Inspired by the original [Materialize](https://github.com/BoundingBoxSoftware/Materialize) (Unity/Windows). **Language:** English (this file) · [Português (`README_PT.md`)](README_PT.md).
 
 **Who is this for?** Game developers, 3D artists, and anyone who needs PBR maps from diffuse textures — in engines like Unity, Unreal, Godot, or in Blender, without running a GUI or the Windows-only original.
 

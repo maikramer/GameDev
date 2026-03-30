@@ -1,34 +1,36 @@
 # Text2D
 
-CLI de **text-to-imagem** com [FLUX.2 Klein 4B](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B) em quantização **SDNQ** ([Disty0](https://huggingface.co/Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic)), no mesmo espírito do Text3D (Click + Rich, `src/`, scripts).
+**Language:** English · [Português (`README_PT.md`)](README_PT.md)
 
-## Requisitos
+**Text-to-image** CLI with [FLUX.2 Klein 4B](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B) in **SDNQ** quantization ([Disty0](https://huggingface.co/Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic)), in the same spirit as Text3D (Click + Rich, `src/`, scripts).
 
-| Item    | Mínimo | Notas |
-|---------|--------|--------|
-| Python  | 3.10+  | Testado em 3.10–3.13 |
-| GPU     | Opcional | NVIDIA + CUDA recomendado para inferência razoável |
-| VRAM    | ~6 GB+ com `--low-vram` e 512² | Depende do checkpoint; GPUs modestas: `--low-vram` |
-| Disco   | ~8 GB  | Cache HF + pesos SDNQ (~2,5 GB em disco) |
+## Requirements
 
-**Licença dos pesos:** o default é o checkpoint SDNQ [Disty0](https://huggingface.co/Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic), que no Hugging Face está associado a **FLUX Non-Commercial** (`flux-non-commercial-license` no metadata), **distinto** do oficial [black-forest-labs/FLUX.2-klein-4B](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B) (**Apache 2.0** no model card). Para uso comercial com menos ambiguidade, define `TEXT2D_MODEL_ID=black-forest-labs/FLUX.2-klein-4B` (mais VRAM). Resumo: [Licenças no monorepo](../README.md).
+| Item   | Minimum | Notes |
+|--------|---------|--------|
+| Python | 3.10+   | Tested on 3.10–3.13 |
+| GPU    | Optional | NVIDIA + CUDA recommended for reasonable inference |
+| VRAM   | ~6 GB+ with `--low-vram` and 512² | Depends on checkpoint; modest GPUs: `--low-vram` |
+| Disk   | ~8 GB   | HF cache + SDNQ weights (~2.5 GB on disk) |
 
-## Instalação
+**Weight license:** the default is the SDNQ checkpoint [Disty0](https://huggingface.co/Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic), which on Hugging Face is tied to **FLUX Non-Commercial** (`flux-non-commercial-license` in metadata), **distinct** from the official [black-forest-labs/FLUX.2-klein-4B](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B) (**Apache 2.0** on the model card). For commercial use with less ambiguity, set `TEXT2D_MODEL_ID=black-forest-labs/FLUX.2-klein-4B` (more VRAM). Summary: [Licenses in the monorepo](../README.md).
 
-### Oficial (monorepo)
+## Installation
 
-Na **raiz** do repositório GameDev (pasta com `install.sh` e `Shared/`):
+### Official (monorepo)
+
+At the **GameDev** repo root (folder with `install.sh` and `Shared/`):
 
 ```bash
-cd /caminho/para/GameDev
+cd /path/to/GameDev
 ./install.sh text2d
 ```
 
-Equivalente: `gamedev-install text2d`. Guia geral: [docs/INSTALLING.md](../docs/INSTALLING.md).
+Equivalent: `gamedev-install text2d`. General guide: [docs/INSTALLING.md](../docs/INSTALLING.md).
 
-### Manual / desenvolvimento (`scripts/setup.sh`)
+### Manual / development (`scripts/setup.sh`)
 
-`setup.sh` **não** substitui o instalador oficial; é conveniência para criar `Text2D/.venv` e `pip install -e` localmente.
+`setup.sh` does **not** replace the official installer; it is a convenience to create `Text2D/.venv` and `pip install -e` locally.
 
 ```bash
 cd Text2D
@@ -38,106 +40,106 @@ source .venv/bin/activate
 text2d --help
 ```
 
-- Com **NVIDIA**, `setup.sh` instala PyTorch com CUDA (em **Python 3.13+** usa wheels do **PyPI**; em 3.10–3.12 usa o índice `cu121`/`cu118`).
-- Dependências de runtime: [`config/requirements.txt`](config/requirements.txt). Desenvolvimento/testes: [`config/requirements-dev.txt`](config/requirements-dev.txt) ou `pip install -e ".[dev]"`.
+- With **NVIDIA**, `setup.sh` installs PyTorch with CUDA (**Python 3.13+** uses **PyPI** wheels; 3.10–3.12 uses `cu121`/`cu118` index).
+- Runtime deps: [`config/requirements.txt`](config/requirements.txt). Dev/tests: [`config/requirements-dev.txt`](config/requirements-dev.txt) or `pip install -e ".[dev]"`.
 
-### Atalho local (`scripts/installer.py`)
+### Local shortcut (`scripts/installer.py`)
 
-Com `.venv` já criado (ex.: após `setup.sh`):
+With `.venv` already created (e.g. after `setup.sh`):
 
 ```bash
 chmod +x scripts/run_installer.sh scripts/install.sh
 ./scripts/run_installer.sh --use-venv --prefix ~/.local
-# ou: ./scripts/install.sh … (delega para run_installer.sh)
+# or: ./scripts/install.sh … (delegates to run_installer.sh)
 ```
 
-Instalação a partir do `python3` do sistema (PyTorch + requirements + pacote + wrappers em `PREFIX/bin`):
+Install from system `python3` (PyTorch + requirements + package + wrappers in `PREFIX/bin`):
 
 ```bash
 python3 scripts/installer.py --prefix ~/.local
 ```
 
-Opções: `--use-venv`, `--skip-deps`, `--skip-models`, `--force`, `--prefix`, `--python`. Sem `.venv` e com `--use-venv`, o instalador **termina com erro** (crie o venv primeiro).
+Options: `--use-venv`, `--skip-deps`, `--skip-models`, `--force`, `--prefix`, `--python`. Without `.venv` and with `--use-venv`, the installer **exits with error** (create the venv first).
 
-Documentação detalhada: [docs/INSTALL.md](docs/INSTALL.md). Problemas de GPU/carregamento: [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
+Detailed docs: [docs/INSTALL.md](docs/INSTALL.md). GPU/load issues: [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 
-## Primeira geração vs seguintes
+## First run vs later runs
 
-- **1.ª execução:** descarga de vários GB do Hugging Face — pode levar **vários minutos**; a GPU pode mostrar **0%** durante rede/disco (normal).
-- **Com cache local:** o mesmo comando costuma ficar na ordem de **segundos a ~1 min** (carregar do disco + inferência), conforme hardware.
+- **First run:** downloads several GB from Hugging Face — can take **many minutes**; GPU may show **0%** during network/disk (normal).
+- **With local cache:** the same command often finishes in **seconds to ~1 min** (load from disk + inference), depending on hardware.
 
-## Uso
+## Usage
 
-| Subcomando | Descrição |
-|-----------|-----------|
-| `text2d generate PROMPT` | Gera uma imagem a partir de texto |
-| `text2d info` | Mostra configuração e ambiente (GPU, cache, modelo) |
-| `text2d models` | Lista modelos disponíveis |
-| `text2d skill install` | Instala Agent Skill Cursor no projeto |
+| Subcommand | Description |
+|------------|-------------|
+| `text2d generate PROMPT` | Generate an image from text |
+| `text2d info` | Show config and environment (GPU, cache, model) |
+| `text2d models` | List available models |
+| `text2d skill install` | Install Cursor Agent Skill in the project |
 
 ```bash
-text2d generate "um gato com um cartaz que diz olá mundo"
+text2d generate "a cat holding a sign that says hello world"
 
-text2d generate "paisagem ao pôr do sol" --width 768 --height 768 --steps 4 --guidance 1.0
+text2d generate "sunset landscape" --width 768 --height 768 --steps 4 --guidance 1.0
 
-text2d generate "retrato" --low-vram -o minha.png --seed 42
+text2d generate "portrait" --low-vram -o mine.png --seed 42
 
-text2d generate "teste" -v          # --verbose no próprio subcomando
-text2d -v generate "teste"          # ou verbose no grupo
+text2d generate "test" -v          # --verbose on this subcommand
+text2d -v generate "test"          # or verbose on the group
 
 text2d info
 text2d models
 ```
 
-### Variáveis de ambiente
+### Environment variables
 
-| Variável | Descrição |
-|----------|-----------|
-| `TEXT2D_MODEL_ID` | Repositório HF alternativo compatível com `Flux2KleinPipeline` (ex.: `black-forest-labs/FLUX.2-klein-4B` para Apache 2.0; default SDNQ = termos Disty0) |
-| `HF_HOME` | Cache Hugging Face (por defeito: `~/.cache/huggingface`) |
-| `TEXT2D_MODELS_DIR` | Diretório de modelos locais; o instalador grava em `~/.config/text2d/config.env` quando existe `Text2D/models/` com pesos |
-| `TEXT2D_OUTPUT_DIR` | Diretório de saída das imagens (criado pelo instalador em `~/.text2d/outputs`) |
-| `PYTORCH_CUDA_ALLOC_CONF` | Configuração CUDA (auto-definida se vazia) |
+| Variable | Description |
+|----------|-------------|
+| `TEXT2D_MODEL_ID` | Alternative HF repo compatible with `Flux2KleinPipeline` (e.g. `black-forest-labs/FLUX.2-klein-4B` for Apache 2.0; default SDNQ = Disty0 terms) |
+| `HF_HOME` | Hugging Face cache (default: `~/.cache/huggingface`) |
+| `TEXT2D_MODELS_DIR` | Local models directory; installer writes `~/.config/text2d/config.env` when `Text2D/models/` exists with weights |
+| `TEXT2D_OUTPUT_DIR` | Image output directory (installer creates `~/.text2d/outputs`) |
+| `PYTORCH_CUDA_ALLOC_CONF` | CUDA config (auto-set if empty) |
 
 ### Guidance
 
-O checkpoint **SDNQ Disty0** usa por defeito **guidance 1.0** (ver [card do modelo](https://huggingface.co/Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic)). O BF16 original BFL costuma usar valores mais altos (ex. 4.0).
+The **SDNQ Disty0** checkpoint defaults to **guidance 1.0** (see [model card](https://huggingface.co/Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic)). The official BFL BF16 often uses higher values (e.g. 4.0).
 
 ## GGUF / Unsloth
 
-Pesos **GGUF** destinam-se a fluxos **ComfyUI-GGUF**, não a este CLI (Diffusers).
+**GGUF** weights target **ComfyUI-GGUF** workflows, not this CLI (Diffusers).
 
-## Estrutura
+## Layout
 
 ```
 Text2D/
 ├── src/text2d/
-│   ├── cli.py             # CLI Click (generate, info, models)
-│   ├── generator.py       # Pipeline FLUX + inferência
-│   ├── cli_rich.py        # Configuração Rich para o CLI
-│   └── utils/             # Utilitários (paths, etc.)
+│   ├── cli.py             # Click CLI (generate, info, models)
+│   ├── generator.py       # FLUX pipeline + inference
+│   ├── cli_rich.py        # Rich config for CLI
+│   └── utils/             # Helpers (paths, etc.)
 ├── docs/
-│   ├── INSTALL.md         # Guia de instalação detalhado
-│   └── TROUBLESHOOTING.md # Resolução de problemas
+│   ├── INSTALL.md         # Detailed install guide
+│   └── TROUBLESHOOTING.md # Troubleshooting
 ├── config/
 │   ├── requirements.txt
 │   └── requirements-dev.txt
 ├── scripts/
-│   ├── setup.sh           # Setup do venv + deps
-│   ├── run_installer.sh   # Chama installer.py (implementação)
-│   ├── install.sh         # Delega para run_installer.sh (atalho local)
-│   └── installer.py       # Lógica partilhada com gamedev-install
+│   ├── setup.sh           # Venv + deps setup
+│   ├── run_installer.sh   # Calls installer.py (implementation)
+│   ├── install.sh         # Delegates to run_installer.sh (local shortcut)
+│   └── installer.py       # Logic shared with gamedev-install
 └── tests/
 ```
 
-## Desenvolvimento
+## Development
 
 ```bash
 pip install -e ".[dev]"
 pytest tests/ -v
 ```
 
-## Licença
+## License
 
-- **Código:** MIT — [LICENSE](LICENSE).
-- **Pesos:** o default SDNQ segue o [card Disty0](https://huggingface.co/Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic) (non-commercial no metadata HF). O checkpoint BF16 BFL está em [FLUX.2-klein-4B](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B) (Apache 2.0). Tabela completa: [GameDev/README.md — Licenças](../README.md).
+- **Code:** MIT — [LICENSE](LICENSE).
+- **Weights:** default SDNQ follows [Disty0 card](https://huggingface.co/Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic) (non-commercial in HF metadata). BFL BF16 checkpoint: [FLUX.2-klein-4B](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B) (Apache 2.0). Full table: [GameDev/README.md — Licenses](../README.md).

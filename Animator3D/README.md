@@ -1,26 +1,28 @@
 # Animator3D
 
-CLI de **animação 3D** com [Blender Python API](https://docs.blender.org/api/current/) (`bpy`), pensada para encaixar depois do **Rigging3D** (mesh rigado → keyframes → export GLB/FBX).
+**Language:** English · [Português (`README_PT.md`)](README_PT.md)
 
-## Requisitos
+**3D animation** CLI using the [Blender Python API](https://docs.blender.org/api/current/) (`bpy`), designed to follow **Rigging3D** (rigged mesh → keyframes → GLB/FBX export).
 
-- **Python 3.13** — o wheel PyPI `bpy==5.1.0` exige 3.13 e alinha com **Blender 5.1**.
-- Blender embutido no pacote `bpy` (sem abrir janela; execução em background).
+## Requirements
 
-## Instalação
+- **Python 3.13** — the PyPI wheel `bpy==5.1.0` requires 3.13 and matches **Blender 5.1**.
+- Blender embedded in the `bpy` package (no window; background execution).
 
-### Oficial (monorepo)
+## Installation
 
-Na **raiz** do repositório GameDev (pasta com `install.sh` e `Shared/`):
+### Official (monorepo)
+
+At the **GameDev** repo root (folder with `install.sh` and `Shared/`):
 
 ```bash
-cd /caminho/para/GameDev
+cd /path/to/GameDev
 ./install.sh animator3d
 ```
 
-Equivalente: `gamedev-install animator3d`. Documentação geral: [docs/INSTALLING.md](../docs/INSTALLING.md).
+Equivalent: `gamedev-install animator3d`. General docs: [docs/INSTALLING.md](../docs/INSTALLING.md).
 
-### Manual / desenvolvimento
+### Manual / development
 
 ```bash
 cd Animator3D
@@ -29,29 +31,29 @@ source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
 ```
 
-## Uso
+## Usage
 
 ```bash
 animator3d check
 animator3d inspect rigged.glb
 animator3d inspect rigged.glb --json-out
-animator3d export rigged.glb copia.glb
-animator3d wave-idle rigged.glb animado.glb --frames 60
-animator3d wave-idle rigged.glb animado.glb --bone mixamorig:Spine
+animator3d export rigged.glb copy.glb
+animator3d wave-idle rigged.glb animated.glb --frames 60
+animator3d wave-idle rigged.glb animated.glb --bone mixamorig:Spine
 ```
 
-| Comando | Descrição |
-|---------|-----------|
-| `check` | Confirma `bpy` e mostra versão do Blender |
-| `inspect` | Importa e lista armatures, amostra de ossos e acções |
-| `export` | Re-exporta (teste de roundtrip de import/export) |
-| `wave-idle` | Animação de teste (oscilação num osso) e export |
+| Command | Description |
+|---------|-------------|
+| `check` | Verifies `bpy` and prints Blender version |
+| `inspect` | Imports and lists armatures, bone sample, actions |
+| `export` | Re-exports (import/export roundtrip test) |
+| `wave-idle` | Test animation (oscillation on one bone) and export |
 
-## Fluxo com Rigging3D
+## Flow with Rigging3D
 
 1. `rigging3d pipeline --input mesh.glb --output rigged.glb`
-2. `animator3d wave-idle rigged.glb com_animacao.glb` (ou pipeline próprio em Python usando `animator3d.bpy_ops`)
+2. `animator3d wave-idle rigged.glb with_animation.glb` (or your own Python pipeline using `animator3d.bpy_ops`)
 
-## Licença
+## License
 
-MIT — ver [`LICENSE`](LICENSE).
+MIT — see [`LICENSE`](LICENSE).

@@ -1,107 +1,109 @@
 # gamedev-shared
 
-Biblioteca partilhada do monorepo **GameDev** — código comum entre Text2D, Text3D, GameAssets, Texture2D, Skymap2D, Text2Sound, Rigging3D e Materialize.
+**Language:** English · [Português (`README_PT.md`)](README_PT.md)
 
-## Módulos
+Shared library for the **GameDev** monorepo — common code for Text2D, Text3D, GameAssets, Texture2D, Skymap2D, Text2Sound, Rigging3D, and Materialize.
 
-| Módulo | Descrição |
-|--------|-----------|
-| `gamedev_shared.logging` | Logger Rich/ANSI unificado (info, warn, error, step, header, success) |
-| `gamedev_shared.cli_rich` | `rich-click`: `setup_rich_click`, `setup_rich_click_module` (devolve `(click, rich_ok)`); todas as CLIs Python do monorepo usam o segundo no seu `cli_rich.py` |
-| `gamedev_shared.hf` | Token HF (`get_hf_token`) e texto de cache para Rich (`hf_home_display_rich`) — sem dependência de `huggingface_hub` |
-| `gamedev_shared.skill_install` | Instalação de Agent Skills Cursor genérica por `tool_name` (ex.: `rigging3d` quando existir `SKILL.md`) |
-| `gamedev_shared.gpu` | Utilitários GPU/memória (format_bytes, get_gpu_info, clear_cuda_memory, ...) |
-| `gamedev_shared.subprocess_utils` | Execução de ferramentas via subprocess (resolve_binary, run_cmd, RunResult) |
-| `gamedev_shared.env` | Constantes e helpers para variáveis de ambiente do monorepo (`TOOL_BINS`, `get_tool_bin`, …) |
-| `gamedev_shared.installer` | Classes base para instaladores (Python e Rust) |
-| `gamedev_shared.installer.registry` | Registry (ToolSpec, TOOLS, `find_monorepo_root`, `try_find_monorepo_root`) |
-| `gamedev_shared.installer.unified` | Instalador unificado — instala qualquer ferramenta (`gamedev-install` CLI) |
-| `gamedev_shared.installer.text3d_extras` | Pós-venv Text3D (nvdiffrast, `~/.config/text3d`, wrappers) |
-| `gamedev_shared.installer.part3d_extras` | Extras PyG (torch-scatter, torch-cluster) e resumo Part3D |
+## Modules
 
-## Exemplo de uso
+| Module | Description |
+|--------|-------------|
+| `gamedev_shared.logging` | Unified Rich/ANSI logger (info, warn, error, step, header, success) |
+| `gamedev_shared.cli_rich` | `rich-click`: `setup_rich_click`, `setup_rich_click_module` (returns `(click, rich_ok)`); all Python CLIs use the latter in `cli_rich.py` |
+| `gamedev_shared.hf` | HF token (`get_hf_token`) and cache text for Rich (`hf_home_display_rich`) — no `huggingface_hub` dependency |
+| `gamedev_shared.skill_install` | Generic Cursor Agent Skill install by `tool_name` (e.g. `rigging3d` when `SKILL.md` exists) |
+| `gamedev_shared.gpu` | GPU/memory helpers (`format_bytes`, `get_gpu_info`, `clear_cuda_memory`, …) |
+| `gamedev_shared.subprocess_utils` | Subprocess execution (`resolve_binary`, `run_cmd`, `RunResult`) |
+| `gamedev_shared.env` | Constants and helpers for monorepo env vars (`TOOL_BINS`, `get_tool_bin`, …) |
+| `gamedev_shared.installer` | Base classes for installers (Python and Rust) |
+| `gamedev_shared.installer.registry` | Registry (`ToolSpec`, `TOOLS`, `find_monorepo_root`, `try_find_monorepo_root`) |
+| `gamedev_shared.installer.unified` | Unified installer — installs any tool (`gamedev-install` CLI) |
+| `gamedev_shared.installer.text3d_extras` | Post-venv Text3D (nvdiffrast, `~/.config/text3d`, wrappers) |
+| `gamedev_shared.installer.part3d_extras` | PyG extras (torch-scatter, torch-cluster) and Part3D summary |
+
+## Usage example
 
 ```python
 from gamedev_shared.logging import get_logger
 
-log = get_logger("meu_modulo")
-log.info("Mensagem informativa")
-log.step("A processar item 1/10")
-log.success("Concluído com sucesso")
+log = get_logger("my_module")
+log.info("Info message")
+log.step("Processing item 1/10")
+log.success("Done")
 ```
 
 ```python
 from gamedev_shared.subprocess_utils import resolve_binary, run_cmd
 
 bin_path = resolve_binary("TEXT2D_BIN", "text2d")
-result = run_cmd([bin_path, "generate", "um gato"], verbose=True)
+result = run_cmd([bin_path, "generate", "a cat"], verbose=True)
 ```
 
-## Instalador unificado
+## Unified installer
 
-Ao instalar o pacote `gamedev-shared`, fica disponível o comando `gamedev-install`:
+Installing `gamedev-shared` exposes the `gamedev-install` command:
 
 ```bash
-gamedev-install --list                     # Listar ferramentas
-gamedev-install materialize                # Instalar Materialize (Rust)
-gamedev-install text2d                    # Cria projecto/.venv se necessário; wrappers usam esse Python
-gamedev-install all                        # Instalar tudo
+gamedev-install --list                     # List tools
+gamedev-install materialize                # Install Materialize (Rust)
+gamedev-install text2d                    # Creates project/.venv if needed; wrappers use that Python
+gamedev-install all                        # Install everything
 gamedev-install materialize --action uninstall
 ```
 
-Também pode ser executado sem `pip install` via scripts na raiz do monorepo:
+You can also run without `pip install` via scripts at the monorepo root:
 
 ```bash
 ./install.sh materialize     # Linux/macOS
 .\install.ps1 materialize    # Windows PowerShell
 ```
 
-## Instalação
+## Install
 
 ```bash
-# Dentro do monorepo (modo editável)
+# Inside the monorepo (editable)
 pip install -e Shared/
 
-# Com suporte GPU
+# With GPU support
 pip install -e "Shared/[gpu]"
 
-# Com CLI (click + rich-click)
+# With CLI (click + rich-click)
 pip install -e "Shared/[cli]"
 ```
 
 ## Extras
 
-- `gpu` — torch (para `gamedev_shared.gpu`)
-- `cli` — click + rich-click (para `gamedev_shared.cli_rich`)
+- `gpu` — torch (for `gamedev_shared.gpu`)
+- `cli` — click + rich-click (for `gamedev_shared.cli_rich`)
 - `dev` — pytest
 
-## Desenvolvimento
+## Development
 
 ```bash
-# Instalar com extras de dev
+# Editable install with dev extras
 pip install -e "Shared/[dev]"
 
-# Correr testes
+# Tests
 pytest Shared/tests/ -v
 
-# Ou via Makefile na raiz do monorepo
+# Or Makefile at monorepo root
 make test-shared
 ```
 
-## Variáveis de Ambiente
+## Environment variables
 
-Definidas em `gamedev_shared.env` e usadas por todos os pacotes do monorepo:
+Defined in `gamedev_shared.env` and used across packages:
 
-| Variável | Descrição |
-|----------|-----------|
-| `TEXT2D_BIN` | Caminho para o binário `text2d` (fallback: `text2d` no `PATH`) |
-| `TEXT3D_BIN` | Caminho para o binário `text3d` |
-| `TEXT2SOUND_BIN` | Caminho para o binário `text2sound` |
-| `TEXTURE2D_BIN` | Caminho para o binário `texture2d` |
-| `SKYMAP2D_BIN` | Caminho para o binário `skymap2d` |
-| `RIGGING3D_BIN` | Caminho para o binário `rigging3d` |
-| `GAMEASSETS_BIN` | Caminho para o binário `gameassets` |
-| `MATERIALIZE_BIN` | Caminho para o binário `materialize` |
-| `HF_TOKEN` / `HUGGINGFACEHUB_API_TOKEN` | Token Hugging Face (ver também `gamedev_shared.hf`) |
-| `HF_HOME` | Diretório de cache Hugging Face |
-| `PYTORCH_CUDA_ALLOC_CONF` | Configuração de alocação CUDA (auto-definida pelo monorepo se vazia) |
+| Variable | Description |
+|----------|-------------|
+| `TEXT2D_BIN` | Path to `text2d` binary (fallback: `text2d` on `PATH`) |
+| `TEXT3D_BIN` | Path to `text3d` |
+| `TEXT2SOUND_BIN` | Path to `text2sound` |
+| `TEXTURE2D_BIN` | Path to `texture2d` |
+| `SKYMAP2D_BIN` | Path to `skymap2d` |
+| `RIGGING3D_BIN` | Path to `rigging3d` |
+| `GAMEASSETS_BIN` | Path to `gameassets` |
+| `MATERIALIZE_BIN` | Path to `materialize` |
+| `HF_TOKEN` / `HUGGINGFACEHUB_API_TOKEN` | Hugging Face token (see also `gamedev_shared.hf`) |
+| `HF_HOME` | Hugging Face cache directory |
+| `PYTORCH_CUDA_ALLOC_CONF` | CUDA allocator config (auto-set by the monorepo if empty) |
