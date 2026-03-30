@@ -127,9 +127,7 @@ def _run(
     env: dict[str, str] | None = None,
     python_bin: str | None = None,
 ) -> int:
-    return subprocess.run(
-        cmd, cwd=str(root), env=_make_env(root, env, python_bin=python_bin)
-    ).returncode
+    return subprocess.run(cmd, cwd=str(root), env=_make_env(root, env, python_bin=python_bin)).returncode
 
 
 def _run_bash(
@@ -347,7 +345,9 @@ print(f'prep: {len(mesh.vertices)} verts, {len(mesh.faces)} faces')
     try:
         r = _sp.run(
             [python_bin, "-c", script, str(input_path), str(output_path)],
-            capture_output=True, text=True, timeout=120,
+            capture_output=True,
+            text=True,
+            timeout=120,
         )
         if r.returncode == 0 and output_path.is_file() and output_path.stat().st_size > 0:
             console.print(f"[dim]{r.stdout.strip()}[/dim]")
@@ -365,7 +365,9 @@ print(f'prep: {len(mesh.vertices)} verts, {len(mesh.faces)} faces')
 @click.option("--work-dir", type=click.Path(file_okay=False, path_type=Path), default=None, help="Dir intermédio")
 @click.option("--seed", type=int, default=12345, show_default=True)
 @click.option("--keep-temp", is_flag=True, help="Não apagar work-dir temporário")
-@click.option("--smooth-iterations", type=int, default=2, show_default=True, help="Passagens de suavização Laplaciana no merge.")
+@click.option(
+    "--smooth-iterations", type=int, default=2, show_default=True, help="Passagens de suavização Laplaciana no merge."
+)
 @click.option("--groups-per-vertex", type=int, default=8, show_default=True, help="Influências de osso por vértice.")
 @click.option("--no-prep", is_flag=True, help="Não preparar mesh (skip remesh/repair).")
 @click.pass_context
@@ -412,8 +414,7 @@ def pipeline_cmd(
         )
         if rc != 0 or not skel.is_file() or skel.stat().st_size == 0:
             raise click.ClickException(
-                "skeleton falhou (código %s ou GLB em falta). Confirma deps inferência, pesos HF e logs acima."
-                % (rc,)
+                "skeleton falhou (código %s ou GLB em falta). Confirma deps inferência, pesos HF e logs acima." % (rc,)
             )
 
         rc = _run_bash(
@@ -424,8 +425,7 @@ def pipeline_cmd(
         )
         if rc != 0 or not skin.is_file() or skin.stat().st_size == 0:
             raise click.ClickException(
-                "skin falhou (código %s ou GLB em falta). Confirma spconv, VRAM e logs acima."
-                % (rc,)
+                "skin falhou (código %s ou GLB em falta). Confirma spconv, VRAM e logs acima." % (rc,)
             )
 
         merge_env = {

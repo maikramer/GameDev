@@ -243,10 +243,16 @@ class SkinWriter(BasePredictionWriter):
             _parents = parents_list[id]
             parents = []
             for i in range(J):
-                if _parents[i] == -1:
+                p = int(_parents[i])
+                if p == -1 or p >= J:
                     parents.append(None)
                 else:
-                    parents.append(_parents[i])
+                    parents.append(p)
+
+            _J_skin = skin_pred.shape[1] if skin_pred.ndim >= 2 else 0
+            for _bi in range(len(parents)):
+                if parents[_bi] is not None and parents[_bi] >= _J_skin:
+                    parents[_bi] = None
 
             skin_resampled = reskin(
                 sampled_vertices=sampled_vertices[id],

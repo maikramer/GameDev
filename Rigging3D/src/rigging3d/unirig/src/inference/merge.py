@@ -318,7 +318,10 @@ def make_armature(
     
     argsorted = np.argsort(-skin, axis=1)
     vertex_group_reweight = skin[np.arange(skin.shape[0])[..., None], argsorted]
-    vertex_group_reweight = vertex_group_reweight / vertex_group_reweight[..., :group_per_vertex].sum(axis=1)[...,None]
+    group_per_vertex = min(group_per_vertex, skin.shape[1])
+    denom = vertex_group_reweight[..., :group_per_vertex].sum(axis=1)[..., None]
+    denom = np.where(denom == 0, 1.0, denom)
+    vertex_group_reweight = vertex_group_reweight / denom
     vertex_group_reweight = np.nan_to_num(vertex_group_reweight)
     tree = cKDTree(vertices)
     for ob in objects:
@@ -361,13 +364,14 @@ def make_armature(
         # Top-k + renormalize per vertex of this mesh
         mesh_argsorted = np.argsort(-mesh_skin, axis=1)
         mesh_reweight = mesh_skin[np.arange(len(mesh_skin))[:, None], mesh_argsorted]
-        top_sum = mesh_reweight[:, :group_per_vertex].sum(axis=1, keepdims=True)
+        _gpv = min(group_per_vertex, mesh_skin.shape[1])
+        top_sum = mesh_reweight[:, :_gpv].sum(axis=1, keepdims=True)
         top_sum[top_sum == 0] = 1.0
         mesh_reweight = mesh_reweight / top_sum
         mesh_reweight = np.nan_to_num(mesh_reweight)
 
         for v in tqdm(range(len(n_vertices))):
-            for ii in range(group_per_vertex):
+            for ii in range(_gpv):
                 i = mesh_argsorted[v, ii]
                 if i >= len(names):
                     continue

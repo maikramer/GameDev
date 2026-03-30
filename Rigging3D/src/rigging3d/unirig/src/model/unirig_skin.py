@@ -346,7 +346,7 @@ class UniRigSkin(ModelSpec):
         B = vertices.shape[0]
         N = vertices.shape[1]
         J = joints.shape[1]
-        
+
         assert vertices.dim() == 3
         assert normals.dim() == 3
         
@@ -411,7 +411,7 @@ class UniRigSkin(ModelSpec):
                 num = num_bones[b]
                 for i in range(num):
                     p = parents[b, i]
-                    if p < 0:
+                    if p < 0 or p >= J:
                         continue
                     skin_mask[b, :, p] += skin_mask[b, :, i]
         for indices in pack:

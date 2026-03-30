@@ -290,8 +290,11 @@ class Exporter():
         vertex_group_reweight = skin[np.arange(skin.shape[0])[..., None], argsorted]
         if group_per_vertex == -1:
             group_per_vertex = vertex_group_reweight.shape[-1]
+        group_per_vertex = min(group_per_vertex, skin.shape[1])
         if not do_not_normalize:
-            vertex_group_reweight = vertex_group_reweight / vertex_group_reweight[..., :group_per_vertex].sum(axis=1)[...,None]
+            denom = vertex_group_reweight[..., :group_per_vertex].sum(axis=1)[..., None]
+            denom = np.where(denom == 0, 1.0, denom)
+            vertex_group_reweight = vertex_group_reweight / denom
 
         for v, w in enumerate(skin):
             for ii in range(group_per_vertex):
@@ -324,7 +327,7 @@ class Exporter():
         for c in bpy.data.textures:
             bpy.data.textures.remove(c)
     
-    def _export_fbx(
+    def _export_rigged(
         self,
         path: str,
         vertices: Union[ndarray, None],
@@ -342,9 +345,7 @@ class Exporter():
         extrude_from_parent: bool=True,
         tails: Union[ndarray, None]=None,
     ):
-        '''
-        Requires bpy installed
-        '''
+        """Exporta mesh rigada via bpy. Formato decidido pela extensão do *path* (.glb/.gltf/.fbx)."""
         import bpy # type: ignore
         self._safe_make_dir(path)
         self._clean_bpy()
@@ -364,15 +365,17 @@ class Exporter():
             extrude_from_parent=extrude_from_parent,
             tails=tails,
         )
-        
+
         ext = os.path.splitext(path)[1].lower()
         if ext == ".glb":
             bpy.ops.export_scene.gltf(filepath=path, export_format="GLB", use_selection=False, export_all_influences=True)
         elif ext == ".gltf":
             bpy.ops.export_scene.gltf(filepath=path, export_format="GLTF_SEPARATE", use_selection=False, export_all_influences=True)
         else:
-            # FBX por defeito (ext .fbx ou outro)
             bpy.ops.export_scene.fbx(filepath=path, check_existing=False, add_leaf_bones=False)
+
+    # Alias legado mantido para compatibilidade com código UniRig upstream
+    _export_fbx = _export_rigged
     
     def _export_render(
         self,

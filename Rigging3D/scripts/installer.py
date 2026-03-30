@@ -74,18 +74,18 @@ class Rigging3DInstaller(PythonProjectInstaller):
         extras_lines = []
         if not self.with_inference:
             extras_lines.append(
-                '[dim]Setup completo (inferência):[/dim] bash scripts/setup.sh'
+                "[dim]Setup completo (inferência):[/dim] bash scripts/setup.sh"
                 if self.logger.rich_available
                 else "Setup completo (inferência): bash scripts/setup.sh"
             )
             extras_lines.append(
-                '[dim]Ou: python scripts/installer.py --use-venv --inference[/dim]'
+                "[dim]Ou: python scripts/installer.py --use-venv --inference[/dim]"
                 if self.logger.rich_available
                 else "Ou: python scripts/installer.py --use-venv --inference"
             )
         else:
             extras_lines.append(
-                '[dim]GPU/NVML:[/dim] se torch ficou em CPU, RIGGING3D_FORCE_CUDA=1 ou bash scripts/setup.sh'
+                "[dim]GPU/NVML:[/dim] se torch ficou em CPU, RIGGING3D_FORCE_CUDA=1 ou bash scripts/setup.sh"
                 if self.logger.rich_available
                 else "GPU/NVML: RIGGING3D_FORCE_CUDA=1 ou bash scripts/setup.sh"
             )
@@ -135,7 +135,9 @@ spconv, torch-scatter/cluster.
         action="store_true",
         help="Cria .venv no projecto se necessário.",
     )
-    parser.add_argument("--inference", action="store_true", help="Instalar extras inference + deps CUDA (spconv, PyG, etc.)")
+    parser.add_argument(
+        "--inference", action="store_true", help="Instalar extras inference + deps CUDA (spconv, PyG, etc.)"
+    )
     parser.add_argument("--skip-deps", action="store_true", help="Avisos mínimos de sistema")
     parser.add_argument("--skip-models", action="store_true", help="Não mostrar dicas extra de ambiente")
     parser.add_argument("--force", action="store_true", help="Reinstalar mesmo se já existir")

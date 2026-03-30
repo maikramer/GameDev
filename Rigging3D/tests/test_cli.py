@@ -174,9 +174,7 @@ class TestSkin:
         monkeypatch.setenv("RIGGING3D_ROOT", str(ur))
         captured_args: list[str] = []
 
-        def fake_run_bash(
-            _root: Path, _script: str, args: list[str], *, python_bin: str | None = None
-        ) -> int:
+        def fake_run_bash(_root: Path, _script: str, args: list[str], *, python_bin: str | None = None) -> int:
             captured_args.extend(args)
             return 0
 

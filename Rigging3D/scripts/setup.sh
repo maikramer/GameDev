@@ -1,4 +1,6 @@
 #!/bin/bash
+# Conveniência para dev: inferência completa no venv local. Instalação oficial: ../../docs/INSTALLING.md (`./install.sh rigging3d` na raiz GameDev).
+#
 # Rigging3D — setup completo de inferência
 # Cria .venv, instala PyTorch+CUDA, extras inference, spconv, torch-scatter/cluster.
 #

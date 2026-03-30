@@ -4,16 +4,27 @@ CLI de **auto-rigging 3D** baseado no [UniRig](https://github.com/VAST-AI-Resear
 
 ## Instalação
 
-### Setup automático (recomendado)
+### Oficial (monorepo)
 
-Um único comando instala tudo: venv, PyTorch+CUDA, dependências de inferência, spconv e torch-scatter/cluster.
+Na **raiz** do repositório GameDev:
+
+```bash
+cd /caminho/para/GameDev
+./install.sh rigging3d
+```
+
+Este comando **instala sempre** a stack de inferência completa (PyTorch CUDA, `bpy`, Open3D, spconv, PyG, etc.) — mesmo comportamento que `gamedev_shared.installer.unified`. Guia: [docs/INSTALLING.md](../docs/INSTALLING.md).
+
+### Manual / desenvolvimento (`scripts/setup.sh`)
+
+Um único comando no directório do projecto: venv, PyTorch+CUDA, dependências de inferência, spconv e torch-scatter/cluster.
 
 ```bash
 cd Rigging3D
 bash scripts/setup.sh
 ```
 
-O script auto-detecta a versão CUDA do driver e instala as dependências correctas. Requer **Python 3.11** (wheels `bpy==5.0.1` e **Open3D** no PyPI; ver nota sobre Blender 5.1 abaixo).
+O script auto-detecta a versão CUDA do driver. Requer **Python 3.11** (wheels `bpy==5.0.1` e **Open3D** no PyPI; ver nota sobre Blender 5.1 abaixo).
 
 ```bash
 bash scripts/setup.sh --python python3.11    # especificar interpretador
@@ -22,16 +33,19 @@ bash scripts/setup.sh --force                # recriar venv do zero
 
 **Atenção:** o pipeline usa `torch.nn.functional.scaled_dot_product_attention` (SDPA) do PyTorch — não é necessário o pacote `flash-attn`.
 
-### Alternativas
+### Atalho local (`scripts/installer.py`)
+
+- **`./install.sh rigging3d`** (na raiz) equivale a **`python3 scripts/installer.py --inference`** nesta pasta (inferência completa).
+- **Sem** `--inference`: só `pip install -e` + wrappers; o sumário indica como completar (útil para CI mínimo).
 
 ```bash
-# Via install.sh do monorepo (instala inferência completa: PyTorch CUDA, bpy, Open3D, spconv, PyG):
-./install.sh rigging3d
+cd Rigging3D
+python3 scripts/installer.py --inference
+```
 
-# Via installer.py (CLI + inferência — mesmo bundle que o install.sh para Rigging3D):
-python3 scripts/installer.py --use-venv --inference
+### Manual (passo a passo)
 
-# Manual (passo a passo):
+```bash
 cd Rigging3D && python3.11 -m venv .venv && source .venv/bin/activate
 pip install -e ".[inference]"
 ```
