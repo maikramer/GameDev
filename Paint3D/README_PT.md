@@ -4,7 +4,7 @@
 
 Texturização 3D: **Hunyuan3D-Paint 2.1** (multivista PBR no GLB exportado) + **Upscale IA** (Real-ESRGAN).
 
-É necessário o código **Hunyuan3D-2.1**: submodule `third_party/Hunyuan3D-2.1` ou variável `HUNYUAN3D_21_ROOT`. Ver [docs/PAINT_SETUP.md](docs/PAINT_SETUP.md).
+O código **`hy3dpaint`** está incluído no Paint3D em `Paint3D/src/paint3d/hy3dpaint/`; os pesos PBR são descarregados sob demanda do Hugging Face (`tencent/Hunyuan3D-2.1`, pasta `hunyuan3d-paintpbr-v2-1`). Ver [docs/PAINT_SETUP.md](docs/PAINT_SETUP.md).
 
 ## Instalação
 
@@ -17,7 +17,7 @@ cd /caminho/para/GameDev
 ./install.sh paint3d
 ```
 
-Instala o pacote no `Paint3D/.venv`, PyTorch, **nvdiffrast**, submodule **Hunyuan3D-2.1**, pesos **Real-ESRGAN** quando possível, e wrappers. Ver [docs/INSTALLING_PT.md](../docs/INSTALLING_PT.md) · [EN](../docs/INSTALLING.md)
+Instala o pacote no `Paint3D/.venv`, PyTorch, **nvdiffrast**, pesos **Real-ESRGAN** quando possível, e wrappers. Ver [docs/INSTALLING_PT.md](../docs/INSTALLING_PT.md) · [EN](../docs/INSTALLING.md)
 
 ### Manual / avançado
 
@@ -54,7 +54,7 @@ textured = apply_hunyuan_paint(mesh, "reference.png")
 ## Dependências
 
 - **gamedev-shared** (monorepo GameDev — GPU, logging)
-- **Hunyuan3D-2.1 `hy3dpaint`** (submodule ou `HUNYUAN3D_21_ROOT`)
+- **Hunyuan3D-2.1 `hy3dpaint`** (incluído em `src/paint3d/hy3dpaint/`; pesos HF sob demanda)
 - **pymeshlab**, **xatlas**, **omegaconf**, **basicsr**, **realesrgan**
 - **nvdiffrast** (NVIDIA — shim do rasterizador)
 - **spandrel** (opcional — upscale IA no GLB exportado)

@@ -1,9 +1,10 @@
 """
 Textura com Hunyuan3D-Paint 2.1 (``hy3dpaint.textureGenPipeline.Hunyuan3DPaintPipeline``).
 
-Requer o código em ``third_party/Hunyuan3D-2.1/hy3dpaint`` (submodule) ou ``HUNYUAN3D_21_ROOT``,
-pesos em Hugging Face (``tencent/Hunyuan3D-2.1``, pasta ``hunyuan3d-paintpbr-v2-1``),
-e o checkpoint Real-ESRGAN em ``hy3dpaint/ckpt/RealESRGAN_x4plus.pth``.
+Código vendored em ``paint3d.hy3dpaint`` (de Tencent-Hunyuan/Hunyuan3D-2.1).
+Pesos em Hugging Face (``tencent/Hunyuan3D-2.1``, pasta ``hunyuan3d-paintpbr-v2-1``),
+descarregados sob demanda via ``huggingface_hub.snapshot_download``.
+Checkpoint Real-ESRGAN em ``hy3dpaint/ckpt/RealESRGAN_x4plus.pth``.
 
 O rasterizador CUDA é fornecido por **nvdiffrast** (NVIDIA), registado como
 ``custom_rasterizer`` em ``sys.modules`` antes de importar o renderer 2.1.
@@ -23,7 +24,12 @@ from PIL import Image
 from gamedev_shared.gpu import clear_cuda_memory
 
 from . import defaults as _defaults
-from .hy3d21_paths import default_realesrgan_ckpt, ensure_hy3dpaint_on_path, resolve_hy3dpaint_root
+from .hy3d21_paths import (
+    default_cfg_yaml,
+    ensure_hy3dpaint_on_path,
+    ensure_realesrgan_ckpt,
+    resolve_hy3dpaint_root,
+)
 from .utils.mesh_io import load_mesh_trimesh, save_glb
 
 
@@ -52,23 +58,19 @@ def check_paint_rasterizer_available() -> None:
         raise RuntimeError(
             "Rasterizador indisponível: nem nvdiffrast nem custom_rasterizer foram encontrados.\n"
             "Instala nvdiffrast: pip install git+https://github.com/NVlabs/nvdiffrast.git --no-build-isolation\n"
-            "Ou compila hy3dpaint/custom_rasterizer (ver PAINT_SETUP.md)."
+            "Ou compila custom_rasterizer (ver PAINT_SETUP.md)."
         ) from e
 
 
 def check_hunyuan3d21_environment() -> tuple[bool, str]:
     """
-    Verifica clone hy3dpaint e peso Real-ESRGAN.
+    Verifica código vendored e peso Real-ESRGAN.
     Devolve (ok, mensagem ou caminho do hy3dpaint).
     """
-    try:
-        root = resolve_hy3dpaint_root()
-    except FileNotFoundError as e:
-        return False, str(e)
-    ckpt = default_realesrgan_ckpt(root)
-    if not ckpt.is_file():
-        return False, f"Real-ESRGAN em falta: {ckpt} (ver PAINT_SETUP.md)"
-    cfg = root / "cfgs" / "hunyuan-paint-pbr.yaml"
+    root = resolve_hy3dpaint_root()
+    if not (root / "textureGenPipeline.py").is_file():
+        return False, f"Código hy3dpaint em falta: {root / 'textureGenPipeline.py'}"
+    cfg = default_cfg_yaml()
     if not cfg.is_file():
         return False, f"Config em falta: {cfg}"
     return True, str(root)
@@ -98,10 +100,10 @@ def apply_hunyuan_paint(
         raise RuntimeError(msg)
 
     hy3dpaint_root = ensure_hy3dpaint_on_path()
-    cfg_yaml = hy3dpaint_root / "cfgs" / "hunyuan-paint-pbr.yaml"
-    ckpt_path = default_realesrgan_ckpt(hy3dpaint_root)
+    cfg_yaml = default_cfg_yaml()
+    ckpt_path = ensure_realesrgan_ckpt()
 
-    from textureGenPipeline import Hunyuan3DPaintConfig, Hunyuan3DPaintPipeline
+    from .hy3dpaint.textureGenPipeline import Hunyuan3DPaintConfig, Hunyuan3DPaintPipeline
 
     if verbose:
         print(

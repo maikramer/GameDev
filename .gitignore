@@ -45,6 +45,9 @@ Thumbs.db
 **/outputs/
 *.log
 
+# Vendored hy3dpaint checkpoints (downloaded on-demand)
+Paint3D/src/paint3d/hy3dpaint/ckpt/
+
 # Rascunhos na raiz dos subprojetos
 **/Untitled
 

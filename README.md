@@ -141,8 +141,8 @@ text3d --help
 # 4. Part3D (semantic parts; torch-scatter/cluster after PyTorch — see Part3D/README)
 cd ../Part3D && python -m venv .venv && source .venv/bin/activate && pip install -e . && part3d --help
 
-# 5. Paint3D (Hunyuan3D-Paint 2.1; submodule + nvdiffrast — see Paint3D/docs/PAINT_SETUP.md)
-cd .. && git submodule update --init third_party/Hunyuan3D-2.1 && cd Paint3D
+# 5. Paint3D (Hunyuan3D-Paint 2.1; vendored code in Paint3D/src/paint3d/hy3dpaint/ + nvdiffrast — see Paint3D/docs/PAINT_SETUP.md)
+cd ../Paint3D
 python -m venv .venv && source .venv/bin/activate
 pip install torch torchvision
 pip install -r config/requirements.txt && pip install -e .
@@ -213,7 +213,6 @@ The monorepo uses environment variables to locate binaries and configure behavio
 | `TEXT3D_EXPORT_ROTATION_X_DEG` | Text3D | X rotation when exporting mesh (degrees) |
 | `PAINT3D_ALLOW_SHARED_GPU` | Paint3D | Allow GPU sharing with other processes |
 | `PAINT3D_GPU_KILL_OTHERS` | Paint3D | Control termination of competing GPU processes |
-| `HUNYUAN3D_21_ROOT` | Paint3D | Raiz do clone Hunyuan3D-2.1 (ou pasta `hy3dpaint`) se não usares `third_party/Hunyuan3D-2.1` |
 | `RIGGING3D_ROOT` | Rigging3D | Inference tree root (default: bundled package) |
 | `RIGGING3D_PYTHON` | Rigging3D | Python interpreter for the inference environment |
 

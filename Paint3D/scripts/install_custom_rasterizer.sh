@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
-# Compila e instala custom_rasterizer (Hunyuan3D-Paint 2.1 / hy3dpaint) no venv ativo.
+# Compila e instala a extensão CUDA opcional custom_rasterizer (upstream Hunyuan3D-Paint 2.1).
+#
+# O Paint3D usa por defeito o shim **nvdiffrast**; este script só é necessário se quiseres
+# a extensão nativa. O código em custom_rasterizer **não** está vendored — obtém-no clonando
+# https://github.com/Tencent-Hunyuan/Hunyuan3D-2.1 e aponta HUNYUAN3D_21_CUSTOM_RASTER para
+# hy3dpaint/custom_rasterizer nesse clone.
 #
 # Uso (a partir da raiz Paint3D):
 #   source .venv/bin/activate
+#   export HUNYUAN3D_21_CUSTOM_RASTER=/caminho/para/Hunyuan3D-2.1/hy3dpaint/custom_rasterizer
 #   bash scripts/install_custom_rasterizer.sh
 #
 # Requisitos: nvcc (CUDA Toolkit), PyTorch CUDA no venv.
@@ -41,13 +47,19 @@ if ! command -v nvcc &>/dev/null; then
   fi
 fi
 
-MONOREPO="$(cd "$ROOT/.." && pwd)"
-CR_DIR="${HUNYUAN3D_21_CUSTOM_RASTER:-$MONOREPO/third_party/Hunyuan3D-2.1/hy3dpaint/custom_rasterizer}"
+if [[ -z "${HUNYUAN3D_21_CUSTOM_RASTER:-}" ]]; then
+  echo "[ERROR] Define HUNYUAN3D_21_CUSTOM_RASTER para o caminho de hy3dpaint/custom_rasterizer" >&2
+  echo "  noutro clone de Hunyuan3D-2.1 (a extensão CUDA não está vendored no Paint3D)." >&2
+  echo "  Exemplo: git clone https://github.com/Tencent-Hunyuan/Hunyuan3D-2.1.git && \\" >&2
+  echo "    export HUNYUAN3D_21_CUSTOM_RASTER=\$PWD/Hunyuan3D-2.1/hy3dpaint/custom_rasterizer" >&2
+  echo "  Recomendado: usar nvdiffrast (shim) — ver docs/PAINT_SETUP.md" >&2
+  exit 1
+fi
+
+CR_DIR="$HUNYUAN3D_21_CUSTOM_RASTER"
 
 if [[ ! -d "$CR_DIR" ]]; then
   echo "[ERROR] custom_rasterizer não encontrado: $CR_DIR" >&2
-  echo "  Na raiz do monorepo: git submodule update --init third_party/Hunyuan3D-2.1" >&2
-  echo "  Ou define HUNYUAN3D_21_CUSTOM_RASTER para hy3dpaint/custom_rasterizer" >&2
   exit 1
 fi
 

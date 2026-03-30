@@ -1,4 +1,4 @@
-"""Resolve hy3dpaint sem importar o pacote ``paint3d`` completo (evita deps pesadas na recolha)."""
+"""Testa resolução do hy3dpaint vendored (sem deps pesadas)."""
 
 from __future__ import annotations
 
@@ -15,9 +15,15 @@ def _load_hy3d21_paths():
     return mod
 
 
-def test_resolve_hy3dpaint_root_points_at_texture_gen_pipeline():
+def test_resolve_hy3dpaint_root_points_at_vendored_code():
     mod = _load_hy3d21_paths()
     root = mod.resolve_hy3dpaint_root()
     assert root.is_dir()
     assert (root / "textureGenPipeline.py").is_file()
     assert (root / "cfgs" / "hunyuan-paint-pbr.yaml").is_file()
+
+
+def test_default_cfg_yaml_exists():
+    mod = _load_hy3d21_paths()
+    cfg = mod.default_cfg_yaml()
+    assert cfg.is_file()

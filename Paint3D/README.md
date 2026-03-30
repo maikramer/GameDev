@@ -4,7 +4,7 @@
 
 3D texturing: **Hunyuan3D-Paint 2.1** (multiview PBR in the exported GLB) + optional **AI upscale** (Real-ESRGAN).
 
-Requires the **Hunyuan3D-2.1** tree: submodule `third_party/Hunyuan3D-2.1` or env `HUNYUAN3D_21_ROOT`. See [docs/PAINT_SETUP.md](docs/PAINT_SETUP.md).
+Uses vendored **`hy3dpaint`** under `Paint3D/src/paint3d/hy3dpaint/`; PBR weights download on demand from Hugging Face (`tencent/Hunyuan3D-2.1`, folder `hunyuan3d-paintpbr-v2-1`). See [docs/PAINT_SETUP.md](docs/PAINT_SETUP.md).
 
 ## Installation
 
@@ -17,7 +17,7 @@ cd /path/to/GameDev
 ./install.sh paint3d
 ```
 
-Installs the package in `Paint3D/.venv`, PyTorch, **nvdiffrast**, initializes submodule **Hunyuan3D-2.1**, downloads **Real-ESRGAN** weights when possible, and adds wrappers. See [docs/INSTALLING.md](../docs/INSTALLING.md).
+Installs the package in `Paint3D/.venv`, PyTorch, **nvdiffrast**, downloads **Real-ESRGAN** weights when possible, and adds wrappers. See [docs/INSTALLING.md](../docs/INSTALLING.md).
 
 ### Manual / advanced
 
@@ -54,7 +54,7 @@ textured = apply_hunyuan_paint(mesh, "reference.png")
 ## Dependencies
 
 - **gamedev-shared** (GameDev monorepo — GPU, logging)
-- **Hunyuan3D-2.1 `hy3dpaint`** (submodule or `HUNYUAN3D_21_ROOT`) — texture pipeline
+- **Hunyuan3D-2.1 `hy3dpaint`** (vendored in `src/paint3d/hy3dpaint/`) — texture pipeline; HF weights on demand
 - **pymeshlab**, **xatlas**, **omegaconf**, **basicsr**, **realesrgan** (super-resolution inside paint)
 - **nvdiffrast** (NVIDIA — differentiable rasterizer shim)
 - **spandrel** (optional — AI upscale on exported GLB)

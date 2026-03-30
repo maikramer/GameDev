@@ -1,5 +1,11 @@
 """
-Resolve the Hunyuan3D-2.1 ``hy3dpaint`` tree (submodule or ``HUNYUAN3D_21_ROOT``).
+Resolve o código ``hy3dpaint`` vendored em ``paint3d.hy3dpaint``.
+
+O código vem de https://github.com/Tencent-Hunyuan/Hunyuan3D-2.1 (pasta ``hy3dpaint/``),
+integrado directamente no pacote — sem submodule.
+
+Os **modelos** (pesos) são descarregados sob demanda via ``huggingface_hub.snapshot_download``
+de ``tencent/Hunyuan3D-2.1`` (pasta ``hunyuan3d-paintpbr-v2-1``).
 """
 
 from __future__ import annotations
@@ -8,42 +14,14 @@ import os
 import sys
 from pathlib import Path
 
-_ENV_ROOT = "HUNYUAN3D_21_ROOT"
+_REALESRGAN_URL = (
+    "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth"
+)
 
 
 def resolve_hy3dpaint_root() -> Path:
-    """
-    Return the directory that contains ``textureGenPipeline.py`` (i.e. ``hy3dpaint``).
-
-    Resolution order:
-    1. ``HUNYUAN3D_21_ROOT`` pointing to repo root (``.../Hunyuan3D-2.1``) or to ``hy3dpaint`` directly.
-    2. Monorepo submodule ``<GameDev>/third_party/Hunyuan3D-2.1/hy3dpaint`` relative to this package.
-    """
-    raw = os.environ.get(_ENV_ROOT, "").strip()
-    if raw:
-        p = Path(raw).expanduser().resolve()
-        if p.name == "hy3dpaint" and p.is_dir():
-            return p
-        hy = p / "hy3dpaint"
-        if hy.is_dir():
-            return hy.resolve()
-        raise FileNotFoundError(
-            f"{_ENV_ROOT}={raw!r} não contém a pasta hy3dpaint. "
-            "Define o caminho para a raiz do clone Hunyuan3D-2.1 ou para …/hy3dpaint."
-        )
-
-    here = Path(__file__).resolve().parent  # .../Paint3D/src/paint3d
-    # paint3d → src → Paint3D (project) → GameDev (monorepo)
-    game_dev = here.parent.parent.parent
-    sub = game_dev / "third_party" / "Hunyuan3D-2.1" / "hy3dpaint"
-    if sub.is_dir() and (sub / "textureGenPipeline.py").is_file():
-        return sub.resolve()
-
-    raise FileNotFoundError(
-        "Código Hunyuan3D-2.1 (hy3dpaint) não encontrado.\n"
-        "  • Inicializa o submodule: git submodule update --init third_party/Hunyuan3D-2.1\n"
-        f"  • Ou define {_ENV_ROOT}=/caminho/para/Hunyuan3D-2.1 (ou …/hy3dpaint)"
-    )
+    """Return the vendored ``hy3dpaint`` directory inside this package."""
+    return Path(__file__).resolve().parent / "hy3dpaint"
 
 
 def ensure_hy3dpaint_on_path() -> Path:
@@ -55,5 +33,23 @@ def ensure_hy3dpaint_on_path() -> Path:
     return root
 
 
-def default_realesrgan_ckpt(hy3dpaint_root: Path) -> Path:
-    return hy3dpaint_root / "ckpt" / "RealESRGAN_x4plus.pth"
+def default_realesrgan_ckpt() -> Path:
+    """Default path for the Real-ESRGAN checkpoint (inside HF cache or local ckpt dir)."""
+    return resolve_hy3dpaint_root() / "ckpt" / "RealESRGAN_x4plus.pth"
+
+
+def ensure_realesrgan_ckpt() -> Path:
+    """Download Real-ESRGAN checkpoint if missing and return its path."""
+    ckpt = default_realesrgan_ckpt()
+    if ckpt.is_file():
+        return ckpt
+    ckpt.parent.mkdir(parents=True, exist_ok=True)
+    import urllib.request
+    print(f"[Paint3D] A descarregar RealESRGAN_x4plus.pth → {ckpt}")
+    urllib.request.urlretrieve(_REALESRGAN_URL, ckpt)
+    return ckpt
+
+
+def default_cfg_yaml() -> Path:
+    """Path to the vendored hunyuan-paint-pbr config YAML."""
+    return resolve_hy3dpaint_root() / "cfgs" / "hunyuan-paint-pbr.yaml"
