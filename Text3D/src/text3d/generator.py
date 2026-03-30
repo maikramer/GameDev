@@ -272,6 +272,59 @@ class HunyuanTextTo3DGenerator:
             return best_mesh, best_image  # type: ignore[return-value]
         return best_mesh  # type: ignore[return-value]
 
+    def generate_from_image_with_quality_check(
+        self,
+        image: str | Path | Image.Image,
+        *,
+        max_retries: int = 3,
+        hy_seed: int | None = None,
+        on_retry: Any = None,
+        **kwargs: Any,
+    ) -> trimesh.Trimesh:
+        """Image-to-3D com verificação de qualidade e retry (seed Hunyuan diferente).
+
+        Útil quando a imagem é fixa (batch GameAssets) mas o Hunyuan é estocástico.
+        """
+        from .utils.mesh_repair import mesh_quality_check
+
+        best_mesh: trimesh.Trimesh | None = None
+        best_score: float = -1.0
+        seed = hy_seed
+
+        for attempt in range(1, max_retries + 1):
+            self._log(f"Tentativa {attempt}/{max_retries} (hy_seed={seed})")
+            mesh = self.generate_from_image(image, hy_seed=seed, **kwargs)
+            quality = mesh_quality_check(mesh)
+            score = quality["flatness_ratio"]
+            if quality["passed"]:
+                score += 1.0
+
+            self._log(
+                f"  Qualidade: {'PASS' if quality['passed'] else 'FAIL'} "
+                f"(flatness={quality['flatness_ratio']:.3f}, "
+                f"plates={len(quality['plate_axes'])}, "
+                f"issues={quality['issues']})"
+            )
+
+            if score > best_score:
+                best_score = score
+                best_mesh = mesh
+
+            if quality["passed"]:
+                break
+
+            if attempt < max_retries:
+                import random
+
+                old_seed = seed
+                seed = random.randint(0, 2**31)
+                if on_retry:
+                    on_retry(attempt, seed, quality)
+                self._log(f"  Retry: hy_seed {old_seed} → {seed}")
+
+        assert best_mesh is not None
+        return best_mesh
+
     def generate_from_image(
         self,
         image: str | Path | Image.Image,

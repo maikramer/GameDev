@@ -454,7 +454,7 @@ def generate(
     if not from_image:
         opt_label = "desligada" if no_prompt_optimize else "ativa (anti-placa)"
         info_table.add_row("[bold]Otimização prompt[/bold]", opt_label)
-    if max_retries > 1 and not from_image:
+    if max_retries > 1:
         info_table.add_row("[bold]Auto-retry[/bold]", f"até {max_retries}x (verifica placas/flat)")
     rep = "desligado" if no_mesh_repair else "maior componente + merge"
     if not no_mesh_repair and not no_ground_shadow_removal:
@@ -510,16 +510,40 @@ def generate(
                 console=console,
             ) as progress:
                 if from_image:
-                    task = progress.add_task("[cyan]Hunyuan3D (imagem → mesh)...", total=None)
-                    result = generator.generate_from_image(
-                        from_image,
-                        num_inference_steps=steps,
-                        guidance_scale=guidance,
-                        octree_resolution=octree_resolution,
-                        num_chunks=num_chunks,
-                        hy_seed=seed,
-                        mc_level=mc_level,
-                    )
+                    if max_retries > 1:
+                        task = progress.add_task(
+                            f"[cyan]Hunyuan3D imagem → mesh (até {max_retries} tentativas)...",
+                            total=None,
+                        )
+
+                        def _on_retry_img(attempt, new_seed, quality):
+                            issues = ", ".join(quality.get("issues", []))
+                            console.print(
+                                f"[yellow]  Tentativa {attempt} falhou: {issues}. Retry com hy_seed {new_seed}...[/yellow]"
+                            )
+
+                        result = generator.generate_from_image_with_quality_check(
+                            from_image,
+                            max_retries=max_retries,
+                            hy_seed=seed,
+                            on_retry=_on_retry_img,
+                            num_inference_steps=steps,
+                            guidance_scale=guidance,
+                            octree_resolution=octree_resolution,
+                            num_chunks=num_chunks,
+                            mc_level=mc_level,
+                        )
+                    else:
+                        task = progress.add_task("[cyan]Hunyuan3D (imagem → mesh)...", total=None)
+                        result = generator.generate_from_image(
+                            from_image,
+                            num_inference_steps=steps,
+                            guidance_scale=guidance,
+                            octree_resolution=octree_resolution,
+                            num_chunks=num_chunks,
+                            hy_seed=seed,
+                            mc_level=mc_level,
+                        )
                 else:
                     _gen_kwargs = dict(
                         t2d_width=image_width,
