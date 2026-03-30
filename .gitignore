@@ -47,6 +47,8 @@ Thumbs.db
 
 # Vendored hy3dpaint checkpoints (downloaded on-demand)
 Paint3D/src/paint3d/hy3dpaint/ckpt/
+# Pesos Real-ESRGAN descarregados por URL (realesrgan_infer.load_file_from_url)
+Paint3D/src/paint3d/hy3dpaint/utils/realesrgan_weights/
 
 # Rascunhos na raiz dos subprojetos
 **/Untitled
