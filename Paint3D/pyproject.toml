@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "paint3d"
+version = "0.1.0"
+description = "Texturização 3D: Hunyuan3D-Paint + Materialize PBR + Upscale IA"
+requires-python = ">=3.10"
+license = "MIT"
+dependencies = [
+    "gamedev-shared @ file:../Shared",
+    "torch>=2.1.0",
+    "torchvision>=0.16.0",
+    "diffusers>=0.37.0",
+    "transformers>=4.48.0",
+    "accelerate>=0.24.0",
+    "huggingface-hub>=0.20.0",
+    "numpy>=1.24.0",
+    "Pillow>=10.0.0",
+    "trimesh>=4.0.0",
+    "imageio>=2.31.0",
+    "click>=8.1.0",
+    "rich>=13.0.0",
+    "rich-click>=1.8.0",
+    "tqdm>=4.66.0",
+    "hy3dgen @ git+https://github.com/Tencent-Hunyuan/Hunyuan3D-2.git",
+    # nvdiffrast: instalar separadamente com --no-build-isolation (requer PyTorch pré-instalado)
+    # pip install git+https://github.com/NVlabs/nvdiffrast.git --no-build-isolation
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Topic :: Multimedia :: Graphics :: 3D Modeling",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+
+[project.optional-dependencies]
+upscale = ["spandrel>=0.4.0"]
+dev = ["pytest>=7.4.0", "pytest-cov>=4.0.0", "ruff>=0.11.0"]
+
+[project.scripts]
+paint3d = "paint3d.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
