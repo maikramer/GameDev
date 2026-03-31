@@ -128,7 +128,7 @@ class _ToolPythonInstaller(PythonProjectInstaller):
                 return False
             from .paint3d_extras import run_paint3d_post_install
 
-            if not run_paint3d_post_install(self._monorepo_root, self.logger):
+            if not run_paint3d_post_install(self):
                 return False
 
         aliases = list(self.spec.extra_aliases) if self.spec.extra_aliases else None

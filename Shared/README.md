@@ -13,6 +13,7 @@ Shared library for the **GameDev** monorepo — common code for Text2D, Text3D, 
 | `gamedev_shared.hf` | HF token (`get_hf_token`) and cache text for Rich (`hf_home_display_rich`) — no `huggingface_hub` dependency |
 | `gamedev_shared.skill_install` | Generic Cursor Agent Skill install by `tool_name` (e.g. `rigging3d` when `SKILL.md` exists) |
 | `gamedev_shared.gpu` | GPU/memory helpers (`format_bytes`, `get_gpu_info`, `clear_cuda_memory`, …) |
+| `gamedev_shared.profiler` | Spans com tempo, CPU, RSS e VRAM CUDA (`ProfilerSession`, `profile_span`; extra `[profiler]` → `psutil`) |
 | `gamedev_shared.subprocess_utils` | Subprocess execution (`resolve_binary`, `run_cmd`, `RunResult`) |
 | `gamedev_shared.env` | Constants and helpers for monorepo env vars (`TOOL_BINS`, `get_tool_bin`, …) |
 | `gamedev_shared.installer` | Base classes for installers (Python and Rust) |
