@@ -369,8 +369,30 @@ def _rigging3d_pipeline_failed(
     return False
 
 
-def _part3d_profile_effective(profile: GameProfile) -> Part3DProfile:
-    return profile.part3d or Part3DProfile()
+def _part3d_profile_effective(profile: GameProfile, row: ManifestRow | None = None) -> Part3DProfile:
+    """Profile Part3D com possíveis overrides por linha do manifest."""
+    base = profile.part3d or Part3DProfile()
+    if row is None:
+        return base
+    # Aplicar overrides da linha (se definidos)
+    steps = row.part3d_steps if row.part3d_steps is not None else base.steps
+    octree = row.part3d_octree_resolution if row.part3d_octree_resolution is not None else base.octree_resolution
+    seg_only = row.part3d_segment_only if row.part3d_segment_only is not None else base.segment_only
+    return Part3DProfile(
+        octree_resolution=octree,
+        steps=steps,
+        num_chunks=base.num_chunks,
+        segment_only=seg_only,
+        no_cpu_offload=base.no_cpu_offload,
+        verbose=base.verbose,
+        parts_suffix=base.parts_suffix,
+        segmented_suffix=base.segmented_suffix,
+        quantization=base.quantization,
+        no_quantize_dit=base.no_quantize_dit,
+        torch_compile=base.torch_compile,
+        no_attention_slicing=base.no_attention_slicing,
+        low_vram_mode=base.low_vram_mode,
+    )
 
 
 def _part3d_stem_suffix(raw: str | None, default: str) -> str:
@@ -419,6 +441,17 @@ def _part3d_decompose_argv(
         args.append("--segment-only")
     if p3.verbose:
         args.append("-v")
+    # --- Otimizações de VRAM ---
+    if p3.quantization:
+        args.extend(["--quantization", p3.quantization])
+    if p3.no_quantize_dit:
+        args.append("--no-quantize-dit")
+    if p3.torch_compile:
+        args.append("--torch-compile")
+    if p3.no_attention_slicing:
+        args.append("--no-attention-slicing")
+    if p3.low_vram_mode:
+        args.append("--low-vram-mode")
     return args
 
 
@@ -439,7 +472,7 @@ def _part3d_pipeline_failed(
         return False
     if not mesh_final.is_file():
         return False
-    p3 = _part3d_profile_effective(profile)
+    p3 = _part3d_profile_effective(profile, row)  # ← Usa overrides por linha
     out_parts, out_seg = _part3d_output_paths(mesh_final, p3)
     seed = _seed_for_row(profile, f"{row.id}:part3d")
     argv = _part3d_decompose_argv(part3d_bin, mesh_final, out_parts, out_seg, p3, seed)
@@ -498,7 +531,7 @@ def _post_text3d_mesh_extras(
     )
     rig_mesh_in = mesh_final
     if not part3d_fail and with_rig and row.generate_rig and with_parts and row.generate_parts:
-        p3 = _part3d_profile_effective(profile)
+        p3 = _part3d_profile_effective(profile, row)
         out_parts, _out_seg = _part3d_output_paths(mesh_final, p3)
         if not p3.segment_only and out_parts.is_file():
             rig_mesh_in = out_parts
@@ -594,6 +627,49 @@ def init_cmd(target_dir: Path, force: bool) -> None:
             border_style="green",
         )
     )
+
+
+@main.command("info")
+def info_cmd() -> None:
+    """Mostra versão, binários resolvidos no PATH / *_BIN e VRAM livre (se nvidia-smi)."""
+    table = Table(title="[bold]gameassets info[/bold]", box=box.ROUNDED)
+    table.add_column("Ferramenta", style="cyan", no_wrap=True)
+    table.add_column("Binário", style="green")
+
+    def row(name: str, env: str, exe: str) -> None:
+        try:
+            p = resolve_binary(env, exe)
+        except FileNotFoundError:
+            p = "[dim](não encontrado)[/dim]"
+        table.add_row(name, str(p))
+
+    console.print(Panel.fit(f"[bold]gameassets[/bold] {__version__}", border_style="blue"))
+    row("text2d", "TEXT2D_BIN", "text2d")
+    row("texture2d", "TEXTURE2D_BIN", "texture2d")
+    row("skymap2d", "SKYMAP2D_BIN", "skymap2d")
+    row("text2sound", "TEXT2SOUND_BIN", "text2sound")
+    row("text3d", "TEXT3D_BIN", "text3d")
+    row("paint3d", "PAINT3D_BIN", "paint3d")
+    row("part3d", "PART3D_BIN", "part3d")
+    row("rigging3d", "RIGGING3D_BIN", "rigging3d")
+    row("materialize", "MATERIALIZE_BIN", "materialize")
+    console.print(table)
+
+    free_mib = query_gpu_free_mib()
+    if free_mib is not None:
+        console.print(
+            Panel(
+                f"VRAM livre (nvidia-smi, GPU 0): [bold]{free_mib}[/bold] MiB",
+                border_style="dim",
+            )
+        )
+    else:
+        console.print(
+            Panel(
+                "[dim]VRAM: nvidia-smi não disponível ou sem dados.[/dim]",
+                border_style="dim",
+            )
+        )
 
 
 @main.command("prompts")
@@ -759,6 +835,18 @@ def prompts_cmd(
     is_flag=True,
     help="Após Text3D, corre part3d decompose nas linhas com generate_parts=true (partes semânticas).",
 )
+@click.option(
+    "--profile-tools",
+    is_flag=True,
+    help="Activar profiling (CPU/RAM/GPU) em paint3d e part3d via GAMEDEV_PROFILE.",
+)
+@click.option(
+    "--profile-log",
+    "profile_tools_log",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help="JSONL para spans (defeito: gameassets_profile.jsonl na pasta do manifest).",
+)
 def batch_cmd(
     profile_path: Path,
     manifest_path: Path,
@@ -773,6 +861,8 @@ def batch_cmd(
     skip_audio: bool,
     with_rig: bool,
     with_parts: bool,
+    profile_tools: bool,
+    profile_tools_log: Path | None,
 ) -> None:
     """Gera imagens (e opcionalmente meshes) para cada linha do manifest."""
     profile, rows, _bundle, preset = _build_context(profile_path, manifest_path, presets_local)
@@ -926,6 +1016,9 @@ def batch_cmd(
     meta.add_row("rigging3d", rigging3d_bin or "[dim](desligado)[/dim]")
     meta.add_row("part3d", part3d_bin or "[dim](desligado)[/dim]")
     meta.add_row("Modo", "[cyan]dry-run[/cyan]" if dry_run else "execução")
+    if profile_tools:
+        _plog = profile_tools_log or (manifest_path.parent / "gameassets_profile.jsonl")
+        meta.add_row("Profiler (GPU)", f"activo → [dim]{_plog.resolve()}[/dim]")
     if skip_text2d:
         ord_skip: list[str] = ["Geração 2D omitida"]
         if any_audio_row and not skip_audio:
@@ -1111,7 +1204,7 @@ def batch_cmd(
                 if not row.generate_3d or not row.generate_parts:
                     continue
                 _img_path, mesh_path = _paths_for_row_manifest(profile, manifest_dir, row)
-                p3 = _part3d_profile_effective(profile)
+                p3 = _part3d_profile_effective(profile, row)
                 out_p, out_s = _part3d_output_paths(mesh_path, p3)
                 seed = _seed_for_row(profile, f"{row.id}:part3d")
                 pa = _part3d_decompose_argv(part3d_bin, mesh_path, out_p, out_s, p3, seed)
@@ -1126,8 +1219,9 @@ def batch_cmd(
                 rg = profile.rigging3d
                 sfx = rg.output_suffix if rg else "_rigged"
                 rig_in = mesh_path
-                if with_parts and row.generate_parts and not (_part3d_profile_effective(profile).segment_only):
-                    out_p, _ = _part3d_output_paths(mesh_path, _part3d_profile_effective(profile))
+                p3_row = _part3d_profile_effective(profile, row)
+                if with_parts and row.generate_parts and not p3_row.segment_only:
+                    out_p, _ = _part3d_output_paths(mesh_path, p3_row)
                     rig_in = out_p
                 rig_out = _rigging3d_output_path(rig_in, sfx)
                 rg_args = _rigging3d_pipeline_argv(
@@ -1162,6 +1256,12 @@ def batch_cmd(
             )
 
     child_env = subprocess_gpu_env()
+    if profile_tools:
+        child_env = dict(child_env)
+        child_env["GAMEDEV_PROFILE"] = "1"
+        child_env["GAMEDEV_PROFILE_TOOL"] = "gameassets"
+        plog = profile_tools_log or (manifest_path.parent / "gameassets_profile.jsonl")
+        child_env["GAMEDEV_PROFILE_LOG"] = str(plog.resolve())
 
     with batch_directory_lock(manifest_path, skip=skip_batch_lock):
         batch_tmp = Path(tempfile.mkdtemp(prefix="gameassets_"))
@@ -1653,6 +1753,20 @@ def _paint3d_texture_argv(
         args.append("--no-gpu-kill-others")
     if t3.full_gpu:
         args.append("--paint-full-gpu")
+    if t3.paint_max_views is not None:
+        args.extend(["--max-views", str(t3.paint_max_views)])
+    if t3.paint_view_resolution is not None:
+        args.extend(["--view-resolution", str(t3.paint_view_resolution)])
+    # --- Otimizações de VRAM ---
+    if t3.paint_low_vram_mode:
+        args.append("--low-vram-mode")
+    else:
+        if t3.paint_quantization:
+            args.extend(["--quantization", t3.paint_quantization])
+        if t3.paint_tiny_vae:
+            args.append("--tiny-vae")
+        if t3.paint_torch_compile:
+            args.append("--torch-compile")
     return args
 
 

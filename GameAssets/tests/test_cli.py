@@ -23,6 +23,12 @@ def test_main_help(runner: CliRunner) -> None:
     assert "gameassets" in r.output.lower() or "Batch" in r.output
 
 
+def test_info_runs(runner: CliRunner) -> None:
+    r = runner.invoke(cli, ["info"])
+    assert r.exit_code == 0
+    assert "text2d" in r.output.lower() or "text3d" in r.output.lower()
+
+
 def test_init_creates_files(runner: CliRunner, tmp_path: Path) -> None:
     r = runner.invoke(cli, ["init", "--path", str(tmp_path)])
     assert r.exit_code == 0

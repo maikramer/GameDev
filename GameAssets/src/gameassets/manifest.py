@@ -24,6 +24,10 @@ class ManifestRow:
     generate_rig: bool = False
     # Decomposição semântica (Part3D) após Text3D; requer --with-parts e generate_3d=true
     generate_parts: bool = False
+    # Part3D por linha: sobrepõe part3d.{steps,octree_resolution,segment_only} do perfil
+    part3d_steps: int | None = None
+    part3d_octree_resolution: int | None = None
+    part3d_segment_only: bool | None = None
 
 
 def effective_image_source(profile: GameProfile, row: ManifestRow) -> str:
@@ -49,11 +53,31 @@ def _parse_image_source(value: str | None) -> str | None:
     return s
 
 
+def _parse_int(value: str | None) -> int | None:
+    if value is None or str(value).strip() == "":
+        return None
+    try:
+        return int(str(value).strip())
+    except ValueError:
+        return None
+
+
 def load_manifest(path: Path) -> list[ManifestRow]:
-    """Lê CSV: id, idea; opcionais kind, generate_3d, image_source, generate_audio, generate_rig, generate_parts."""
+    """Lê CSV: id, idea; opcionais kind, generate_3d, image_source, generate_audio, generate_rig, generate_parts, part3d_steps, part3d_octree_resolution, part3d_segment_only."""
     rows: list[ManifestRow] = []
+    import io
     with path.open("r", encoding="utf-8", newline="") as f:
-        reader = csv.DictReader(f)
+        # Skip comment lines (starting with #) and blank lines before the header
+        lines = []
+        header_found = False
+        for line in f:
+            stripped = line.lstrip()
+            if not header_found:
+                if stripped.startswith('#') or not stripped:
+                    continue
+            header_found = True
+            lines.append(line)
+        reader = csv.DictReader(io.StringIO(''.join(lines)))
         if not reader.fieldnames:
             raise ValueError("CSV vazio ou sem cabeçalhos")
         fields = {h.strip().lower(): h for h in reader.fieldnames if h}
@@ -67,6 +91,10 @@ def load_manifest(path: Path) -> list[ManifestRow]:
         ga_key = fields.get("generate_audio")
         gr_key = fields.get("generate_rig")
         gp_key = fields.get("generate_parts")
+        # Part3D per-row overrides
+        p3_steps_key = fields.get("part3d_steps")
+        p3_oct_key = fields.get("part3d_octree_resolution") or fields.get("part3d_octree")
+        p3_seg_key = fields.get("part3d_segment_only")
         for raw in reader:
             rid = (raw.get(id_key) or "").strip()
             idea = (raw.get(idea_key) or "").strip()
@@ -91,6 +119,16 @@ def load_manifest(path: Path) -> list[ManifestRow]:
             gp = False
             if gp_key:
                 gp = _parse_bool(raw.get(gp_key))
+            # Part3D per-row
+            p3_steps: int | None = None
+            if p3_steps_key:
+                p3_steps = _parse_int(raw.get(p3_steps_key))
+            p3_oct: int | None = None
+            if p3_oct_key:
+                p3_oct = _parse_int(raw.get(p3_oct_key))
+            p3_seg: bool | None = None
+            if p3_seg_key:
+                p3_seg = _parse_bool(raw.get(p3_seg_key))
             rows.append(
                 ManifestRow(
                     id=rid,
@@ -101,6 +139,9 @@ def load_manifest(path: Path) -> list[ManifestRow]:
                     generate_audio=ga,
                     generate_rig=gr,
                     generate_parts=gp,
+                    part3d_steps=p3_steps,
+                    part3d_octree_resolution=p3_oct,
+                    part3d_segment_only=p3_seg,
                 )
             )
     if not rows:

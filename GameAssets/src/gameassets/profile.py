@@ -40,6 +40,20 @@ class Text3DProfile:
     full_gpu: bool = False
     # Subpasta do modelo Hunyuan3D shape (ex.: hunyuan3d-dit-v2-mini-turbo para modo turbo)
     model_subfolder: str | None = None
+    # --- Paint3D texture options (aplicáveis quando texture=true) ---
+    # Número de vistas multiview para texturização (menos = mais rápido; padrão 4)
+    paint_max_views: int | None = None
+    # Resolução das vistas internas (menor = mais rápido; padrão 512)
+    paint_view_resolution: int | None = None
+    # --- Otimizações de VRAM para Paint3D ---
+    # Modo de quantização: auto, none, fp8, int8, int4, quanto-int8, quanto-int4
+    paint_quantization: str | None = None
+    # Usar Tiny VAE (TAESD) para reduzir VRAM do VAE
+    paint_tiny_vae: bool = False
+    # Habilitar torch.compile para acelerar inferência
+    paint_torch_compile: bool = False
+    # Modo low-vram (ativa todas as otimizações agressivas)
+    paint_low_vram_mode: bool = False
 
 
 @dataclass
@@ -118,6 +132,17 @@ class Part3DProfile:
     # hero.glb → hero_parts.glb e hero_segmented.glb (sufixos antes de .glb)
     parts_suffix: str = "_parts"
     segmented_suffix: str = "_segmented"
+    # --- Otimizações de VRAM ---
+    # Modo de quantização: auto, none, int8, int4, torchao-int8, torchao-int4
+    quantization: str | None = None
+    # Não quantizar o DiT mesmo quando disponível
+    no_quantize_dit: bool = False
+    # Habilitar torch.compile para acelerar inferência
+    torch_compile: bool = False
+    # Desabilitar attention slicing
+    no_attention_slicing: bool = False
+    # Modo low-vram (ativa todas as otimizações agressivas)
+    low_vram_mode: bool = False
 
 
 @dataclass
@@ -362,6 +387,19 @@ class GameProfile:
             full_gpu = bool(raw_t3.get("full_gpu", False))
             model_sub = raw_t3.get("model_subfolder")
             model_sub_s = str(model_sub).strip() if model_sub not in (None, "") else None
+            # Paint3D texture options (performance tuning)
+            pmv = raw_t3.get("paint_max_views")
+            pvr = raw_t3.get("paint_view_resolution")
+            try:
+                pmv_i = int(pmv) if pmv is not None else None
+                pvr_i = int(pvr) if pvr is not None else None
+            except (TypeError, ValueError) as e:
+                raise ValueError("text3d.paint_max_views e paint_view_resolution devem ser inteiros") from e
+            # Paint3D otimizações de VRAM
+            paint_quant = raw_t3.get("paint_quantization")
+            paint_quant_s = str(paint_quant).strip().lower() if paint_quant not in (None, "") else None
+            if paint_quant_s and paint_quant_s not in ("auto", "none", "fp8", "int8", "int4", "quanto-int8", "quanto-int4"):
+                raise ValueError("text3d.paint_quantization deve ser: auto, none, fp8, int8, int4, quanto-int8, quanto-int4")
             t3 = Text3DProfile(
                 preset=pr,
                 low_vram=bool(raw_t3.get("low_vram", False)),
@@ -377,6 +415,12 @@ class GameProfile:
                 phased_batch=phased,
                 full_gpu=full_gpu,
                 model_subfolder=model_sub_s,
+                paint_max_views=pmv_i,
+                paint_view_resolution=pvr_i,
+                paint_quantization=paint_quant_s,
+                paint_tiny_vae=bool(raw_t3.get("paint_tiny_vae", False)),
+                paint_torch_compile=bool(raw_t3.get("paint_torch_compile", False)),
+                paint_low_vram_mode=bool(raw_t3.get("paint_low_vram_mode", False)),
             )
         rg3: Rigging3DProfile | None = None
         raw_rg = data.get("rigging3d")
@@ -410,6 +454,11 @@ class GameProfile:
             ss = raw_p3.get("segmented_suffix")
             ps_s = str(ps).strip() if ps not in (None, "") else "_parts"
             ss_s = str(ss).strip() if ss not in (None, "") else "_segmented"
+            # Part3D otimizações de VRAM
+            p3_quant = raw_p3.get("quantization")
+            p3_quant_s = str(p3_quant).strip().lower() if p3_quant not in (None, "") else None
+            if p3_quant_s and p3_quant_s not in ("auto", "none", "int8", "int4", "torchao-int8", "torchao-int4"):
+                raise ValueError("part3d.quantization deve ser: auto, none, int8, int4, torchao-int8, torchao-int4")
             p3 = Part3DProfile(
                 octree_resolution=oc_i,
                 steps=st_i,
@@ -419,6 +468,11 @@ class GameProfile:
                 verbose=bool(raw_p3.get("verbose", False)),
                 parts_suffix=ps_s,
                 segmented_suffix=ss_s,
+                quantization=p3_quant_s,
+                no_quantize_dit=bool(raw_p3.get("no_quantize_dit", False)),
+                torch_compile=bool(raw_p3.get("torch_compile", False)),
+                no_attention_slicing=bool(raw_p3.get("no_attention_slicing", False)),
+                low_vram_mode=bool(raw_p3.get("low_vram_mode", False)),
             )
         sb = data.get("seed_base")
         if sb is not None:
