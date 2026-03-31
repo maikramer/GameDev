@@ -87,30 +87,73 @@ def apply_hunyuan_paint(
     view_resolution: int = _defaults.DEFAULT_PAINT_VIEW_RESOLUTION,
     use_remesh: bool = True,
     verbose: bool = False,
+    quantization_mode: str = "auto",
+    use_tiny_vae: bool = False,
+    enable_vae_slicing: bool = True,
+    enable_vae_tiling: bool = True,
+    vae_tile_size: int = 256,
+    enable_torch_compile: bool = False,
+    enable_attention_slicing: bool = True,
+    use_xformers: bool = True,
+    dtype: str = "float16",
 ) -> trimesh.Trimesh:
     """
     Aplica Hunyuan3D-Paint 2.1: mesh + imagem de referência → mesh com UV e textura/PBR (GLB).
 
-    O UNet é quantizado a 8-bit (bitsandbytes) automaticamente se disponível,
-    reduzindo ~50% de VRAM dos pesos. DINO permanece em CPU se a GPU for limitada.
+    Otimizações de VRAM disponíveis:
+    - Quantização 4-bit/8-bit via bitsandbytes ou quanto
+    - Tiny VAE (TAESD) para reduzir VRAM do VAE
+    - VAE slicing/tiling para imagens grandes
+    - torch.compile para acelerar inferência
+    - Attention slicing para reduzir pico de VRAM
+    - xformers memory efficient attention
+    - BF16 dtype para RTX 40 series
     """
-    check_paint_rasterizer_available()
+    from gamedev_shared.profiler import profile_span
 
-    ok, msg = check_hunyuan3d21_environment()
-    if not ok:
-        raise RuntimeError(msg)
+    from gamedev_shared.low_vram_optimizations import (
+        enable_xformers_memory_efficient_attention,
+        get_optimal_dtype_for_gpu,
+        is_xformers_available,
+    )
+    from gamedev_shared.quantization import (
+        apply_torch_compile,
+        enable_attention_optimizations,
+        enable_vae_optimizations,
+        format_quantization_info,
+        get_quantization_config,
+    )
 
-    hy3dpaint_root = ensure_hy3dpaint_on_path()
-    cfg_yaml = default_cfg_yaml()
-    ckpt_path = ensure_realesrgan_ckpt()
+    with profile_span("paint_check_env"):
+        check_paint_rasterizer_available()
+
+        ok, msg = check_hunyuan3d21_environment()
+        if not ok:
+            raise RuntimeError(msg)
+
+        hy3dpaint_root = ensure_hy3dpaint_on_path()
+        cfg_yaml = default_cfg_yaml()
+        ckpt_path = ensure_realesrgan_ckpt()
 
     from .hy3dpaint.textureGenPipeline import Hunyuan3DPaintConfig, Hunyuan3DPaintPipeline
+
+    # Obter configuração de quantização
+    quant_config = get_quantization_config(quantization_mode)
+
+    # Detectar dtype ótimo se não especificado explicitamente
+    if dtype == "auto" and torch.cuda.is_available():
+        gpu_name = torch.cuda.get_device_properties(0).name
+        dtype = get_optimal_dtype_for_gpu(gpu_name)
+        if verbose:
+            print(f"[Paint 2.1] Dtype ótimo detectado para {gpu_name}: {dtype}")
 
     if verbose:
         print(
             f"[Paint 2.1] hy3dpaint={hy3dpaint_root}\n"
             f"  repo={model_repo} weights_subfolder={subfolder} offload={paint_cpu_offload} "
-            f"max_views={max_num_view} res={view_resolution}"
+            f"max_views={max_num_view} res={view_resolution}\n"
+            f"  dtype={dtype} quantização={format_quantization_info(quant_config)} "
+            f"tiny_vae={use_tiny_vae} compile={enable_torch_compile} xformers={use_xformers}"
         )
 
     clear_cuda_memory()
@@ -122,48 +165,94 @@ def apply_hunyuan_paint(
         out_obj = tdir / "textured_mesh.obj"
         out_glb = tdir / "textured_mesh.glb"
 
-        save_glb(mesh, mesh_in)
+        with profile_span("paint_prepare_io"):
+            save_glb(mesh, mesh_in)
 
-        if isinstance(image, (str, Path)):
-            shutil.copy2(image, ref_path)
-        else:
-            im = image.convert("RGB") if image.mode != "RGB" else image
-            im.save(ref_path)
+            if isinstance(image, (str, Path)):
+                shutil.copy2(image, ref_path)
+            else:
+                im = image.convert("RGB") if image.mode != "RGB" else image
+                im.save(ref_path)
 
-        config = Hunyuan3DPaintConfig(max_num_view, view_resolution)
-        config.multiview_pretrained_path = model_repo
-        config.multiview_weights_subfolder = subfolder
-        config.multiview_cfg_path = str(cfg_yaml)
-        config.realesrgan_ckpt_path = str(ckpt_path)
+        with profile_span("paint_configure"):
+            config = Hunyuan3DPaintConfig(max_num_view, view_resolution)
+            config.multiview_pretrained_path = model_repo
+            config.multiview_weights_subfolder = subfolder
+            config.multiview_cfg_path = str(cfg_yaml)
+            config.realesrgan_ckpt_path = str(ckpt_path)
 
-        if torch.cuda.is_available():
-            config.device = "cuda"
-        else:
-            config.device = "cpu"
+            if torch.cuda.is_available():
+                config.device = "cuda"
+            else:
+                config.device = "cpu"
 
-        if paint_cpu_offload and torch.cuda.is_available():
-            config.render_size = 1024
-            config.texture_size = 2048
-        elif not paint_cpu_offload and torch.cuda.is_available():
-            pass
-        else:
-            config.render_size = min(config.render_size, 1024)
-            config.texture_size = min(config.texture_size, 2048)
+            if paint_cpu_offload and torch.cuda.is_available():
+                config.render_size = 1024
+                config.texture_size = 2048
+            elif not paint_cpu_offload and torch.cuda.is_available():
+                pass
+            else:
+                config.render_size = min(config.render_size, 1024)
+                config.texture_size = min(config.texture_size, 2048)
 
-        pipe = Hunyuan3DPaintPipeline(config)
+            if quant_config:
+                config.quantization_config = quant_config
 
-        try:
-            with torch.inference_mode():
-                pipe(
-                    mesh_path=str(mesh_in),
-                    image_path=str(ref_path),
-                    output_mesh_path=str(out_obj),
-                    use_remesh=use_remesh,
-                    save_glb=True,
-                )
-        finally:
-            del pipe
-            clear_cuda_memory()
+            if use_tiny_vae:
+                config.use_tiny_vae = True
+                config.tiny_vae_repo = "madebyollin/taesdxl"
+
+        with profile_span("paint_load_pipeline"):
+            pipe = Hunyuan3DPaintPipeline(config)
+
+        with profile_span("paint_optimize_pipeline"):
+            try:
+                # xformers (prioridade máxima para economia de VRAM)
+                if use_xformers and is_xformers_available():
+                    if verbose:
+                        print("[Paint 2.1] Habilitando xformers memory efficient attention...")
+                    if enable_xformers_memory_efficient_attention(pipe):
+                        if verbose:
+                            print("[Paint 2.1] xformers ativo")
+
+                if hasattr(pipe, "vae") and pipe.vae is not None:
+                    enable_vae_optimizations(
+                        pipe.vae,
+                        enable_slicing=enable_vae_slicing,
+                        enable_tiling=enable_vae_tiling,
+                        tile_sample_min_size=vae_tile_size,
+                    )
+                    if verbose and enable_vae_tiling:
+                        print(f"[Paint 2.1] VAE tiling ativo (tile_size={vae_tile_size})")
+
+                if enable_attention_slicing and not (use_xformers and is_xformers_available()):
+                    enable_attention_optimizations(pipe, enable_slicing=True)
+
+                if enable_torch_compile and hasattr(pipe, "unet") and pipe.unet is not None:
+                    if verbose:
+                        print("[Paint 2.1] Aplicando torch.compile ao UNet...")
+                    pipe.unet = apply_torch_compile(
+                        pipe.unet,
+                        mode=_defaults.DEFAULT_TORCH_COMPILE_MODE,
+                        fullgraph=False,
+                    )
+            except Exception as e:
+                if verbose:
+                    print(f"[Paint 2.1] Aviso: otimizações opcionais falharam: {e}")
+
+        with profile_span("paint_inference", sync_cuda=True):
+            try:
+                with torch.no_grad():
+                    pipe(
+                        mesh_path=str(mesh_in),
+                        image_path=str(ref_path),
+                        output_mesh_path=str(out_obj),
+                        use_remesh=use_remesh,
+                        save_glb=True,
+                    )
+            finally:
+                del pipe
+                clear_cuda_memory()
 
         if not out_glb.is_file():
             raise FileNotFoundError(f"Paint 2.1 não gerou GLB esperado: {out_glb}")
@@ -188,6 +277,15 @@ def paint_file_to_file(
     view_resolution: int | None = None,
     use_remesh: bool = True,
     verbose: bool = False,
+    quantization_mode: str = "auto",
+    use_tiny_vae: bool = False,
+    enable_vae_slicing: bool = True,
+    enable_vae_tiling: bool = True,
+    vae_tile_size: int = 256,
+    enable_torch_compile: bool = False,
+    enable_attention_slicing: bool = True,
+    use_xformers: bool = True,
+    dtype: str = "float16",
 ) -> Path:
     """Atalho: carrega mesh, pinta com Hunyuan3D-Paint 2.1 (PBR baked), exporta GLB."""
     repo = model_repo or _defaults.DEFAULT_PAINT_HF_REPO
@@ -196,7 +294,10 @@ def paint_file_to_file(
     nviews = _defaults.DEFAULT_PAINT_MAX_VIEWS if max_num_view is None else max_num_view
     vres = _defaults.DEFAULT_PAINT_VIEW_RESOLUTION if view_resolution is None else view_resolution
 
-    mesh = load_mesh_trimesh(mesh_path)
+    from gamedev_shared.profiler import profile_span
+
+    with profile_span("paint_load_mesh"):
+        mesh = load_mesh_trimesh(mesh_path)
     out = apply_hunyuan_paint(
         mesh,
         image_path,
@@ -207,8 +308,18 @@ def paint_file_to_file(
         view_resolution=vres,
         use_remesh=use_remesh,
         verbose=verbose,
+        quantization_mode=quantization_mode,
+        use_tiny_vae=use_tiny_vae,
+        enable_vae_slicing=enable_vae_slicing,
+        enable_vae_tiling=enable_vae_tiling,
+        vae_tile_size=vae_tile_size,
+        enable_torch_compile=enable_torch_compile,
+        enable_attention_slicing=enable_attention_slicing,
+        use_xformers=use_xformers,
+        dtype=dtype,
     )
 
     output_path = Path(output_path)
-    save_glb(out, output_path)
+    with profile_span("paint_save_glb"):
+        save_glb(out, output_path)
     return output_path

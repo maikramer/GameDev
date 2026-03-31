@@ -128,6 +128,20 @@ def cli(ctx, verbose):
     type=click.Choice(["2", "4"], case_sensitive=False),
     help="Factor de upscale (2 = 1024→2048, 4 = 1024→4096).",
 )
+@click.option(
+    "--max-views",
+    default=_defaults.DEFAULT_PAINT_MAX_VIEWS,
+    show_default=True,
+    type=int,
+    help="Número de vistas multiview (menos = mais rápido; mín 2).",
+)
+@click.option(
+    "--view-resolution",
+    default=_defaults.DEFAULT_PAINT_VIEW_RESOLUTION,
+    show_default=True,
+    type=int,
+    help="Resolução das vistas internas (menor = mais rápido; recomendado: 256-512).",
+)
 @click.option("-v", "--verbose", "texture_verbose", is_flag=True, help="Logs detalhados.")
 @click.option("--allow-shared-gpu", "allow_shared_gpu", is_flag=True, help="Permite GPU com outros processos.")
 @click.option(
@@ -135,6 +149,80 @@ def cli(ctx, verbose):
     "gpu_kill_others",
     default=True,
     help="Termina outros processos GPU antes de inferir; defeito: ligado.",
+)
+# --- Otimizações de VRAM ---
+@click.option(
+    "--quantization",
+    "-q",
+    type=click.Choice(["auto", "none", "fp8", "int8", "int4", "quanto-int8", "quanto-int4"], case_sensitive=False),
+    default=_defaults.DEFAULT_QUANTIZATION_MODE,
+    show_default=True,
+    help="Modo de quantização: auto (detecta VRAM), fp8 (RTX 40+), int8/int4 (bitsandbytes), quanto-*.",
+)
+@click.option(
+    "--tiny-vae/--no-tiny-vae",
+    default=_defaults.DEFAULT_USE_TINY_VAE,
+    show_default=True,
+    help="Usar TAESD (Tiny VAE) para reduzir VRAM do VAE em ~50%.",
+)
+@click.option(
+    "--vae-slicing/--no-vae-slicing",
+    default=_defaults.DEFAULT_ENABLE_VAE_SLICING,
+    show_default=True,
+    help="Habilitar slicing do VAE para batch processing.",
+)
+@click.option(
+    "--vae-tiling/--no-vae-tiling",
+    default=_defaults.DEFAULT_ENABLE_VAE_TILING,
+    show_default=True,
+    help="Habilitar tiling do VAE para imagens grandes.",
+)
+@click.option(
+    "--torch-compile/--no-torch-compile",
+    default=_defaults.DEFAULT_TORCH_COMPILE,
+    show_default=True,
+    help="Compilar UNet com torch.compile para speedup de inferência.",
+)
+@click.option(
+    "--attention-slicing/--no-attention-slicing",
+    default=_defaults.DEFAULT_ENABLE_ATTENTION_SLICING,
+    show_default=True,
+    help="Habilitar attention slicing para reduzir pico de VRAM.",
+)
+@click.option(
+    "--low-vram-mode",
+    is_flag=True,
+    help="Ativa todas as otimizações para GPUs com <8GB VRAM (quantização int4, tiny VAE, slicing).",
+)
+@click.option(
+    "--rtx4050-mode",
+    is_flag=True,
+    help="Modo específico RTX 4050 6GB: BF16, int4, xformers, tiny VAE, tile 128, no compile.",
+)
+@click.option(
+    "--xformers/--no-xformers",
+    default=_defaults.DEFAULT_USE_XFORMERS,
+    show_default=True,
+    help="Usar xformers memory efficient attention (quando disponível).",
+)
+@click.option(
+    "--dtype",
+    type=click.Choice(["float16", "bfloat16", "float32"], case_sensitive=False),
+    default=_defaults.DEFAULT_DTYPE,
+    show_default=True,
+    help="Tipo de dados: bfloat16 recomendado para RTX 40 series, float16 para outras.",
+)
+@click.option(
+    "--vae-tile-size",
+    default=_defaults.DEFAULT_VAE_TILE_SIZE,
+    show_default=True,
+    type=int,
+    help="Tamanho do tile VAE (menor = menos VRAM, mais lento).",
+)
+@click.option(
+    "--profile",
+    is_flag=True,
+    help="Medir tempos, CPU, RAM e VRAM (JSONL opcional: GAMEDEV_PROFILE_LOG).",
 )
 @click.pass_context
 def texture(
@@ -147,11 +235,31 @@ def texture(
     paint_full_gpu,
     upscale,
     upscale_factor,
+    max_views,
+    view_resolution,
     texture_verbose,
     allow_shared_gpu,
     gpu_kill_others,
+    quantization,
+    tiny_vae,
+    vae_slicing,
+    vae_tiling,
+    torch_compile,
+    attention_slicing,
+    low_vram_mode,
+    rtx4050_mode,
+    xformers,
+    dtype,
+    vae_tile_size,
+    profile,
 ):
     """Aplica Hunyuan3D-Paint 2.1 a uma mesh GLB/OBJ + imagem de referência → GLB texturizado (PBR baked)."""
+    from gamedev_shared.quantization import (
+        format_quantization_info,
+        get_quantization_config,
+        suggest_environment_variables,
+    )
+
     from .painter import paint_file_to_file
 
     verbose = bool(ctx.obj.get("VERBOSE")) or texture_verbose
@@ -159,49 +267,163 @@ def texture(
     if output is None:
         output = mesh_path.with_name(f"{mesh_path.stem}_textured.glb")
 
+    # Aplicar modo específico RTX 4050 6GB
+    if rtx4050_mode:
+        console.print("[bold cyan]Modo RTX 4050 6GB ativado - Aplicando otimizações máximas[/bold cyan]")
+        quantization = "int4"
+        tiny_vae = True
+        vae_slicing = True
+        vae_tiling = True
+        vae_tile_size = 128  # Tiles menores para economizar VRAM
+        attention_slicing = True
+        xformers = True
+        dtype = "bfloat16"  # BF16 é melhor em Ada Lovelace
+        torch_compile = False  # Compilação usa VRAM extra, desabilitar em 6GB
+        paint_full_gpu = False
+        # Configurar ambiente CUDA específico para 6GB
+        os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True,max_split_size_mb:64,garbage_collection_threshold:0.6"
+
+    # Aplicar low-vram-mode se solicitado (genérico)
+    elif low_vram_mode:
+        quantization = "int4"
+        tiny_vae = True
+        vae_slicing = True
+        vae_tiling = True
+        attention_slicing = True
+        paint_full_gpu = False
+
+    # Configurar variáveis de ambiente para otimização de memória
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+            gpu_name = torch.cuda.get_device_properties(0).name
+
+            # Auto-detectar RTX 4050 se não foi manualmente configurado
+            if not rtx4050_mode and ("rtx 4050" in gpu_name.lower() or vram_gb <= 6.5):
+                console.print(f"[yellow]Detectada GPU {gpu_name} com {vram_gb:.1f}GB VRAM[/yellow]")
+                console.print("[dim]Sugestão: use --rtx4050-mode para otimizações automáticas[/dim]")
+
+            env_vars = suggest_environment_variables(vram_gb)
+            for key, value in env_vars.items():
+                if key not in os.environ:
+                    os.environ[key] = value
+                    if verbose:
+                        console.print(f"[dim]Configurado {key}={value}[/dim]")
+    except Exception:
+        pass
+
+    # Obter configuração de quantização
+    quant_config = get_quantization_config(quantization)
+    quant_str = format_quantization_info(quant_config)
+
     info_table = Table(show_header=False, box=box.SIMPLE)
     info_table.add_row("[bold]Mesh[/bold]", f"[cyan]{mesh_path}[/cyan]")
     info_table.add_row("[bold]Imagem[/bold]", f"[cyan]{image_file}[/cyan]")
     info_table.add_row("[bold]Saída[/bold]", f"[cyan]{output}[/cyan]")
+    mode_str = "VRAM alta" if paint_full_gpu else f"otimizado ({quant_str})"
     info_table.add_row(
         "[bold]Paint 2.1[/bold]",
-        f"{paint_repo} / {paint_subfolder} — {'VRAM alta' if paint_full_gpu else 'modo económico (UNet 8-bit)'}",
+        f"{paint_repo} / {paint_subfolder} — {mode_str} — {max_views} vistas @ {view_resolution}px",
     )
+    if tiny_vae:
+        info_table.add_row("[bold]VAE[/bold]", "TAESD (Tiny VAE)")
+    if torch_compile:
+        info_table.add_row("[bold]Compile[/bold]", "torch.compile ativo")
+    if xformers:
+        info_table.add_row("[bold]Attention[/bold]", "xformers memory efficient")
+    info_table.add_row("[bold]Dtype[/bold]", dtype.upper())
+    if rtx4050_mode:
+        info_table.add_row("[bold]Perfil[/bold]", "[bold cyan]RTX 4050 6GB[/bold cyan]")
     if upscale:
         info_table.add_row("[bold]Upscale[/bold]", f"Real-ESRGAN {upscale_factor}x")
+    if profile:
+        info_table.add_row("[bold]Profiler[/bold]", "activo (spans + resumo no fim)")
     console.print(Panel(info_table, title="[bold green]Hunyuan3D-Paint 2.1", border_style="green"))
 
     _prepare_gpu(allow_shared_gpu, gpu_kill_others)
 
+    from gamedev_shared.profiler import ProfilerSession
+    from gamedev_shared.profiler.env import env_profile_log_path
+
+    log_p = env_profile_log_path()
+    prof_log = Path(log_p) if log_p else None
+
     try:
         start = time.time()
-        with console.status("[bold yellow]A carregar modelos Paint (1ª vez: download HF)...", spinner="dots"):
-            out = paint_file_to_file(
-                mesh_path,
-                image_file,
-                output,
-                model_repo=paint_repo,
-                subfolder=paint_subfolder,
-                paint_cpu_offload=not paint_full_gpu,
-                verbose=verbose,
-            )
+        with ProfilerSession("paint3d", log_path=prof_log, cli_profile=profile) as prof:
+            with console.status("[bold yellow]A carregar modelos Paint (1ª vez: download HF)...", spinner="dots"):
+                if prof.enabled:
+                    with prof.span("texture_total", sync_cuda=True):
+                        out = paint_file_to_file(
+                            mesh_path,
+                            image_file,
+                            output,
+                            model_repo=paint_repo,
+                            subfolder=paint_subfolder,
+                            paint_cpu_offload=not paint_full_gpu,
+                            max_num_view=max_views,
+                            view_resolution=view_resolution,
+                            verbose=verbose,
+                            quantization_mode=quantization,
+                            use_tiny_vae=tiny_vae,
+                            enable_vae_slicing=vae_slicing,
+                            enable_vae_tiling=vae_tiling,
+                            vae_tile_size=vae_tile_size,
+                            enable_torch_compile=torch_compile,
+                            enable_attention_slicing=attention_slicing,
+                            use_xformers=xformers,
+                            dtype=dtype,
+                        )
+                else:
+                    out = paint_file_to_file(
+                        mesh_path,
+                        image_file,
+                        output,
+                        model_repo=paint_repo,
+                        subfolder=paint_subfolder,
+                        paint_cpu_offload=not paint_full_gpu,
+                        max_num_view=max_views,
+                        view_resolution=view_resolution,
+                        verbose=verbose,
+                        quantization_mode=quantization,
+                        use_tiny_vae=tiny_vae,
+                        enable_vae_slicing=vae_slicing,
+                        enable_vae_tiling=vae_tiling,
+                        vae_tile_size=vae_tile_size,
+                        enable_torch_compile=torch_compile,
+                        enable_attention_slicing=attention_slicing,
+                        use_xformers=xformers,
+                        dtype=dtype,
+                    )
 
-        if upscale:
-            from .texture_upscale import upscale_trimesh_texture
-            from .utils.mesh_io import load_mesh_trimesh, save_glb
+            if upscale:
+                from .texture_upscale import upscale_trimesh_texture
+                from .utils.mesh_io import load_mesh_trimesh, save_glb
 
-            clear_cuda_memory()
-            with console.status(
-                f"[bold yellow]Upscale textura (Real-ESRGAN {upscale_factor}x)...",
-                spinner="dots",
-            ):
-                mesh = load_mesh_trimesh(out)
-                mesh = upscale_trimesh_texture(
-                    mesh,
-                    scale=int(upscale_factor),
-                    verbose=verbose,
-                )
-                save_glb(mesh, out)
+                clear_cuda_memory()
+                with console.status(
+                    f"[bold yellow]Upscale textura (Real-ESRGAN {upscale_factor}x)...",
+                    spinner="dots",
+                ):
+                    if prof.enabled:
+                        with prof.span("upscale", sync_cuda=True):
+                            mesh = load_mesh_trimesh(out)
+                            mesh = upscale_trimesh_texture(
+                                mesh,
+                                scale=int(upscale_factor),
+                                verbose=verbose,
+                            )
+                            save_glb(mesh, out)
+                    else:
+                        mesh = load_mesh_trimesh(out)
+                        mesh = upscale_trimesh_texture(
+                            mesh,
+                            scale=int(upscale_factor),
+                            verbose=verbose,
+                        )
+                        save_glb(mesh, out)
 
         out_p = Path(out).resolve()
         try:
