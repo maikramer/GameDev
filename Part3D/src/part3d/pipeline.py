@@ -31,6 +31,8 @@ from .utils.dit_quantization import load_dit_quantized, want_quantized_dit
 from .utils.flash_attn_shim import install_shim as _install_flash_shim
 from .utils.memory import clear_cuda_memory, format_bytes
 
+from gamedev_shared.profiler import profile_span
+
 # Injetar shim de flash_attn ANTES de qualquer import do XPart/Sonata
 _install_flash_shim()
 
@@ -98,6 +100,11 @@ class Part3DPipeline:
 
     Pipeline: P3-SAM (segmentação) → X-Part (geração de partes).
     Optimizado para GPUs com ~6 GB VRAM via CPU offloading sequencial.
+
+    Otimizações disponíveis:
+    - Quantização 4-bit/8-bit via bitsandbytes ou torchao
+    - torch.compile para acelerar inferência
+    - Attention slicing para reduzir pico de VRAM
     """
 
     def __init__(
@@ -108,11 +115,19 @@ class Part3DPipeline:
         cpu_offload: bool = _d.DEFAULT_CPU_OFFLOAD,
         verbose: bool = False,
         autotune: bool = True,
+        quantization_mode: str = _d.DEFAULT_QUANTIZATION_MODE,
+        quantize_dit: bool = _d.DEFAULT_QUANTIZE_DIT,
+        enable_torch_compile: bool = _d.DEFAULT_TORCH_COMPILE,
+        enable_attention_slicing: bool = _d.DEFAULT_ENABLE_ATTENTION_SLICING,
     ):
         self.model_path = model_path
         self.cpu_offload = cpu_offload
         self.verbose = verbose
         self.autotune = autotune
+        self.quantization_mode = quantization_mode
+        self.quantize_dit = quantize_dit
+        self.enable_torch_compile = enable_torch_compile
+        self.enable_attention_slicing = enable_attention_slicing
 
         if device is None:
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -171,6 +186,10 @@ class Part3DPipeline:
         if self._loaded:
             return
 
+        with profile_span("part3d_load"):
+            self._load_impl()
+
+    def _load_impl(self) -> None:
         from easydict import EasyDict
         from safetensors.torch import load_file
 
@@ -213,6 +232,32 @@ class Part3DPipeline:
             self._model.to(dtype=self.dtype)
             self._model.eval()
             self._log(f"  DiT: {_count_params(self._model):.0f}M params")
+
+        # Aplicar quantização adicional via torchao se solicitado
+        if self.quantize_dit and self.quantization_mode.startswith("torchao"):
+            self._log(f"A aplicar quantização torchao ({self.quantization_mode}) ao DiT...")
+            try:
+                from gamedev_shared.quantization import apply_torchao_quantization
+
+                self._model = apply_torchao_quantization(self._model, mode=self.quantization_mode.replace("torchao-", "") + "_weight_only")
+                self._log("  DiT quantizado com torchao")
+            except Exception as e:
+                self._log(f"  AVISO: torchao quantização falhou ({e})")
+
+        # Aplicar torch.compile se solicitado
+        if self.enable_torch_compile:
+            self._log("A aplicar torch.compile ao DiT...")
+            try:
+                from gamedev_shared.quantization import apply_torch_compile
+
+                self._model = apply_torch_compile(
+                    self._model,
+                    mode=_d.DEFAULT_TORCH_COMPILE_MODE,
+                    fullgraph=False,
+                )
+                self._log("  DiT compilado com torch.compile")
+            except Exception as e:
+                self._log(f"  AVISO: torch.compile falhou ({e})")
 
         # --- Conditioner ---
         self._log("A carregar Conditioner (1.76 GB FP32 → ~880 MB FP16)...")
@@ -278,52 +323,52 @@ class Part3DPipeline:
         self.load()
         self._log("Fase 1: P3-SAM — segmentação de partes")
 
-        vram_gb = None
-        if torch.cuda.is_available():
-            try:
-                vram_gb = float(torch.cuda.get_device_properties(0).total_memory) / (1024**3)
-            except Exception:
-                vram_gb = None
-        if self.autotune:
-            st = autotune_segment(mesh, vram_gb=vram_gb)
-            pn = st.point_num if point_num is None else point_num
-            pr = st.prompt_num if prompt_num is None else prompt_num
-            self._log(
-                f"  Autotune segment: point_num={pn} prompt_num={pr} "
-                f"(índice={st.pressure_index}, geometria={st.geometry_score:.2f}, tier_vram={st.vram_tier})"
+        with profile_span("part3d_segment", sync_cuda=True):
+            vram_gb = None
+            if torch.cuda.is_available():
+                try:
+                    vram_gb = float(torch.cuda.get_device_properties(0).total_memory) / (1024**3)
+                except Exception:
+                    vram_gb = None
+            if self.autotune:
+                st = autotune_segment(mesh, vram_gb=vram_gb)
+                pn = st.point_num if point_num is None else point_num
+                pr = st.prompt_num if prompt_num is None else prompt_num
+                self._log(
+                    f"  Autotune segment: point_num={pn} prompt_num={pr} "
+                    f"(índice={st.pressure_index}, geometria={st.geometry_score:.2f}, tier_vram={st.vram_tier})"
+                )
+            else:
+                pn = 50000 if point_num is None else point_num
+                pr = 128 if prompt_num is None else prompt_num
+
+            if self.device == "cuda" and self.cpu_offload:
+                self._log("  Movendo P3-SAM para GPU...")
+                if hasattr(self._bbox_predictor, "to"):
+                    _to_device(self._bbox_predictor, self.device)
+                _log_vram("P3-SAM na GPU: ") if self.verbose else None
+
+            aabb, face_ids, clean_mesh = self._bbox_predictor.predict_aabb(
+                mesh,
+                seed=seed,
+                post_process=postprocess,
+                threshold=threshold,
+                point_num=pn,
+                prompt_num=pr,
             )
-        else:
-            pn = 50000 if point_num is None else point_num
-            pr = 128 if prompt_num is None else prompt_num
 
-        if self.device == "cuda" and self.cpu_offload:
-            self._log("  Movendo P3-SAM para GPU...")
-            if hasattr(self._bbox_predictor, "to"):
-                _to_device(self._bbox_predictor, self.device)
-            _log_vram("P3-SAM na GPU: ") if self.verbose else None
+            if self.device == "cuda" and self.cpu_offload:
+                self._log("  Offloading P3-SAM para CPU...")
+                if hasattr(self._bbox_predictor, "to"):
+                    _offload_to_cpu(self._bbox_predictor)
+                import gc
 
-        aabb, face_ids, clean_mesh = self._bbox_predictor.predict_aabb(
-            mesh,
-            seed=seed,
-            post_process=postprocess,
-            threshold=threshold,
-            point_num=pn,
-            prompt_num=pr,
-        )
+                gc.collect()
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
 
-        if self.device == "cuda" and self.cpu_offload:
-            self._log("  Offloading P3-SAM para CPU...")
-            if hasattr(self._bbox_predictor, "to"):
-                _offload_to_cpu(self._bbox_predictor)
-            # Limpar memória após P3-SAM
-            import gc
-
-            gc.collect()
-            torch.cuda.empty_cache()
-            torch.cuda.synchronize()
-
-        num_parts = len(np.unique(face_ids[face_ids >= 0]))
-        self._log(f"  Detectadas {num_parts} partes")
+            num_parts = len(np.unique(face_ids[face_ids >= 0]))
+            self._log(f"  Detectadas {num_parts} partes")
         return aabb, face_ids, clean_mesh
 
     # ------------------------------------------------------------------
@@ -459,6 +504,14 @@ class Part3DPipeline:
         # Tentar carregar DiT na GPU
         try:
             _to_device(self._model, device)
+            # Aplicar attention slicing se habilitado
+            if self.enable_attention_slicing and hasattr(self._model, "enable_attention_slicing"):
+                try:
+                    self._model.enable_attention_slicing()
+                    self._log("  [B] Attention slicing habilitado no DiT")
+                except Exception as e:
+                    if self.verbose:
+                        self._log(f"  [B] AVISO: attention slicing não aplicado: {e}")
         except RuntimeError as e:
             if "out of memory" in str(e).lower():
                 self._log("  [B] OOM ao carregar DiT. Usando CPU (mais lento)...")
@@ -806,30 +859,31 @@ class Part3DPipeline:
         Returns:
             (parts_scene, face_ids, segmented_mesh)
         """
-        mesh = trimesh.load(str(mesh_path), force="mesh", process=False)
+        with profile_span("part3d_decompose", sync_cuda=True):
+            mesh = trimesh.load(str(mesh_path), force="mesh", process=False)
 
-        aabb, face_ids, clean_mesh = self.segment(
-            mesh,
-            postprocess=postprocess,
-            threshold=threshold,
-            seed=seed,
-            point_num=point_num,
-            prompt_num=prompt_num,
-        )
+            aabb, face_ids, clean_mesh = self.segment(
+                mesh,
+                postprocess=postprocess,
+                threshold=threshold,
+                seed=seed,
+                point_num=point_num,
+                prompt_num=prompt_num,
+            )
 
-        parts_scene = self.generate(
-            mesh_path,
-            aabb,
-            octree_resolution=octree_resolution,
-            num_inference_steps=num_inference_steps,
-            num_chunks=num_chunks,
-            seed=seed,
-            surface_pc_size=surface_pc_size,
-            bbox_num_points=bbox_num_points,
-            cond_batch_size=cond_batch_size,
-        )
+            parts_scene = self.generate(
+                mesh_path,
+                aabb,
+                octree_resolution=octree_resolution,
+                num_inference_steps=num_inference_steps,
+                num_chunks=num_chunks,
+                seed=seed,
+                surface_pc_size=surface_pc_size,
+                bbox_num_points=bbox_num_points,
+                cond_batch_size=cond_batch_size,
+            )
 
-        return parts_scene, face_ids, clean_mesh
+            return parts_scene, face_ids, clean_mesh
 
     # ------------------------------------------------------------------
     # Limpeza

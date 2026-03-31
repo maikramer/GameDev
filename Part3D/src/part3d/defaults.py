@@ -11,6 +11,12 @@ Tamanhos dos pesos (FP32 → FP16):
   shapevae:        656 MB  → ~328 MB
   p3sam:           451 MB  → ~225 MB
   Total FP16:      ~4.75 GB (pico ~5.2 GB durante denoising)
+
+Otimizações disponíveis:
+  - Quantização 4-bit/8-bit via bitsandbytes ou torchao
+  - Attention slicing para reduzir pico de VRAM
+  - torch.compile para acelerar inferência
+  - Group offloading (mais eficiente que sequential)
 """
 
 from __future__ import annotations
@@ -38,3 +44,25 @@ DEFAULT_POSTPROCESS_THRESHOLD = 0.95
 DEFAULT_DTYPE = "float16"
 # CPU offloading: mover cada componente para GPU apenas quando necessário.
 DEFAULT_CPU_OFFLOAD = True
+
+# --- Otimizações de quantização ---
+DEFAULT_QUANTIZATION_MODE = "auto"  # "auto", "none", "int8", "int4", "torchao-int4", "torchao-int8"
+DEFAULT_QUANTIZE_DIT = True  # Quantizar o DiT (modelo mais pesado)
+DEFAULT_QUANTIZE_VAE = False  # Quantizar o ShapeVAE
+
+# --- Otimizações de attention e compile ---
+DEFAULT_ENABLE_ATTENTION_SLICING = True  # Reduz pico de VRAM
+DEFAULT_TORCH_COMPILE = False  # Compilar DiT para speedup
+DEFAULT_TORCH_COMPILE_MODE = "reduce-overhead"  # "default", "reduce-overhead", "max-autotune"
+
+# --- xFormers para attention eficiente ---
+DEFAULT_USE_XFORMERS = True
+
+# --- Group offloading (mais eficiente que sequential) ---
+DEFAULT_USE_GROUP_OFFLOAD = True  # Usar group offloading quando disponível
+
+# --- Dtype (BF16 melhor para RTX 40 series) ---
+DEFAULT_DTYPE = "float16"  # "float16", "bfloat16", "float32"
+
+# --- RTX 4050 6GB Modo Especial ---
+DEFAULT_RTX4050_MODE = False
