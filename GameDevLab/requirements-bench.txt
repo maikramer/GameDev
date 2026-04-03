@@ -1,0 +1,37 @@
+# Dependências para benchmark e otimização SDNQ no GameDevLab
+# Instale com: pip install -r requirements-bench.txt
+
+# Core ML
+torch>=2.1.0
+torchvision>=0.16.0
+torchaudio>=2.1.0
+
+# Quantização
+optimum-quanto>=0.2.0
+bitsandbytes>=0.45.0
+sdnq>=0.1.0
+
+# Diffusers e Transformers
+diffusers>=0.30.0
+transformers>=4.46.0
+accelerate>=0.34.0
+
+# Otimizações VRAM
+xformers>=0.0.28
+
+# Modelos Hugging Face
+huggingface-hub>=0.20.0
+safetensors>=0.4.0
+
+# Geometria 3D
+trimesh>=4.0.0
+scikit-image>=0.24.0
+
+# Utilitários
+einops>=0.8.0
+omegaconf>=2.3.0
+easydict>=1.10
+addict>=2.4.0
+Pillow>=10.0.0
+numpy>=1.24.0
+pyyaml>=6.0

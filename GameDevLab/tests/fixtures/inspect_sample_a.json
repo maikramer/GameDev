@@ -1,0 +1,7 @@
+{
+  "mesh_totals": {"vertex_count": 1000, "face_count": 500},
+  "world_bounds": {"max_extent": 2.5, "size": [1.0, 2.0, 1.5]},
+  "armatures": [{"name": "Armature", "bone_count": 12, "bones": ["Hips", "Spine", "Head"]}],
+  "actions": [{"name": "Idle", "frame_range": [0, 30]}],
+  "meshes": [{"name": "Body", "vertex_count": 1000, "face_count": 500}]
+}

@@ -1,0 +1,11 @@
+# Regras largas para smoke test (qualquer mesh típico passa)
+mesh_totals:
+  vertex_count:
+    min: 1
+    max: 50000000
+  face_count:
+    max: 50000000
+world_bounds:
+  max_extent:
+    max: 10000.0
+meshes_min: 1
