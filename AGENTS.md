@@ -1,0 +1,256 @@
+# AGENTS.md — GameDev Monorepo
+
+Guide for agentic coding agents working in this repository.
+
+## Repository Overview
+
+Monorepo for game-dev AI tools: text-to-image, text-to-3D, text-to-audio, textures, skymaps, PBR map generation, part decomposition, rigging, animation, and asset batching. Primarily Python with one Rust crate (Materialize).
+
+**Key directories:**
+
+| Directory | Language | Package name | Description |
+|-----------|----------|--------------|-------------|
+| `Shared/` | Python | `gamedev-shared` | Shared lib (logging, GPU, subprocess, installers, CLI) |
+| `Text2D/` | Python | `text2d` | Text-to-image (FLUX SDNQ) |
+| `Text3D/` | Python | `text3d` | Text-to-3D (Hunyuan3D-2mini) |
+| `Paint3D/` | Python | `paint3d` | 3D texturing (Hunyuan3D-Paint 2.1) |
+| `Part3D/` | Python | `part3d` | Semantic 3D parts |
+| `GameAssets/` | Python | `gameassets` | Batch asset generation |
+| `Texture2D/` | Python | `texture2d` | Seamless 2D textures (HF API) |
+| `Skymap2D/` | Python | `skymap2d` | 360-degree skymaps (HF API) |
+| `Text2Sound/` | Python | `text2sound` | Text-to-audio (Stable Audio Open) |
+| `Rigging3D/` | Python | `rigging3d` | Auto-rigging (UniRig, Python 3.11) |
+| `Animator3D/` | Python | `animator3d` | Animation (bpy 5.1, Python 3.13) |
+| `GameDevLab/` | Python | `gamedev-lab` | Debug 3D, benches, profiling |
+| `Materialize/` | Rust | `materialize-cli` | PBR map generation (wgpu compute) |
+
+All Python packages depend on `gamedev-shared` (install Shared first).
+
+## Build / Lint / Test Commands
+
+### Full CI (run before PRs)
+
+```bash
+make check
+```
+
+This runs: lint + format check + typecheck + all tests.
+
+### Lint
+
+```bash
+make lint              # ruff check . + cargo clippy (Materialize/)
+ruff check .           # Python linting only
+ruff check . --fix     # Auto-fix lint issues
+```
+
+### Format
+
+```bash
+make fmt               # ruff format . + cargo fmt (Materialize/)
+make fmt-check         # Check formatting without writing
+ruff format .          # Format Python only
+ruff format --check .  # Check Python formatting only
+```
+
+### Type checking
+
+```bash
+make typecheck         # mypy on Shared/src (--ignore-missing-imports)
+```
+
+### Tests — all packages
+
+```bash
+make test              # pytest all Python packages + cargo test Materialize
+```
+
+### Tests — single package
+
+```bash
+make test-shared       # pytest Shared only
+make test-text2d       # pytest Text2D only
+make test-text3d       # pytest Text3D only
+make test-paint3d      # pytest Paint3D only
+make test-part3d       # pytest Part3D only
+make test-gameassets   # pytest GameAssets only
+make test-texture2d    # pytest Texture2D only
+make test-text2sound   # pytest Text2Sound only
+make test-materialize  # cargo test in Materialize/
+```
+
+### Tests — single test file or test class
+
+```bash
+# From inside the package directory (with venv active):
+pytest tests/test_env.py                          # Single file
+pytest tests/test_env.py::TestEnsurePytorchCudaAllocConf  # Single class
+pytest tests/test_env.py::TestEnsurePytorchCudaAllocConf::test_sets_if_empty  # Single test
+pytest -k "test_name_pattern"                     # By keyword
+pytest -v --tb=short                              # Verbose with short tracebacks
+pytest --cov=src --cov-report=html                # With coverage
+
+# Rust (Materialize):
+cargo test --manifest-path Materialize/Cargo.toml
+cargo test --manifest-path Materialize/Cargo.toml test_preset_roundtrip  # Single test
+```
+
+### Install dev dependencies
+
+```bash
+cd Shared && pip install -e ".[dev]"   # Per-package dev install
+pip install pre-commit && make install-hooks  # Pre-commit hooks
+```
+
+## Python Code Style
+
+### Formatting rules (enforced by ruff)
+
+- **Target version:** Python 3.10+
+- **Line length:** 120 characters max
+- **Quotes:** Double quotes (`"..."`)
+- **Indentation:** 4 spaces
+- **Line endings:** LF
+- **Trailing whitespace:** trimmed
+- **Final newline:** required
+
+### Ruff rule set
+
+Config: `ruff.toml` at repo root. Selected rules: `E`, `F`, `W`, `I` (isort), `UP`, `B`, `SIM`, `RUF`.
+
+### Imports
+
+```python
+from __future__ import annotations  # Always first
+
+import os
+import sys
+from pathlib import Path
+from typing import Any
+
+from gamedev_shared.env import get_tool_bin
+from gamedev_shared.logging import Logger
+```
+
+- Always use `from __future__ import annotations` as the first import.
+- Stdlib imports first, then third-party, then local (enforced by `I`/isort rule).
+- Use lazy imports for heavy dependencies (`torch`, `diffusers`) to allow importing without GPU deps.
+- Never use wildcard imports.
+
+### Type hints
+
+- Required for `gamedev-shared` package (`disallow_untyped_defs = True` in `mypy.ini`).
+- Use modern syntax: `str | None` (not `Optional[str]`), `list[str]` (not `List[str]`).
+- Use `from __future__ import annotations` to enable forward-reference syntax on Python 3.10.
+- `Any` is acceptable for dynamic/generic objects (e.g., pipeline objects from diffusers).
+
+### Naming conventions
+
+- **Modules:** `snake_case` (e.g., `subprocess_utils.py`, `cli_rich.py`)
+- **Packages:** `lowercase` (e.g., `text2d`, `gamedev_shared`)
+- **Classes:** `PascalCase` (e.g., `KleinFluxGenerator`, `RunResult`)
+- **Functions/methods:** `snake_case` (e.g., `get_gpu_info`, `format_bytes`)
+- **Constants:** `UPPER_SNAKE_CASE` (e.g., `DEFAULT_EXCLUSIVE_GPU_MAX_USED_MIB`)
+- **Private helpers:** prefix with `_` (e.g., `_torch()`, `_model_id()`)
+- **CLI entry points:** `cli.py` or `cli_rich.py` in the package, `__main__.py` for `python -m` support.
+
+### Docstrings
+
+Google-style docstrings:
+
+```python
+def resolve_binary(env_name: str, default_name: str) -> str:
+    """Resolve executable: env var -> PATH -> FileNotFoundError.
+
+    Args:
+        env_name: Environment variable name (e.g., ``TEXT2D_BIN``).
+        default_name: Command name on PATH (e.g., ``text2d``).
+
+    Returns:
+        Absolute path or executable name found.
+
+    Raises:
+        FileNotFoundError: Binary not found.
+    """
+```
+
+### Error handling
+
+- Raise specific exceptions with clear messages.
+- Use `from None` to suppress irrelevant chained tracebacks, `from e` to preserve cause.
+- Use `contextlib.suppress(ValueError)` for expected non-critical failures.
+- Return tuples `(success, message)` for validation-style functions.
+- Use dataclasses for structured results (e.g., `RunResult`).
+
+### Testing conventions
+
+- Framework: **pytest** with `pytest-cov`.
+- Test file location: `<Package>/tests/test_<module>.py`.
+- Test class organization: group by tested feature in classes (`class TestFeatureName:`).
+- Use `capsys` fixture for stdout/stderr assertions.
+- Use `unittest.mock.patch` and `patch.dict(os.environ, ...)` for env isolation.
+- GPU-dependent tests should auto-skip without CUDA (use `pytest.importorskip` or guards).
+- Config in each `pyproject.toml`: `pythonpath = ["src"]`, `testpaths = ["tests"]`.
+
+## Rust Code Style (Materialize/)
+
+- **Edition:** Rust 2021
+- **Error handling:** `anyhow::Result` for application code.
+- **CLI:** `clap` with derive macros.
+- **Formatting:** `cargo fmt` (standard rustfmt).
+- **Linting:** `cargo clippy -- -D warnings`.
+- **Tests:** Inline `#[cfg(test)] mod tests` for unit tests; `Materialize/tests/` for integration tests.
+- **Naming:** `PascalCase` for types/enums, `snake_case` for functions/variables, `SCREAMING_SNAKE` for constants.
+- Use `bytemuck` for GPU buffer casting (`Pod`, `Zeroable`).
+- All CLI args documented with `#[arg(help = "...")]`.
+
+## Package Structure (Python)
+
+Each Python package follows this layout:
+
+```
+<PackageName>/
+  pyproject.toml          # PEP 621 metadata, deps, pytest config
+  setup.py                # Legacy installer compatibility (optional)
+  src/
+    <package_name>/
+      __init__.py
+      __main__.py         # python -m <package_name>
+      cli.py              # Click CLI
+      cli_rich.py         # Rich-enhanced CLI
+      generator.py        # Core logic (example)
+  tests/
+    __init__.py
+    test_<module>.py
+  scripts/
+    installer.py          # Package installer (uses gamedev-shared)
+```
+
+## Commit Conventions
+
+Use Conventional Commits:
+
+- `feat:` New feature
+- `fix:` Bug fix
+- `docs:` Documentation changes
+- `style:` Code style (formatting, no logic change)
+- `refactor:` Code refactoring
+- `test:` Adding or updating tests
+- `chore:` Maintenance tasks
+
+## CI Pipeline
+
+CI runs on push/PR to `main` (`.github/workflows/ci.yml`):
+
+1. **lint:** ruff check + ruff format --check + pre-commit
+2. **test-python:** pytest per package on multiple Python versions (3.10, 3.12, 3.11 for Rigging3D, 3.13 for Animator3D)
+3. **test-rust:** cargo fmt --check + cargo clippy + cargo test (Materialize)
+4. **smoke-heavy:** Editable install + import check for Text2D, Text3D
+
+## Important Notes
+
+- Do NOT modify vendored code in `Paint3D/src/paint3d/hy3dpaint/`, `Paint3D/src/paint3d/hunyuan3d-2.1/`, or `Rigging3D/src/rigging3d/unirig/` — these are excluded from lint.
+- Shared must be installed before any other package: `cd Shared && pip install -e .`
+- Each package may have its own `.venv/` — tests should use the package-local venv.
+- Environment variables are the primary configuration mechanism (see README.md "Environment variables" section).
+- Run `make check` before considering work complete.
