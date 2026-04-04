@@ -1,0 +1,6 @@
+#!/media/maikeu/b1e73891-ddde-49a0-9382-903accb68b49/GitClones/GameDev/.venv312/bin/python
+import sys
+from mypyc.__main__ import main
+if __name__ == '__main__':
+    sys.argv[0] = sys.argv[0].removesuffix('.exe')
+    sys.exit(main())
