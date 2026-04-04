@@ -91,20 +91,24 @@ def detect_plates(
             thin_conc = int(np.count_nonzero(in_thin)) / n_total
 
             if thin_conc < min_thin_concentration:
-                print(f"  Placa {ax_names[ax]}-{side_label} ignorada: "
-                      f"coverage={coverage:.2f} mas concentração fina={thin_conc:.1%} "
-                      f"(superfície legítima, não artefato)")
+                print(
+                    f"  Placa {ax_names[ax]}-{side_label} ignorada: "
+                    f"coverage={coverage:.2f} mas concentração fina={thin_conc:.1%} "
+                    f"(superfície legítima, não artefato)"
+                )
                 continue
 
-            plates.append({
-                "axis": ax,
-                "axis_name": ax_names[ax],
-                "side": side_label,
-                "coverage": round(coverage, 3),
-                "thin_concentration": round(thin_conc, 3),
-                "band_lo": band_lo,
-                "band_hi": band_hi,
-            })
+            plates.append(
+                {
+                    "axis": ax,
+                    "axis_name": ax_names[ax],
+                    "side": side_label,
+                    "coverage": round(coverage, 3),
+                    "thin_concentration": round(thin_conc, 3),
+                    "band_lo": band_lo,
+                    "band_hi": band_hi,
+                }
+            )
 
     return plates
 
@@ -240,7 +244,7 @@ def remove_plate_faces(
         n_spatial = int(np.count_nonzero(spatial_mask))
         print(
             f"  Placa {plate['axis_name']}-{side}: fronteira={cut:.4f}, "
-            f"profundidade={plate_depth:.4f} ({plate_depth/h*100:.1f}% da altura), "
+            f"profundidade={plate_depth:.4f} ({plate_depth / h * 100:.1f}% da altura), "
             f"{n_spatial:,} faces no corte espacial"
         )
 
@@ -260,15 +264,11 @@ def remove_plate_faces(
         return mesh
 
     if n_remaining < min_remaining_faces:
-        print(
-            f"  AVISO: sobrariam apenas {n_remaining:,} faces "
-            f"(mínimo={min_remaining_faces:,}) — abortando."
-        )
+        print(f"  AVISO: sobrariam apenas {n_remaining:,} faces (mínimo={min_remaining_faces:,}) — abortando.")
         return mesh
 
     remove_ratio = n_remove / n_total
-    print(f"  Removendo {n_remove:,} faces ({remove_ratio:.1%} do total), "
-          f"restam {n_remaining:,}")
+    print(f"  Removendo {n_remove:,} faces ({remove_ratio:.1%} do total), restam {n_remaining:,}")
 
     keep = ~remove_mask
     sub = m.submesh([np.where(keep)[0]], append=True, only_watertight=False)
@@ -355,11 +355,7 @@ def remove_plate_components(mesh: trimesh.Trimesh) -> tuple[trimesh.Trimesh, int
         e = sorted(float(x) for x in p.extents)
         flat_ratio = e[0] / e[2] if e[2] > 1e-9 else 0
 
-        is_plate = (
-            (flat_ratio < 0.05 and score > 0.4)
-            or (score > 0.7)
-            or (flat_ratio < 0.02)
-        )
+        is_plate = (flat_ratio < 0.05 and score > 0.4) or (score > 0.7) or (flat_ratio < 0.02)
 
         if is_plate and len(kept) > 0:
             removed_info.append((len(p.faces), round(score, 3), round(flat_ratio, 4)))
@@ -371,8 +367,9 @@ def remove_plate_components(mesh: trimesh.Trimesh) -> tuple[trimesh.Trimesh, int
 
     if removed_info:
         for faces, score, flat in removed_info:
-            print(f"  Removendo componente-placa desconectada: {faces:,} faces "
-                  f"(plate_score={score}, flat_ratio={flat})")
+            print(
+                f"  Removendo componente-placa desconectada: {faces:,} faces (plate_score={score}, flat_ratio={flat})"
+            )
 
         if len(kept) == 1:
             result = kept[0]
@@ -416,8 +413,10 @@ def check_connected_plate_residual(
     for rp in all_residual:
         key = (rp["axis"], rp["side"])
         if key in original_keys:
-            print(f"  Placa residual {rp['axis_name']}-{rp['side']} ignorada "
-                  f"(mesmo eixo/lado do corte original, superfície exposta)")
+            print(
+                f"  Placa residual {rp['axis_name']}-{rp['side']} ignorada "
+                f"(mesmo eixo/lado do corte original, superfície exposta)"
+            )
         else:
             new_plates.append(rp)
 
@@ -479,9 +478,7 @@ def repair_with_pymeshlab(
         n_patch = n_faces_after_close - n_faces_before_close
 
         if n_patch > 0 and fillet_smooth_steps > 0:
-            ms.compute_selection_by_condition_per_face(
-                condselect=f"(fi >= {n_faces_before_close})"
-            )
+            ms.compute_selection_by_condition_per_face(condselect=f"(fi >= {n_faces_before_close})")
             ms.compute_selection_transfer_face_to_vertex()
             for _ in range(fillet_dilations):
                 ms.apply_selection_dilatation()
@@ -490,8 +487,10 @@ def repair_with_pymeshlab(
 
             diag = ms.current_mesh().bounding_box().diagonal()
             target_edge = diag / 180
-            print(f"  Fillet: {n_patch} faces do patch + {n_fillet - n_patch} vizinhas "
-                  f"({fillet_dilations} anéis), remesh target={target_edge:.5f}")
+            print(
+                f"  Fillet: {n_patch} faces do patch + {n_fillet - n_patch} vizinhas "
+                f"({fillet_dilations} anéis), remesh target={target_edge:.5f}"
+            )
 
             ms.meshing_isotropic_explicit_remeshing(
                 iterations=3,
@@ -505,9 +504,7 @@ def repair_with_pymeshlab(
             n_after_remesh = ms.current_mesh().face_number()
             print(f"  Remesh: {n_faces_after_close:,} -> {n_after_remesh:,} faces")
 
-            ms.compute_selection_by_condition_per_face(
-                condselect=f"(fi >= {n_faces_before_close})"
-            )
+            ms.compute_selection_by_condition_per_face(condselect=f"(fi >= {n_faces_before_close})")
             ms.compute_selection_transfer_face_to_vertex()
             for _ in range(fillet_dilations):
                 ms.apply_selection_dilatation()
@@ -600,9 +597,9 @@ def process_mesh(
 
     Retorna dict com métricas antes/depois.
     """
-    print(f"\n{'='*70}")
+    print(f"\n{'=' * 70}")
     print(f"Processando: {input_path.name}")
-    print(f"{'='*70}")
+    print(f"{'=' * 70}")
 
     mesh = trimesh.load(str(input_path), force="mesh")
     stats_before = {
@@ -611,8 +608,10 @@ def process_mesh(
         "watertight": bool(mesh.is_watertight),
         "boundary_edges": _boundary_edge_count(mesh),
     }
-    print(f"  Antes: {stats_before['vertices']:,} verts, {stats_before['faces']:,} faces, "
-          f"watertight={stats_before['watertight']}")
+    print(
+        f"  Antes: {stats_before['vertices']:,} verts, {stats_before['faces']:,} faces, "
+        f"watertight={stats_before['watertight']}"
+    )
 
     print("\n[1/3] Detectando placas...")
     plates = detect_plates(
@@ -654,8 +653,10 @@ def process_mesh(
 
     if needs_discard:
         for rp in residual_plates:
-            print(f"  PLACA CONECTADA: {rp['axis_name']}-{rp['side']} "
-                  f"coverage={rp['coverage']:.2f} — mesh irrecuperável, DESCARTAR")
+            print(
+                f"  PLACA CONECTADA: {rp['axis_name']}-{rp['side']} "
+                f"coverage={rp['coverage']:.2f} — mesh irrecuperável, DESCARTAR"
+            )
     else:
         print("  Nenhuma placa residual — mesh limpa.")
 
@@ -665,9 +666,10 @@ def process_mesh(
         "watertight": bool(repaired.is_watertight),
         "boundary_edges": _boundary_edge_count(repaired),
     }
-    print(f"\n  Depois: {stats_after['vertices']:,} verts, {stats_after['faces']:,} faces, "
-          f"watertight={stats_after['watertight']}"
-          + (" ** DESCARTAR **" if needs_discard else ""))
+    print(
+        f"\n  Depois: {stats_after['vertices']:,} verts, {stats_after['faces']:,} faces, "
+        f"watertight={stats_after['watertight']}" + (" ** DESCARTAR **" if needs_discard else "")
+    )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     repaired.export(str(output_path), file_type="glb")
@@ -688,9 +690,9 @@ def process_mesh(
 
 def print_summary(results: list[dict]) -> None:
     """Imprime tabela resumo dos resultados."""
-    print(f"\n{'='*70}")
+    print(f"\n{'=' * 70}")
     print("RESUMO")
-    print(f"{'='*70}")
+    print(f"{'=' * 70}")
     print(f"\n{'Arquivo':<30} {'Placas':<8} {'Faces antes':<14} {'Faces depois':<14} {'WT':<6} {'Status':<12}")
     print("-" * 84)
 
@@ -729,7 +731,8 @@ Exemplos:
         help="Arquivo .glb ou diretório com .glb",
     )
     parser.add_argument(
-        "-o", "--output",
+        "-o",
+        "--output",
         type=Path,
         default=None,
         help="Arquivo ou diretório de saída (default: <input_dir>/cleaned/)",
@@ -801,9 +804,11 @@ Exemplos:
     n_watertight = sum(1 for r in results if r["after"]["watertight"])
     n_discard = sum(1 for r in results if r.get("needs_discard"))
     n_ok = n_processed - n_discard
-    print(f"\nProcessados: {n_processed}/{len(results)}, "
-          f"OK: {n_ok}, Descartar: {n_discard}, "
-          f"Watertight: {n_watertight}/{len(results)}")
+    print(
+        f"\nProcessados: {n_processed}/{len(results)}, "
+        f"OK: {n_ok}, Descartar: {n_discard}, "
+        f"Watertight: {n_watertight}/{len(results)}"
+    )
 
     return 0
 
