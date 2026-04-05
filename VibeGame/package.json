@@ -78,6 +78,10 @@
     "./extras/gltf": {
       "types": "./dist/extras/gltf-bridge.d.ts",
       "import": "./dist/extras/gltf-bridge.js"
+    },
+    "./extras/sky": {
+      "types": "./dist/extras/sky-env.d.ts",
+      "import": "./dist/extras/sky-env.js"
     }
   },
   "files": [
