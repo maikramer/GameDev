@@ -47,6 +47,7 @@ game.yaml + manifest.csv + presets [+ presets-local.yaml]
 | `gameassets prompts [--profile …] [--manifest …]` | Pré-visualiza prompts (sem GPU); `-o ficheiro.jsonl` grava JSONL |
 | `gameassets batch [--profile …] [--manifest …]` | Gera imagens; `--with-3d` gera GLB quando `generate_3d=true`; `--with-rig` aplica Rigging3D quando `generate_rig=true` (após GLB); `--dry-run --dry-run-json plan.json` grava plano máquina (argv por fase) |
 | `gameassets handoff --public-dir …/public` | Copia/symlink GLB/áudio do `output_dir` para `public/assets` e grava `assets/gameassets_handoff.json` |
+| `gameassets dream "descrição" [--dry-run]` | Da ideia ao jogo: LLM planeia assets+cena, batch gera, scaffold projecto Vite. `--dry-run` emite ficheiros sem GPU. Providers: `--llm-provider openai\|huggingface\|stdin` |
 | `gameassets skill install` | Instala esta skill em `.cursor/skills/gameassets/` do projeto alvo |
 
 **Flags úteis em `batch`:** `--dry-run` (ver comandos), `--fail-fast`, `--skip-audio` (ignora `generate_audio`), `--log run.jsonl` (registo JSONL por asset, com **`timings_sec`**).

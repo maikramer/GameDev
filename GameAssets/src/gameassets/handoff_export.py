@@ -39,6 +39,7 @@ def run_handoff(
     public_dir: Path,
     *,
     copy: bool,
+    prefer_animated: bool,
     prefer_rigged: bool,
     prefer_parts: bool,
     with_textures: bool,
@@ -78,10 +79,14 @@ def run_handoff(
             rig_out = _rigging3d_output_path(mesh_path, sfx or "_rigged")
             p3_row = _part3d_profile_effective(profile, row)
             out_p, _ = _part3d_output_paths(mesh_path, p3_row)
+            anim_out = mesh_path.with_name(f"{mesh_path.stem}_animated.glb")
 
             chosen: Path | None = None
             chosen_kind = "base"
-            if prefer_rigged and rig_out.is_file():
+            if prefer_animated and anim_out.is_file():
+                chosen = anim_out
+                chosen_kind = "animated"
+            elif prefer_rigged and rig_out.is_file():
                 chosen = rig_out
                 chosen_kind = "rigged"
             elif prefer_parts and out_p.is_file():
@@ -154,6 +159,7 @@ def handoff_command_impl(
     public_dir: Path,
     *,
     copy: bool,
+    prefer_animated: bool,
     prefer_rigged: bool,
     prefer_parts: bool,
     with_textures: bool,
@@ -169,6 +175,7 @@ def handoff_command_impl(
         manifest_dir,
         public_dir,
         copy=copy,
+        prefer_animated=prefer_animated,
         prefer_rigged=prefer_rigged,
         prefer_parts=prefer_parts,
         with_textures=with_textures,

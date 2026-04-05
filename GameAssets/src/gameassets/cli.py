@@ -48,6 +48,8 @@ Exemplo rápido:
   gameassets batch --profile game.yaml --manifest manifest.csv --with-3d
   gameassets batch --dry-run --dry-run-json plan.json --profile game.yaml --manifest manifest.csv
   gameassets handoff --profile game.yaml --manifest manifest.csv --public-dir ../my-game/public
+  gameassets dream "platformer 3D com cristais num mundo de nuvens" --dry-run
+  gameassets dream "idle clicker de fazenda" --llm-provider openai --output-dir ./mygame
 
 Preset só num ficheiro teu (ex.: galaxy_orbital em presets-local.yaml):
   gameassets batch --profile game.yaml --manifest manifest.csv --with-3d \\
@@ -816,6 +818,12 @@ def prompts_cmd(
     help="Copiar ficheiros (defeito) ou criar symlinks para o output_dir do batch",
 )
 @click.option(
+    "--prefer-animated/--no-prefer-animated",
+    "prefer_animated",
+    default=True,
+    help="Preferir *_animated.glb se existir no disco (prioridade sobre rigado/parts/base)",
+)
+@click.option(
     "--prefer-rigged/--no-prefer-rigged",
     "prefer_rigged",
     default=True,
@@ -825,7 +833,7 @@ def prompts_cmd(
     "--prefer-parts/--no-prefer-parts",
     "prefer_parts",
     default=False,
-    help="Preferir *_parts.glb em vez do rigado/base (ordem: rigado > parts > base)",
+    help="Preferir *_parts.glb (ordem: animado > rigado > parts > base)",
 )
 @click.option(
     "--with-textures/--no-with-textures",
@@ -844,6 +852,7 @@ def handoff_cmd(
     presets_local: Path | None,
     public_dir: Path,
     use_copy: bool,
+    prefer_animated: bool,
     prefer_rigged: bool,
     prefer_parts: bool,
     with_textures: bool,
@@ -858,6 +867,7 @@ def handoff_cmd(
         presets_local,
         public_dir,
         copy=use_copy,
+        prefer_animated=prefer_animated,
         prefer_rigged=prefer_rigged,
         prefer_parts=prefer_parts,
         with_textures=with_textures,
@@ -1043,6 +1053,8 @@ def batch_cmd(
         any_t2d = False
         any_tex = False
         for r in rows:
+            if not r.generate_3d:
+                continue
             src = effective_image_source(profile, r)
             if src == "text2d":
                 any_t2d = True
@@ -1203,41 +1215,42 @@ def batch_cmd(
                 p1_title = "--- Fase 1: Text2D (todas as linhas) ---"
             _dry_run_header(dry_plan, p1_title)
             for row in rows:
-                prompt = build_prompt(profile, preset, row, for_3d=False)
-                img_path, mesh_path = _paths_for_row_manifest(profile, manifest_dir, row)
-                seed = _seed_for_row(profile, row.id)
-                tt_line = _texture2d_profile_effective(profile)
-                if _row_uses_texture2d(profile, row):
-                    t2d_args = [
-                        texture2d_bin or "",
-                        "generate",
-                        prompt,
-                        "-o",
-                        str(img_path),
-                    ]
-                    if seed is not None:
-                        t2d_args.extend(["--seed", str(seed)])
-                    _append_texture2d_profile_args(tt_line, t2d_args)
-                else:
-                    t2d_args = [
-                        text2d_bin or "",
-                        "generate",
-                        prompt,
-                        "-o",
-                        str(img_path),
-                    ]
-                    if seed is not None:
-                        t2d_args.extend(["--seed", str(seed)])
-                    _append_text2d_profile_args(profile, t2d_args)
-                _dry_run_emit(dry_plan, phase=p1_title, row_id=row.id, argv=t2d_args)
-                if _row_uses_texture2d(profile, row) and tt_line.materialize:
-                    maps_ph = _texture2d_material_maps_path(profile, row)
-                    try:
-                        mbin_dr = _resolve_materialize_bin_texture2d(tt_line)
-                    except FileNotFoundError:
-                        mbin_dr = "materialize"
-                    margv = _materialize_diffuse_argv(mbin_dr, tt_line, img_path, maps_ph)
-                    _dry_run_emit(dry_plan, phase=p1_title + " materialize", row_id=row.id, argv=margv)
+                if row.generate_3d:
+                    prompt = build_prompt(profile, preset, row, for_3d=False)
+                    img_path, mesh_path = _paths_for_row_manifest(profile, manifest_dir, row)
+                    seed = _seed_for_row(profile, row.id)
+                    tt_line = _texture2d_profile_effective(profile)
+                    if _row_uses_texture2d(profile, row):
+                        t2d_args = [
+                            texture2d_bin or "",
+                            "generate",
+                            prompt,
+                            "-o",
+                            str(img_path),
+                        ]
+                        if seed is not None:
+                            t2d_args.extend(["--seed", str(seed)])
+                        _append_texture2d_profile_args(tt_line, t2d_args)
+                    else:
+                        t2d_args = [
+                            text2d_bin or "",
+                            "generate",
+                            prompt,
+                            "-o",
+                            str(img_path),
+                        ]
+                        if seed is not None:
+                            t2d_args.extend(["--seed", str(seed)])
+                        _append_text2d_profile_args(profile, t2d_args)
+                    _dry_run_emit(dry_plan, phase=p1_title, row_id=row.id, argv=t2d_args)
+                    if _row_uses_texture2d(profile, row) and tt_line.materialize:
+                        maps_ph = _texture2d_material_maps_path(profile, row)
+                        try:
+                            mbin_dr = _resolve_materialize_bin_texture2d(tt_line)
+                        except FileNotFoundError:
+                            mbin_dr = "materialize"
+                        margv = _materialize_diffuse_argv(mbin_dr, tt_line, img_path, maps_ph)
+                        _dry_run_emit(dry_plan, phase=p1_title + " materialize", row_id=row.id, argv=margv)
                 if not skip_audio and text2sound_bin and row.generate_audio:
                     ts_line = _text2sound_profile_effective(profile)
                     audio_final = _audio_path_for_row_manifest(profile, manifest_dir, row)
@@ -1406,8 +1419,7 @@ def batch_cmd(
             )
             console.print(
                 Panel(
-                    f"[green]dry-run[/green] — plano JSON: [bold]{dry_run_json}[/bold] "
-                    f"({len(dry_plan)} passo(s))",
+                    f"[green]dry-run[/green] — plano JSON: [bold]{dry_run_json}[/bold] ({len(dry_plan)} passo(s))",
                     border_style="green",
                     title="Batch",
                 )
@@ -1524,6 +1536,15 @@ def batch_cmd(
                         else:
                             if not defer_audio:
                                 append_log(rec)
+                        progress.advance(task1)
+                        continue
+
+                    if not row.generate_3d:
+                        progress.update(task1, description=f"[cyan]{row.id}[/cyan] · skip 2D")
+                        results.append(rec)
+                        defer_audio = row.generate_audio and not skip_audio and bool(text2sound_bin)
+                        if not defer_audio:
+                            append_log(rec)
                         progress.advance(task1)
                         continue
 
@@ -1955,6 +1976,12 @@ def _paint3d_texture_argv(
         args.extend(["--max-views", str(t3.paint_max_views)])
     if t3.paint_view_resolution is not None:
         args.extend(["--view-resolution", str(t3.paint_view_resolution)])
+    if t3.paint_render_size is not None:
+        args.extend(["--render-size", str(t3.paint_render_size)])
+    if t3.paint_texture_size is not None:
+        args.extend(["--texture-size", str(t3.paint_texture_size)])
+    if t3.paint_bake_exp is not None:
+        args.extend(["--bake-exp", str(t3.paint_bake_exp)])
     # --- Otimizações de VRAM ---
     if t3.paint_low_vram_mode:
         args.append("--low-vram-mode")
@@ -2726,6 +2753,80 @@ def debug_compare(
     console.print(f"[green]Comparacao:[/green] {output_dir}")
     n = len(side_by_side_paths)
     console.print(f"  {n} imagens side-by-side, report em {diff_path}")
+
+
+@main.command("dream")
+@click.argument("description")
+@click.option("--output-dir", type=Path, default=".", help="Pasta raiz onde o projecto será criado.")
+@click.option(
+    "--llm-provider", default="openai", type=click.Choice(["openai", "huggingface", "stdin"]), help="Provider LLM."
+)
+@click.option("--llm-model", default=None, help="Modelo LLM (ex.: gpt-4o-mini, meta-llama/Llama-3.1-8B-Instruct).")
+@click.option("--llm-api-key", default=None, help="API key (override OPENAI_API_KEY).")
+@click.option("--llm-base-url", default=None, help="Base URL (OpenAI-compatible).")
+@click.option("--style-preset", default=None, help="Override do preset de estilo.")
+@click.option("--max-assets", default=8, type=int, help="Número máximo de assets.")
+@click.option("--with-audio/--no-audio", default=True, help="Incluir assets de áudio.")
+@click.option("--with-sky/--no-sky", default=True, help="Gerar sky equirectangular.")
+@click.option("--presets-local", type=Path, default=None, help="Ficheiro de presets local.")
+@click.option("--dry-run", is_flag=True, default=False, help="Gerar ficheiros sem executar batch/sky (sem GPU).")
+@click.option("--plan-json", type=Path, default=None, help="Exportar dream_plan.json para este caminho.")
+def dream_cmd(
+    description: str,
+    output_dir: Path,
+    llm_provider: str,
+    llm_model: str | None,
+    llm_api_key: str | None,
+    llm_base_url: str | None,
+    style_preset: str | None,
+    max_assets: int,
+    with_audio: bool,
+    with_sky: bool,
+    presets_local: Path | None,
+    dry_run: bool,
+    plan_json: Path | None,
+) -> None:
+    """Da ideia ao jogo: gera assets, cena e projecto Vite com IA.
+
+    DESCRIPTION é a descrição do jogo em linguagem natural.
+    """
+    from .dream.planner import plan_game
+    from .dream.runner import run_dream
+
+    bundle = load_presets_bundle(presets_local)
+    preset_names = sorted(bundle.keys())
+
+    plan = plan_game(
+        description,
+        preset_names=preset_names,
+        style_preset=style_preset,
+        max_assets=max_assets,
+        with_audio=with_audio,
+        with_sky=with_sky,
+        provider=llm_provider,
+        model=llm_model,
+        api_key=llm_api_key,
+        base_url=llm_base_url,
+        plan_json_path=str(plan_json) if plan_json else None,
+    )
+
+    report = run_dream(
+        plan,
+        output_dir,
+        with_sky=with_sky,
+        with_audio=with_audio,
+        dry_run=dry_run,
+    )
+
+    if plan_json:
+        console.print(f"[cyan]Plan JSON:[/cyan] {plan_json}")
+
+    if dry_run:
+        console.print("[cyan]dry-run:[/cyan] nenhum asset gerado (sem GPU).")
+    else:
+        ok_count = sum(1 for s in report.get("steps", []) if s.get("ok"))
+        total = len(report.get("steps", []))
+        console.print(f"[green]{ok_count}/{total} passos OK.[/green]")
 
 
 if __name__ == "__main__":

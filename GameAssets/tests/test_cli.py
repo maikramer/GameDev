@@ -178,6 +178,51 @@ def test_batch_dry_run_json_requires_dry_run(runner: CliRunner, tmp_path: Path) 
     assert r.exit_code != 0
 
 
+def test_dream_dry_run(runner: CliRunner, tmp_path: Path) -> None:
+    """dream --dry-run gera ficheiros sem GPU (usa fallback plan)."""
+    r = runner.invoke(
+        cli,
+        [
+            "dream",
+            "simple platformer with crystals",
+            "--dry-run",
+            "--output-dir",
+            str(tmp_path),
+        ],
+    )
+    assert r.exit_code == 0, f"exit={r.exit_code}\n{r.output}"
+    # Deve ter criado um subdiretório com ficheiros
+    project_dirs = [d for d in tmp_path.iterdir() if d.is_dir()]
+    assert len(project_dirs) >= 1
+    project = project_dirs[0]
+    batch_dir = project / "_batch"
+    assert (batch_dir / "game.yaml").is_file()
+    assert (batch_dir / "manifest.csv").is_file()
+    assert (batch_dir / "dream_plan.json").is_file()
+
+
+def test_dream_dry_run_plan_json(runner: CliRunner, tmp_path: Path) -> None:
+    """dream --dry-run --plan-json exporta o plano."""
+    plan_out = tmp_path / "exported_plan.json"
+    r = runner.invoke(
+        cli,
+        [
+            "dream",
+            "idle clicker game",
+            "--dry-run",
+            "--output-dir",
+            str(tmp_path),
+            "--plan-json",
+            str(plan_out),
+        ],
+    )
+    assert r.exit_code == 0, f"exit={r.exit_code}\n{r.output}"
+    assert plan_out.is_file()
+    data = json.loads(plan_out.read_text(encoding="utf-8"))
+    assert "title" in data
+    assert "assets" in data
+
+
 def test_batch_skip_text2d_requires_with_3d(runner: CliRunner, tmp_path: Path) -> None:
     runner.invoke(cli, ["init", "--path", str(tmp_path)])
     r = runner.invoke(
