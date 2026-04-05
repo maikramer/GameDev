@@ -14,6 +14,14 @@ Configuração validada:
   ``PoseRoPEAttnProcessor2_0``) do ``UNet2p5DConditionModel``.
 - Dtype: float16 (pipeline carrega em FP16; SDNQ mantém FP16)
 - torch.compile: não testado com UNet2p5D customizado; desligado por defeito
+
+Qualidade de bake:
+- render_size=1024 e texture_size=2048 com cpu_offload (GPUs ≤6 GB):
+  o MeshRender a 2048/4096 consome ~300 MB extras que causam OOM no UNet.
+  Com --render-size / --texture-size é possível usar valores maiores em GPUs com mais VRAM.
+- bake_exp=6 (era 4): transições mais nítidas entre vistas, menos sangramento.
+- Upscale (Real-ESRGAN) desabilitado por defeito: pode ser ligado com --upscale.
+  Roda em CPU, sem custo de VRAM, mas nem sempre melhora a qualidade percebida.
 """
 
 from __future__ import annotations
@@ -24,9 +32,17 @@ DEFAULT_PAINT_CPU_OFFLOAD = True
 DEFAULT_PAINT_MAX_VIEWS = 4
 DEFAULT_PAINT_VIEW_RESOLUTION = 512
 
+DEFAULT_PAINT_BAKE_EXP = 6
+
 DEFAULT_VAE_TILE_SIZE = 256
 DEFAULT_ENABLE_VAE_SLICING = True
 DEFAULT_ENABLE_VAE_TILING = True
+
+DEFAULT_SMOOTH = True
+DEFAULT_SMOOTH_PASSES = 2
+DEFAULT_SMOOTH_DIAMETER = 9
+DEFAULT_SMOOTH_SIGMA_COLOR = 50.0
+DEFAULT_SMOOTH_SIGMA_SPACE = 50.0
 
 DEFAULT_UPSCALE = False
 DEFAULT_UPSCALE_FACTOR = 4

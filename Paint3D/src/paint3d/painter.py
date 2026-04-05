@@ -74,6 +74,16 @@ def check_hunyuan3d21_environment() -> tuple[bool, str]:
     return True, str(root)
 
 
+def _restore_feet_origin(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
+    """Re-center mesh with base at Y=0 and XZ centered (feet convention)."""
+    bounds = mesh.bounds
+    cx = (bounds[0][0] + bounds[1][0]) * 0.5
+    cy = float(bounds[0][1])
+    cz = (bounds[0][2] + bounds[1][2]) * 0.5
+    mesh.apply_translation([-cx, -cy, -cz])
+    return mesh
+
+
 def apply_hunyuan_paint(
     mesh: trimesh.Trimesh,
     image: str | Path | Image.Image,
@@ -83,17 +93,24 @@ def apply_hunyuan_paint(
     paint_cpu_offload: bool = _defaults.DEFAULT_PAINT_CPU_OFFLOAD,
     max_num_view: int = _defaults.DEFAULT_PAINT_MAX_VIEWS,
     view_resolution: int = _defaults.DEFAULT_PAINT_VIEW_RESOLUTION,
+    render_size: int | None = None,
+    texture_size: int | None = None,
+    bake_exp: int = _defaults.DEFAULT_PAINT_BAKE_EXP,
     use_remesh: bool = True,
     verbose: bool = False,
     enable_vae_slicing: bool = _defaults.DEFAULT_ENABLE_VAE_SLICING,
     enable_vae_tiling: bool = _defaults.DEFAULT_ENABLE_VAE_TILING,
     vae_tile_size: int = _defaults.DEFAULT_VAE_TILE_SIZE,
+    preserve_origin: bool = True,
 ) -> trimesh.Trimesh:
     """
     Aplica Hunyuan3D-Paint 2.1: mesh + imagem de referência → mesh com UV e textura/PBR (GLB).
 
     SDNQ uint8 é aplicado automaticamente ao UNet quando disponível (``gamedev_shared.sdnq``).
     Sem SDNQ, o pipeline usa qint8 pré-quantizado do upstream ou FP16.
+
+    Com ``preserve_origin=True`` (padrão), a mesh texturizada é recentrada na convenção
+    "pés": base do AABB em Y=0 e centro em XZ, alinhando com saídas Text3D após normalização interna do paint.
     """
     from gamedev_shared.profiler import profile_span
     from gamedev_shared.quantization import enable_vae_optimizations
@@ -128,6 +145,12 @@ def apply_hunyuan_paint(
         out_glb = tdir / "textured_mesh.glb"
 
         with profile_span("paint_prepare_io"):
+            bounds_before = mesh.bounds.copy()
+            if verbose:
+                print(
+                    "[Paint 2.1] input AABB (antes do pipeline): "
+                    f"min={bounds_before[0].tolist()} max={bounds_before[1].tolist()}"
+                )
             save_glb(mesh, mesh_in)
 
             if isinstance(image, (str, Path)):
@@ -148,12 +171,21 @@ def apply_hunyuan_paint(
             else:
                 config.device = "cpu"
 
-            if paint_cpu_offload and torch.cuda.is_available():
+            if render_size is not None:
+                config.render_size = render_size
+            elif paint_cpu_offload and torch.cuda.is_available():
                 config.render_size = 1024
+
+            if texture_size is not None:
+                config.texture_size = texture_size
+            elif paint_cpu_offload and torch.cuda.is_available():
                 config.texture_size = 2048
-            elif not torch.cuda.is_available():
+
+            if not torch.cuda.is_available():
                 config.render_size = min(config.render_size, 1024)
                 config.texture_size = min(config.texture_size, 2048)
+
+            config.bake_exp = bake_exp
 
         with profile_span("paint_load_pipeline"):
             pipe = Hunyuan3DPaintPipeline(config)
@@ -203,6 +235,9 @@ def apply_hunyuan_paint(
     if not isinstance(textured, trimesh.Trimesh):
         raise TypeError(f"Paint devolveu {type(textured)}, esperado Trimesh")
 
+    if preserve_origin:
+        _restore_feet_origin(textured)
+
     return textured
 
 
@@ -216,11 +251,15 @@ def paint_file_to_file(
     paint_cpu_offload: bool | None = None,
     max_num_view: int | None = None,
     view_resolution: int | None = None,
+    render_size: int | None = None,
+    texture_size: int | None = None,
+    bake_exp: int | None = None,
     use_remesh: bool = True,
     verbose: bool = False,
     enable_vae_slicing: bool = _defaults.DEFAULT_ENABLE_VAE_SLICING,
     enable_vae_tiling: bool = _defaults.DEFAULT_ENABLE_VAE_TILING,
     vae_tile_size: int = _defaults.DEFAULT_VAE_TILE_SIZE,
+    preserve_origin: bool = True,
 ) -> Path:
     """Atalho: carrega mesh, pinta com Hunyuan3D-Paint 2.1 (PBR baked), exporta GLB."""
     repo = model_repo or _defaults.DEFAULT_PAINT_HF_REPO
@@ -228,6 +267,7 @@ def paint_file_to_file(
     offload = _defaults.DEFAULT_PAINT_CPU_OFFLOAD if paint_cpu_offload is None else paint_cpu_offload
     nviews = _defaults.DEFAULT_PAINT_MAX_VIEWS if max_num_view is None else max_num_view
     vres = _defaults.DEFAULT_PAINT_VIEW_RESOLUTION if view_resolution is None else view_resolution
+    bexp = _defaults.DEFAULT_PAINT_BAKE_EXP if bake_exp is None else bake_exp
 
     from gamedev_shared.profiler import profile_span
 
@@ -241,11 +281,15 @@ def paint_file_to_file(
         paint_cpu_offload=offload,
         max_num_view=nviews,
         view_resolution=vres,
+        render_size=render_size,
+        texture_size=texture_size,
+        bake_exp=bexp,
         use_remesh=use_remesh,
         verbose=verbose,
         enable_vae_slicing=enable_vae_slicing,
         enable_vae_tiling=enable_vae_tiling,
         vae_tile_size=vae_tile_size,
+        preserve_origin=preserve_origin,
     )
 
     output_path = Path(output_path)
