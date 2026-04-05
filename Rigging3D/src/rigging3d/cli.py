@@ -326,6 +326,38 @@ def merge_cmd(
 # --- pipeline ---
 
 
+def _validate_and_fix_origin(glb_path: Path, tolerance: float = 0.1) -> bool:
+    """Valida se a base do modelo está em Y≈0 (convenção feet do Text3D).
+
+    Não aplica correção: reexportar com trimesh removeria armature/skin do GLB rigado.
+
+    Args:
+        glb_path: GLB final após merge.
+        tolerance: Aceita |min_y| até este valor.
+
+    Returns:
+        True se min_y está fora da tolerância (foi emitido aviso); False se OK ou em erro de leitura.
+    """
+    try:
+        import trimesh
+
+        scene = trimesh.load(str(glb_path))
+        if isinstance(scene, trimesh.Scene):
+            mesh = trimesh.util.concatenate(scene.dump())
+        else:
+            mesh = scene
+        min_y = float(mesh.bounds[0][1])
+        if abs(min_y) <= tolerance:
+            return False
+        click.echo(
+            f"  ⚠ Origem: min Y = {min_y:.3f} (esperado ≈0); "
+            "GLB rigado não pode ser corrigido aqui — regenerar com origin=feet (Text3D)."
+        )
+        return True
+    except Exception:
+        return False
+
+
 def _prep_mesh_for_rigging(input_path: Path, output_path: Path, python_bin: str) -> bool:
     """Prepara mesh para rigging: merge verts, remove degenerados, remesh, close holes.
 
@@ -484,6 +516,7 @@ def pipeline_cmd(
                 )
             if rc != 0:
                 console.print(f"[yellow]merge rc={rc}, output={out.stat().st_size}B- prosseguindo.[/yellow]")
+            _validate_and_fix_origin(out)
         finally:
             if cleanup is not None and not keep_temp:
                 shutil.rmtree(cleanup, ignore_errors=True)
