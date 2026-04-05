@@ -7,6 +7,8 @@ export * from './core';
 export type { BuilderOptions };
 export type { GameRuntime } from './runtime';
 export { loadGltfToScene } from './extras/gltf-bridge';
+export { applyEquirectSkyEnvironment } from './extras/sky-env';
+export type { EquirectSkyOptions } from './extras/sky-env';
 
 let globalBuilder: GameBuilder | null = null;
 

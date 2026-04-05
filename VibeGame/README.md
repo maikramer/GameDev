@@ -38,7 +38,7 @@ vibegame create my-game
 
 Runs `bun install`, builds the package, and installs the `vibegame` CLI into `~/.local/bin` (see root `docs/INSTALLING.md`).
 
-**GLB handoff (Text3D / Paint3D / `gameassets` batch):** import `loadGltfToScene` from `vibegame`, or follow [examples/monorepo-game](examples/monorepo-game/) and the pipeline doc [MONOREPO_GAME_PIPELINE.md](../docs/MONOREPO_GAME_PIPELINE.md) at the GameDev repo root.
+**GLB handoff (Text3D / Paint3D / `gameassets` batch):** import `loadGltfToScene` from `vibegame`, use `<gltf-load url="/assets/models/foo.glb"></gltf-load>` in world XML, or follow [examples/monorepo-game](examples/monorepo-game/) and [MONOREPO_GAME_PIPELINE.md](../docs/MONOREPO_GAME_PIPELINE.md). **Skymap2D equirect → IBL:** `applyEquirectSkyEnvironment` from `vibegame`. **`gameassets handoff`** copies batch outputs into `public/assets` and writes a JSON manifest.
 
 ### Or install directly
 
