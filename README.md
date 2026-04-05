@@ -27,6 +27,7 @@ Monorepo for **text-to-image**, **text-to-3D**, **text-to-audio**, **textures an
 | [**Animator3D**](Animator3D/) | **animator3d** — animation with **bpy** 5.1 (Blender 5.1); Python **3.13**; inspection, test keyframes, GLB/FBX export after rigging. |
 | [**Materialize**](Materialize/) | **PBR maps** CLI (Rust/wgpu): normal, AO, metallic, smoothness from a diffuse texture. |
 | [**GameDevLab**](GameDevLab/) | **Lab CLI**: debug 3D, quantization benches, profiling, pipeline optimization. |
+| [**VibeGame**](VibeGame/) | **vibegame** — TypeScript 3D engine (ECS, Three.js, declarative XML); **Bun** + **Vite**. See [VibeGame/README.md](VibeGame/README.md). |
 
 Each project has its own `README`, setup, requirements, and license. Portuguese: [`README_PT.md`](README_PT.md) (root) and per-package `README_PT.md` where provided.
 
@@ -47,17 +48,23 @@ GameDev/
   Animator3D/        ← animator3d (pip) — Shared; Py 3.13 + bpy 5.1 (animation)
   GameDevLab/        ← gamedev-lab (pip) — depends on Shared; debug 3D, benches, profiling
   Materialize/       ← materialize-cli (cargo) — Python installer uses Shared
+  VibeGame/          ← vibegame (npm/Bun + Vite) — browser 3D engine; standalone, not pip
 ```
 
 ## General requirements
 
 - **Python**: most tools require **3.10+**; exceptions: **Rigging3D** (3.11), **Animator3D** (3.13 + `bpy` 5.1). See each folder’s README.
+- **VibeGame** uses **Bun** and **Node**-compatible tooling (see `VibeGame/package.json`); run `make test-vibegame` from the repo root after installing Bun.
 - **GPU** optional for Text2D; for Text3D/Paint3D/Part3D/Rigging3D, CUDA with enough VRAM is recommended for reasonable runtimes. **Texture2D** and **Skymap2D** do not need a local GPU (Hugging Face API). **GameAssets** only needs a GPU if the profile/row invokes local tools (e.g. text2d, text3d).
 - **Model weights** (Hugging Face, etc.) have their own licenses — read the model cards before shipping or using in production.
 
 ## Quick start
 
 Full guide (tool table, minimum Python per CLI, **repo root vs `Project/scripts/`**): **[docs/INSTALLING.md](docs/INSTALLING.md)** · [Português](docs/INSTALLING_PT.md).
+
+**Game pipeline (GameAssets → Vite / VibeGame, folder layout, GLB handoff):** [docs/MONOREPO_GAME_PIPELINE.md](docs/MONOREPO_GAME_PIPELINE.md).
+
+**Zero-to-game with AI (generative tools + orchestration + agents):** [docs/ZERO_TO_GAME_AI.md](docs/ZERO_TO_GAME_AI.md) · [Português](docs/ZERO_TO_GAME_AI_PT.md).
 
 ### Installation options
 

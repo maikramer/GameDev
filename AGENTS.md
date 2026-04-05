@@ -90,10 +90,23 @@ cd VibeGame && bun install --frozen-lockfile   # install deps
 make test-vibegame    # tests (runs install first)
 make check-vibegame   # tsc --noEmit
 make lint-vibegame    # eslint
+make fmt-vibegame     # prettier --write
+make fmt-check-vibegame  # prettier --check
 make build-vibegame   # vite build
 ```
 
-Formatting: Prettier (`bun run format` / `bun run format:check` in `VibeGame/`).
+Formatting: Prettier (`make fmt-vibegame` / `make fmt-check-vibegame`, or `bun run format` / `bun run format:check` in `VibeGame/`).
+
+**Unified installer (CLI on PATH):** from monorepo root, with **Bun** and **Node** available:
+
+```bash
+./install.sh vibegame
+# or: python3 -m gamedev_shared.installer.unified vibegame
+```
+
+This runs `bun install --frozen-lockfile` and `bun run build` in `VibeGame/`, then installs `vibegame` into `~/.local/bin` (wrapper → `scripts/vibegame-cli.mjs`). Subcommands: `vibegame create <name>`, `vibegame --version`.
+
+**GLB handoff (Text3D / Paint3D / GameAssets → browser):** export `loadGltfToScene` from `vibegame` (see `VibeGame/src/extras/gltf-bridge.ts`). End-to-end layout and steps: [`docs/MONOREPO_GAME_PIPELINE.md`](docs/MONOREPO_GAME_PIPELINE.md). Example project: [`VibeGame/examples/monorepo-game/`](VibeGame/examples/monorepo-game/). AI-centric workflow (generative + batch + agents): [`docs/ZERO_TO_GAME_AI.md`](docs/ZERO_TO_GAME_AI.md).
 
 ### Tests — single test file or test class
 
@@ -267,6 +280,7 @@ VibeGame has its own CI workflow in `VibeGame/.github/workflows/` (Bun + TypeScr
 
 ## Important Notes
 
+- Pre-commit (ruff + mypy) does **not** run VibeGame ESLint/Prettier; use `make lint-vibegame` / `make fmt-check-vibegame` locally or rely on the **vibegame** CI job.
 - Do NOT modify vendored code in `Paint3D/src/paint3d/hy3dpaint/`, `Paint3D/src/paint3d/hunyuan3d-2.1/`, or `Rigging3D/src/rigging3d/unirig/` — these are excluded from lint.
 - Shared must be installed before any other package: `cd Shared && pip install -e .`
 - Each package may have its own `.venv/` — tests should use the package-local venv.
