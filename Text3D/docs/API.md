@@ -23,8 +23,8 @@ gen = HunyuanTextTo3DGenerator(
     low_vram_mode=False,      # True + CUDA: Hunyuan em CPU (lento)
     verbose=False,
     cache_dir=None,
-    hunyuan_model_id="tencent/Hunyuan3D-2mini",
-    hunyuan_subfolder="hunyuan3d-dit-v2-mini",
+    hunyuan_model_id="tencent/Hunyuan3D-2.1",
+    hunyuan_subfolder="hunyuan3d-dit-v2-1",
 )
 ```
 
@@ -109,5 +109,5 @@ Ver [`src/text3d/utils/export.py`](../src/text3d/utils/export.py).
 
 ## Referências
 
-- [Hunyuan3D-2mini](https://huggingface.co/tencent/Hunyuan3D-2mini)
-- [Código Hunyuan3D-2](https://github.com/Tencent-Hunyuan/Hunyuan3D-2)
+- [Hunyuan3D-2.1](https://huggingface.co/tencent/Hunyuan3D-2.1) (shape: `hunyuan3d-dit-v2-1`, SDNQ INT4)
+- [Código Hunyuan3D-2.1](https://github.com/Tencent-Hunyuan/Hunyuan3D-2.1)

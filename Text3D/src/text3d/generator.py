@@ -97,7 +97,10 @@ class HunyuanTextTo3DGenerator:
         if self._hunyuan_pipeline is not None:
             return self._hunyuan_pipeline
 
-        from hy3dgen.shapegen import Hunyuan3DDiTFlowMatchingPipeline
+        from .hy3dshape_paths import ensure_hy3dshape_on_path
+
+        ensure_hy3dshape_on_path()
+        from .hy3dshape.pipelines import Hunyuan3DDiTFlowMatchingPipeline
 
         hunyuan_device = self.device
         wants_quant = bool(self.sdnq_preset) and hunyuan_device == "cuda"

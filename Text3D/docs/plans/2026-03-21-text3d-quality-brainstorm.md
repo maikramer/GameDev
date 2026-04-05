@@ -1,12 +1,12 @@
-# Brainstorm: qualidade Text3D (Text2D + Hunyuan3D-2mini)
+# Brainstorm: qualidade Text3D (Text2D + Hunyuan3D-2.1 SDNQ)
 
 Data: 2026-03-21  
 Estado: proposta de design / priorização (sem implementação neste documento).
 
 ## Contexto
 
-- Pipeline: **Text2D** (FLUX Klein) → imagem → **Hunyuan3D-2mini** (image-to-shape) → mesh GLB.
-- Defeitos atuais calibrados para **~6GB VRAM**: Text2D com CPU offload, Hunyuan com `octree_resolution` / `num_chunks` baixos vs [model card HF](https://huggingface.co/tencent/Hunyuan3D-2mini) (380 / 20000 / 30 steps).
+- Pipeline: **Text2D** (FLUX Klein) → imagem → **Hunyuan3D-2.1** SDNQ INT4 (image-to-shape) → mesh GLB.
+- Defeitos atuais calibrados para **~6GB VRAM**: Text2D com CPU offload, Hunyuan com `octree_resolution` / `num_chunks` baixos vs [model card HF](https://huggingface.co/tencent/Hunyuan3D-2.1) (380 / 20000 / 30 steps).
 - O modelo 3D é **só geometria** (shape); textura PBR é outro estágio no ecossistema Tencent (Hunyuan3D-Paint), com requisitos de VRAM maiores.
 
 ## Porque o resultado “parece fraco”
@@ -22,7 +22,7 @@ Estado: proposta de design / priorização (sem implementação neste documento)
 
 | Ideia | Fonte / notas |
 |--------|----------------|
-| **Remoção de fundo** (RGBA, objeto isolado) | Alinhado a tutoriais e uso comum em pipelines 3D; `rembg` já é dependência transitiva do `hy3dgen`. Alternativas HF: [briaai/RMBG-2.0](https://huggingface.co/briaai/RMBG-2.0), modelos u2net. |
+| **Remoção de fundo** (RGBA, objeto isolado) | Alinhado a tutoriais e uso comum em pipelines 3D; `rembg` disponível no `hy3dshape` vendorizado. Alternativas HF: [briaai/RMBG-2.0](https://huggingface.co/briaai/RMBG-2.0), modelos u2net. |
 | **Recorte / padding** para objeto centrado e quadrado | Reduz ruído lateral no condicionador de imagem. |
 | **Evitar upscale agressivo** | Pode introduzir artefactos que o shape “copia”. Opcional: upscale leve (Real-ESRGAN) só se testes mostrarem ganho. |
 

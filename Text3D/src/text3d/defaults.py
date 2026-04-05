@@ -15,7 +15,7 @@ import math
 import os
 
 # --- Orientação ao gravar mesh (Hunyuan3D → motor Y-up) ---
-# Rotação em torno do eixo X (radianos). O pipeline hy3dgen devolve malha numa convenção
+# Rotação em torno do eixo X (radianos). O pipeline hy3dshape devolve malha numa convenção
 # onde -90° em X fazia o modelo sair de cabeça para baixo no Godot; +90° alinha com Y+.
 # Sobrescrever: TEXT3D_EXPORT_ROTATION_X_RAD ou TEXT3D_EXPORT_ROTATION_X_DEG, ou
 # ``text3d generate --export-rotation-x-deg``.
