@@ -127,5 +127,5 @@ jobs:
         run: pip install --upgrade pip && pip install -e ${{ steps.repo.outputs.path }}/Shared/
       - name: Install package and check import
         run: |
-          pip install -e ${{ steps.repo.outputs.path }}/${{ matrix.dir }}/
+          pip install --no-deps -e ${{ steps.repo.outputs.path }}/${{ matrix.dir }}/
           python -c "import importlib; importlib.import_module('${{ matrix.module }}'); print('import OK:', '${{ matrix.module }}')"
