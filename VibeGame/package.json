@@ -1,0 +1,161 @@
+{
+  "name": "vibegame",
+  "version": "0.3.5",
+  "description": "a 3D game engine designed for vibe coding",
+  "type": "module",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./defaults": {
+      "types": "./dist/defaults.d.ts",
+      "import": "./dist/defaults.js"
+    },
+    "./animation": {
+      "types": "./dist/plugins/animation/index.d.ts",
+      "import": "./dist/plugins/animation/index.js"
+    },
+    "./input": {
+      "types": "./dist/plugins/input/index.d.ts",
+      "import": "./dist/plugins/input/index.js"
+    },
+    "./orbit-camera": {
+      "types": "./dist/plugins/orbit-camera/index.d.ts",
+      "import": "./dist/plugins/orbit-camera/index.js"
+    },
+    "./physics": {
+      "types": "./dist/plugins/physics/index.d.ts",
+      "import": "./dist/plugins/physics/index.js"
+    },
+    "./player": {
+      "types": "./dist/plugins/player/index.d.ts",
+      "import": "./dist/plugins/player/index.js"
+    },
+    "./rendering": {
+      "types": "./dist/plugins/rendering/index.d.ts",
+      "import": "./dist/plugins/rendering/index.js"
+    },
+    "./postprocessing": {
+      "types": "./dist/plugins/postprocessing/index.d.ts",
+      "import": "./dist/plugins/postprocessing/index.js"
+    },
+    "./text": {
+      "types": "./dist/plugins/text/index.d.ts",
+      "import": "./dist/plugins/text/index.js"
+    },
+    "./transforms": {
+      "types": "./dist/plugins/transforms/index.d.ts",
+      "import": "./dist/plugins/transforms/index.js"
+    },
+    "./respawn": {
+      "types": "./dist/plugins/respawn/index.d.ts",
+      "import": "./dist/plugins/respawn/index.js"
+    },
+    "./startup": {
+      "types": "./dist/plugins/startup/index.d.ts",
+      "import": "./dist/plugins/startup/index.js"
+    },
+    "./tweening": {
+      "types": "./dist/plugins/tweening/index.d.ts",
+      "import": "./dist/plugins/tweening/index.js"
+    },
+    "./line": {
+      "types": "./dist/plugins/line/index.d.ts",
+      "import": "./dist/plugins/line/index.js"
+    },
+    "./vite": {
+      "types": "./dist/vite/index.d.ts",
+      "import": "./dist/vite/index.js"
+    },
+    "./cli": {
+      "types": "./dist/cli/index.d.ts",
+      "import": "./dist/cli/index.js"
+    },
+    "./extras/gltf": {
+      "types": "./dist/extras/gltf-bridge.d.ts",
+      "import": "./dist/extras/gltf-bridge.js"
+    }
+  },
+  "files": [
+    "dist",
+    "llms.txt",
+    "!dist/reference",
+    "!dist/examples"
+  ],
+  "bin": {
+    "vibegame": "./scripts/vibegame-cli.mjs"
+  },
+  "scripts": {
+    "build": "vite build",
+    "build:release": "bun scripts/prepare.ts && vite build && vite build --config vite.config.cdn.ts",
+    "dev": "vite build --watch",
+    "check": "tsc --noEmit",
+    "example": "bun run build && cd examples/hello-world && bun run dev",
+    "clean": "rm -rf dist",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "test": "bun test"
+  },
+  "keywords": [
+    "threejs",
+    "game-engine",
+    "vibe-coding",
+    "ecs",
+    "bitecs",
+    "game-development",
+    "3d",
+    "character-controller"
+  ],
+  "author": "dylanebert",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/maikramer/GameDev.git",
+    "directory": "VibeGame"
+  },
+  "homepage": "https://github.com/maikramer/GameDev/tree/main/VibeGame",
+  "bugs": {
+    "url": "https://github.com/maikramer/GameDev/issues"
+  },
+  "license": "MIT",
+  "peerDependencies": {
+    "bitecs": ">=0.3.40",
+    "three": ">=0.170.0"
+  },
+  "devDependencies": {
+    "@fredli74/typr": "^0.3.9",
+    "@types/bun": "^1.2.21",
+    "@types/jsdom": "^21.1.7",
+    "@types/node": "^24.3.0",
+    "@types/three": "^0.170.0",
+    "@typescript-eslint/eslint-plugin": "^8.40.0",
+    "@typescript-eslint/parser": "^8.40.0",
+    "ajv": "^8.17.1",
+    "bitecs": "^0.3.40",
+    "canvas": "^3.2.0",
+    "eslint": "^9.33.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-import": "^2.32.0",
+    "eslint-plugin-prettier": "^5.5.4",
+    "glob": "^11.0.3",
+    "jsdom": "^26.1.0",
+    "prettier": "^3.6.2",
+    "rollup-plugin-visualizer": "^6.0.3",
+    "three": "^0.170.0",
+    "typescript": "^5.6.0",
+    "vite": "^5.4.10",
+    "vite-plugin-dts": "^4.5.4"
+  },
+  "dependencies": {
+    "@dimforge/rapier3d-compat": "^0.18.2",
+    "gsap": "^3.13.0",
+    "postprocessing": "^6.37.8",
+    "troika-three-text": "^0.52.4",
+    "zod": "^4.1.5"
+  }
+}

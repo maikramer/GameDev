@@ -1,0 +1,347 @@
+import type { State } from '../../core';
+import * as THREE from 'three';
+import { MainCamera } from './components';
+
+const INITIAL_INSTANCES = 1000;
+const MAX_TOTAL_INSTANCES = 50000;
+const PERFORMANCE_WARNING_THRESHOLD = 10000;
+const DEFAULT_COLOR = 0xffffff;
+
+export const RendererShape = {
+  BOX: 0,
+  SPHERE: 1,
+} as const;
+
+export const CameraProjection = {
+  PERSPECTIVE: 0,
+  ORTHOGRAPHIC: 1,
+} as const;
+
+export const threeCameras = new Map<number, THREE.Camera>();
+const canvasElements = new Map<number, HTMLCanvasElement>();
+
+function getCanvasAspect(state: State): {
+  width: number;
+  height: number;
+  aspect: number;
+} {
+  const context = stateToRenderingContext.get(state);
+  const canvas = context?.canvas;
+
+  let width = 16;
+  let height = 9;
+
+  if (canvas && canvas.clientWidth && canvas.clientHeight) {
+    width = canvas.clientWidth;
+    height = canvas.clientHeight;
+  } else if (typeof window !== 'undefined') {
+    width = window.innerWidth;
+    height = window.innerHeight;
+  }
+
+  return { width, height, aspect: width / height };
+}
+
+function createThreeCamera(
+  entity: number,
+  state: State,
+  projection: number,
+  fov: number,
+  orthoSize: number
+): THREE.Camera {
+  const { aspect } = getCanvasAspect(state);
+
+  let camera: THREE.Camera;
+
+  if (projection === CameraProjection.ORTHOGRAPHIC) {
+    const halfHeight = orthoSize / 2;
+    const halfWidth = halfHeight * aspect;
+    camera = new THREE.OrthographicCamera(
+      -halfWidth,
+      halfWidth,
+      halfHeight,
+      -halfHeight,
+      0.1,
+      1000
+    );
+  } else {
+    camera = new THREE.PerspectiveCamera(fov, aspect, 0.1, 1000);
+  }
+
+  threeCameras.set(entity, camera);
+  return camera;
+}
+
+function syncCameraSettings(
+  camera: THREE.Camera,
+  entity: number,
+  state: State
+): void {
+  const { aspect } = getCanvasAspect(state);
+
+  if (camera instanceof THREE.OrthographicCamera) {
+    const orthoSize = MainCamera.orthoSize[entity];
+    const halfHeight = orthoSize / 2;
+    const halfWidth = halfHeight * aspect;
+
+    if (camera.top !== halfHeight || camera.right !== halfWidth) {
+      camera.left = -halfWidth;
+      camera.right = halfWidth;
+      camera.top = halfHeight;
+      camera.bottom = -halfHeight;
+      camera.updateProjectionMatrix();
+    }
+  } else if (camera instanceof THREE.PerspectiveCamera) {
+    const fov = MainCamera.fov[entity];
+    if (camera.fov !== fov) {
+      camera.fov = fov;
+      camera.updateProjectionMatrix();
+    }
+  }
+}
+
+export { createThreeCamera, getCanvasAspect, syncCameraSettings };
+
+export function findAvailableInstanceSlot(
+  mesh: THREE.InstancedMesh,
+  matrix: THREE.Matrix4
+): number | null {
+  const maxCount = mesh.count;
+  for (let i = 0; i < maxCount; i++) {
+    mesh.getMatrixAt(i, matrix);
+    if (
+      matrix.elements[0] === 0 &&
+      matrix.elements[5] === 0 &&
+      matrix.elements[10] === 0
+    ) {
+      return i;
+    }
+  }
+  return null;
+}
+
+export function initializeInstancedMesh(
+  geometry: THREE.BufferGeometry,
+  material: THREE.Material,
+  count: number = INITIAL_INSTANCES
+): THREE.InstancedMesh {
+  const mesh = new THREE.InstancedMesh(geometry, material, count);
+  mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  mesh.frustumCulled = false;
+
+  const zeroMatrix = new THREE.Matrix4();
+  zeroMatrix.makeScale(0, 0, 0);
+  const defaultColor = new THREE.Color(DEFAULT_COLOR);
+
+  for (let i = 0; i < count; i++) {
+    mesh.setMatrixAt(i, zeroMatrix);
+    mesh.setColorAt(i, defaultColor);
+  }
+
+  mesh.instanceMatrix.needsUpdate = true;
+  if (mesh.instanceColor) {
+    mesh.instanceColor.needsUpdate = true;
+  }
+
+  return mesh;
+}
+
+export function resizeInstancedMesh(
+  oldMesh: THREE.InstancedMesh,
+  geometry: THREE.BufferGeometry,
+  material: THREE.Material,
+  scene: THREE.Scene
+): THREE.InstancedMesh {
+  const oldCount = oldMesh.count;
+  const newCount = oldCount * 2;
+
+  const newMesh = initializeInstancedMesh(geometry, material, newCount);
+
+  const matrix = new THREE.Matrix4();
+  const color = new THREE.Color();
+
+  for (let i = 0; i < oldCount; i++) {
+    oldMesh.getMatrixAt(i, matrix);
+    newMesh.setMatrixAt(i, matrix);
+
+    if (oldMesh.instanceColor) {
+      oldMesh.getColorAt(i, color);
+      newMesh.setColorAt(i, color);
+    }
+  }
+
+  newMesh.instanceMatrix.needsUpdate = true;
+  if (newMesh.instanceColor) {
+    newMesh.instanceColor.needsUpdate = true;
+  }
+
+  scene.remove(oldMesh);
+  oldMesh.dispose();
+  scene.add(newMesh);
+
+  return newMesh;
+}
+
+export interface RenderingContext {
+  scene: THREE.Scene;
+  meshPools: Map<number, THREE.InstancedMesh>;
+  unlitMeshPools: Map<number, THREE.InstancedMesh>;
+  geometries: Map<number, THREE.BufferGeometry>;
+  material: THREE.MeshStandardMaterial;
+  unlitMaterial: THREE.MeshBasicMaterial;
+  entityInstances: Map<
+    number,
+    { poolId: number; instanceId: number; unlit: boolean }
+  >;
+  lights: {
+    ambient: THREE.HemisphereLight;
+    directional: THREE.DirectionalLight;
+  };
+  renderer?: THREE.WebGLRenderer;
+  canvas?: HTMLCanvasElement;
+  totalInstanceCount: number;
+  hasShownPerformanceWarning: boolean;
+}
+
+const stateToRenderingContext = new WeakMap<State, RenderingContext>();
+
+export function createGeometries(): Map<number, THREE.BufferGeometry> {
+  const geometries = new Map<number, THREE.BufferGeometry>();
+  geometries.set(RendererShape.BOX, new THREE.BoxGeometry());
+  geometries.set(RendererShape.SPHERE, new THREE.SphereGeometry(1));
+  return geometries;
+}
+
+export function initializeContext(): RenderingContext {
+  const scene = new THREE.Scene();
+
+  const ambient = new THREE.HemisphereLight(0xb1e1ff, 0xb97a20, 1.5);
+  scene.add(ambient);
+
+  const directional = new THREE.DirectionalLight(0xffffff, 2.5);
+  directional.castShadow = true;
+  directional.shadow.mapSize.width = 4096;
+  directional.shadow.mapSize.height = 4096;
+  scene.add(directional);
+  scene.add(directional.target);
+
+  return {
+    scene,
+    meshPools: new Map(),
+    unlitMeshPools: new Map(),
+    geometries: createGeometries(),
+    material: new THREE.MeshStandardMaterial({
+      metalness: 0.0,
+      roughness: 1.0,
+    }),
+    unlitMaterial: new THREE.MeshBasicMaterial(),
+    entityInstances: new Map(),
+    lights: {
+      ambient: ambient,
+      directional: directional,
+    },
+    totalInstanceCount: 0,
+    hasShownPerformanceWarning: false,
+  };
+}
+
+export function getRenderingContext(state: State): RenderingContext {
+  let context = stateToRenderingContext.get(state);
+  if (!context) {
+    context = initializeContext();
+    stateToRenderingContext.set(state, context);
+  }
+  return context;
+}
+
+export function getScene(state: State): THREE.Scene | null {
+  const context = stateToRenderingContext.get(state);
+  return context?.scene || null;
+}
+
+export function setCanvasElement(
+  entity: number,
+  canvas: HTMLCanvasElement
+): void {
+  canvasElements.set(entity, canvas);
+}
+
+export function getCanvasElement(
+  entity: number
+): HTMLCanvasElement | undefined {
+  return canvasElements.get(entity);
+}
+
+export function deleteCanvasElement(entity: number): void {
+  canvasElements.delete(entity);
+}
+
+export function setRenderingCanvas(
+  state: State,
+  canvas: HTMLCanvasElement
+): void {
+  const context = getRenderingContext(state);
+  context.canvas = canvas;
+}
+
+export function createRenderer(
+  canvas: HTMLCanvasElement,
+  clearColor: number
+): THREE.WebGLRenderer {
+  const renderer = new THREE.WebGLRenderer({
+    canvas,
+    antialias: true,
+  });
+
+  const width = canvas.clientWidth || window.innerWidth;
+  const height = canvas.clientHeight || window.innerHeight;
+  renderer.setSize(width, height, false);
+  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+  if (clearColor !== 0) {
+    renderer.setClearColor(clearColor);
+  }
+
+  return renderer;
+}
+
+export function handleWindowResize(
+  state: State,
+  renderer: THREE.WebGLRenderer
+): void {
+  const context = getRenderingContext(state);
+  const canvas = context.canvas;
+
+  const width = canvas?.clientWidth || window.innerWidth;
+  const height = canvas?.clientHeight || window.innerHeight;
+  const aspect = width / height;
+
+  renderer.setSize(width, height, false);
+
+  for (const [, camera] of threeCameras) {
+    if (camera instanceof THREE.PerspectiveCamera) {
+      camera.aspect = aspect;
+      camera.updateProjectionMatrix();
+    } else if (camera instanceof THREE.OrthographicCamera) {
+      const halfHeight = (camera.top - camera.bottom) / 2;
+      const halfWidth = halfHeight * aspect;
+      camera.left = -halfWidth;
+      camera.right = halfWidth;
+      camera.updateProjectionMatrix();
+    }
+  }
+}
+
+export const SHADOW_CONFIG = {
+  LIGHT_DIRECTION: new THREE.Vector3(5, 10, 2).normalize(),
+  LIGHT_DISTANCE: 25,
+  CAMERA_RADIUS: 50,
+  NEAR_PLANE: 1,
+  FAR_PLANE: 200,
+} as const;
+
+export { MAX_TOTAL_INSTANCES, PERFORMANCE_WARNING_THRESHOLD };

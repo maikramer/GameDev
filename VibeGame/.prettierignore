@@ -1,0 +1,8 @@
+dist/
+node_modules/
+examples/**/dist/
+*.lock
+package-lock.json
+bun.lockb
+layers/context-template.md
+**/context.md
