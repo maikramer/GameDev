@@ -1,4 +1,4 @@
-# Text3D — Text2D + Hunyuan3D-2mini
+# Text3D — Text2D + Hunyuan3D-2.1 SDNQ INT4
 # Instalar a partir da pasta GameDev: pip install -r config/requirements.txt
 # (paths relativos: text2d em ../Text2D)
 
@@ -26,8 +26,12 @@ pydantic>=2.0.0
 # CWD do pip = raiz do projecto Text3D/ — irmão Text2D em ../Text2D.
 text2d @ file:../Text2D
 
-# Hunyuan3D (hy3dgen) — licença Tencent Hunyuan Community
-hy3dgen @ git+https://github.com/Tencent-Hunyuan/Hunyuan3D-2.git
+# Hunyuan3D-2.1 shape (hy3dshape) — código vendorizado em text3d/hy3dshape/
+# Pesos shape de tencent/Hunyuan3D-2.1 (SDNQ INT4). Licença Tencent Hunyuan Community.
+# Dependências do hy3dshape usadas no pipeline de inferência:
+einops>=0.7.0
+omegaconf>=2.3.0
+opencv-python>=4.8.0
 
 # diffusers export_to_gif ainda usado em save_gif
 # (Hunyuan devolve trimesh; GIF permanece utilitário opcional)

@@ -1040,7 +1040,7 @@ def models():
     table.add_row(
         "Hunyuan3D-2.1",
         "Image-to-3D (subpasta hunyuan3d-dit-v2-1, SDNQ INT4)",
-        "hy3dgen; licença Tencent Hunyuan Community",
+        "hy3dshape vendorizado; licença Tencent Hunyuan Community",
     )
     table.add_row(
         "Hunyuan3D-Paint",

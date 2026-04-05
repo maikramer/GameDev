@@ -2,7 +2,7 @@
 
 **Documentação:** [English (`README.md`)](README.md) · Português (esta página)
 
-O Text3D gera meshes 3D a partir de texto em duas fases: **Text2D** (texto → imagem) e **Hunyuan3D-2mini** (imagem → mesh). Ver o [README principal](../README_PT.md) para instalação e licença.
+O Text3D gera meshes 3D a partir de texto em duas fases: **Text2D** (texto → imagem) e **Hunyuan3D-2.1** (imagem → mesh, SDNQ INT4). Ver o [README principal](../README_PT.md) para instalação e licença.
 
 ## Índice
 
