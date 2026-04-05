@@ -10,6 +10,7 @@
 #   ./install.sh all              # Instalar tudo
 #   ./install.sh --list           # Listar ferramentas
 #   ./install.sh materialize      # Instalar Materialize (Rust)
+#   ./install.sh vibegame         # VibeGame: Bun + Node; ~/.local/bin/vibegame
 #   ./install.sh text2d              # Text2D/.venv + wrappers em ~/.local/bin
 #   ./install.sh text3d              # instala Text2D primeiro, depois Text3D (text2d indispensável)
 #   ./install.sh text3d --text2d-venv-only  # só text2d editável no venv Text3D (sem passo text2d dedicado)

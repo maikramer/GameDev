@@ -11,6 +11,7 @@ from gamedev_shared.installer.registry import (
     find_monorepo_root,
     get_tool,
 )
+from gamedev_shared.installer.bun_installer import BunProjectInstaller
 from gamedev_shared.installer.unified import (
     _ToolPythonInstaller,
     _ToolRustInstaller,
@@ -48,6 +49,25 @@ class TestToolPythonInstaller:
         (tmp_path / "TestPy").mkdir()
         inst = _ToolPythonInstaller(spec, tmp_path)
         assert inst.spec.extra_aliases == ("alias1", "alias2")
+
+
+class TestToolBunInstaller:
+    def test_init_from_spec(self, tmp_path: Path):
+        spec = ToolSpec(
+            name="TestBun",
+            kind=ToolKind.BUN,
+            folder="TestBun",
+            cli_name="testbun",
+            description="test",
+        )
+        (tmp_path / "TestBun").mkdir()
+        inst = BunProjectInstaller(
+            project_name=spec.name,
+            cli_name=spec.cli_name,
+            project_root=spec.project_root(tmp_path),
+        )
+        assert inst.project_name == "TestBun"
+        assert inst.cli_name == "testbun"
 
 
 class TestToolRustInstaller:
@@ -127,6 +147,28 @@ class TestInstallTool:
         ok = install_tool("text2d", monorepo=monorepo, action="install")
         assert ok is True
         mock_inst.run.assert_called_once()
+
+    @patch("gamedev_shared.installer.unified.BunProjectInstaller")
+    def test_bun_install_called(self, mock_cls: MagicMock):
+        mock_inst = MagicMock()
+        mock_inst.run.return_value = True
+        mock_cls.return_value = mock_inst
+
+        monorepo = find_monorepo_root()
+        ok = install_tool("vibegame", monorepo=monorepo, action="install")
+        assert ok is True
+        mock_inst.run.assert_called_once()
+
+    @patch("gamedev_shared.installer.unified.BunProjectInstaller")
+    def test_bun_uninstall_called(self, mock_cls: MagicMock):
+        mock_inst = MagicMock()
+        mock_inst.run_uninstall.return_value = True
+        mock_cls.return_value = mock_inst
+
+        monorepo = find_monorepo_root()
+        ok = install_tool("vibegame", monorepo=monorepo, action="uninstall")
+        assert ok is True
+        mock_inst.run_uninstall.assert_called_once()
 
     def test_invalid_action(self):
         monorepo = find_monorepo_root()

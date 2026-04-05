@@ -88,3 +88,4 @@ class TestToolBins:
         assert TOOL_BINS["gameassets"] == "GAMEASSETS_BIN"
         assert TOOL_BINS["gamedevlab"] == "GAMEDEVLAB_BIN"
         assert TOOL_BINS["materialize"] == "MATERIALIZE_BIN"
+        assert TOOL_BINS["vibegame"] == "VIBEGAME_BIN"

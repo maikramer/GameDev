@@ -17,6 +17,7 @@ RIGGING3D_BIN = "RIGGING3D_BIN"
 GAMEASSETS_BIN = "GAMEASSETS_BIN"
 GAMEDEVLAB_BIN = "GAMEDEVLAB_BIN"
 MATERIALIZE_BIN = "MATERIALIZE_BIN"
+VIBEGAME_BIN = "VIBEGAME_BIN"
 HF_HOME = "HF_HOME"
 PYTORCH_CUDA_ALLOC_CONF = "PYTORCH_CUDA_ALLOC_CONF"
 
@@ -30,11 +31,12 @@ TOOL_BINS = {
     "gameassets": GAMEASSETS_BIN,
     "gamedevlab": GAMEDEVLAB_BIN,
     "materialize": MATERIALIZE_BIN,
+    "vibegame": VIBEGAME_BIN,
 }
 """Mapeamento tool_name → nome da variável de ambiente do binário.
 
-Inclui ferramentas Python e ``materialize`` (Rust); o valor é o nome da env var
-(``MATERIALIZE_BIN``), não o binário cargo.
+Inclui ferramentas Python, ``materialize`` (Rust) e ``vibegame`` (Bun/Node); o valor é o nome da env var
+(``MATERIALIZE_BIN``, ``VIBEGAME_BIN``, etc.), não o caminho do binário.
 """
 
 
