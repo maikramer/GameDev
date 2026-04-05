@@ -46,6 +46,8 @@ Exemplo rápido:
   gameassets init
   gameassets prompts --profile game.yaml --manifest manifest.csv
   gameassets batch --profile game.yaml --manifest manifest.csv --with-3d
+  gameassets batch --dry-run --dry-run-json plan.json --profile game.yaml --manifest manifest.csv
+  gameassets handoff --profile game.yaml --manifest manifest.csv --public-dir ../my-game/public
 
 Preset só num ficheiro teu (ex.: galaxy_orbital em presets-local.yaml):
   gameassets batch --profile game.yaml --manifest manifest.csv --with-3d \\
@@ -57,6 +59,28 @@ Com image_source: texture2d: TEXTURE2D_BIN e, se texture2d.materialize,
 MATERIALIZE_BIN (ou texture2d.materialize_bin) — só para mapas PBR a partir da imagem difusa.
 Com generate_audio no CSV: TEXT2SOUND_BIN se text2sound não estiver no PATH.
 """
+
+
+def _dry_run_emit(
+    plan: list[dict[str, Any]] | None,
+    *,
+    phase: str,
+    row_id: str | None,
+    argv: list[str],
+) -> None:
+    """Regista um passo do dry-run (JSON) ou imprime argv no terminal."""
+    if plan is not None:
+        plan.append({"phase": phase, "row_id": row_id, "argv": argv})
+    else:
+        console.print(f"[dim]{' '.join(argv)}[/dim]")
+
+
+def _dry_run_header(plan: list[dict[str, Any]] | None, message: str) -> None:
+    """Cabeçalho de fase no dry-run (argv vazio)."""
+    if plan is not None:
+        plan.append({"phase": message, "row_id": None, "argv": []})
+    else:
+        console.print(f"[dim]{message}[/dim]")
 
 
 def _seed_for_row(profile: GameProfile, row_id: str) -> int | None:
@@ -759,6 +783,88 @@ def prompts_cmd(
     console.print(table)
 
 
+@main.command("handoff")
+@click.option(
+    "--profile",
+    "profile_path",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default="game.yaml",
+    help="Ficheiro de perfil YAML (output_dir, layouts)",
+)
+@click.option(
+    "--manifest",
+    "manifest_path",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default="manifest.csv",
+)
+@click.option(
+    "--presets-local",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+)
+@click.option(
+    "--public-dir",
+    "public_dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    required=True,
+    help="Pasta public/ do projecto Vite (cria assets/models, audio, …)",
+)
+@click.option(
+    "--copy/--symlink",
+    "use_copy",
+    default=True,
+    help="Copiar ficheiros (defeito) ou criar symlinks para o output_dir do batch",
+)
+@click.option(
+    "--prefer-rigged/--no-prefer-rigged",
+    "prefer_rigged",
+    default=True,
+    help="Preferir GLB rigado se existir no disco",
+)
+@click.option(
+    "--prefer-parts/--no-prefer-parts",
+    "prefer_parts",
+    default=False,
+    help="Preferir *_parts.glb em vez do rigado/base (ordem: rigado > parts > base)",
+)
+@click.option(
+    "--with-textures/--no-with-textures",
+    "with_textures",
+    default=False,
+    help="Copiar também PNGs 2D para assets/textures/",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Mostra o manifest JSON sem escrever ficheiros",
+)
+def handoff_cmd(
+    profile_path: Path,
+    manifest_path: Path,
+    presets_local: Path | None,
+    public_dir: Path,
+    use_copy: bool,
+    prefer_rigged: bool,
+    prefer_parts: bool,
+    with_textures: bool,
+    dry_run: bool,
+) -> None:
+    """Copia GLB/áudio do ``output_dir`` do perfil para ``public/assets`` e grava ``gameassets_handoff.json``."""
+    from .handoff_export import handoff_command_impl
+
+    handoff_command_impl(
+        profile_path,
+        manifest_path,
+        presets_local,
+        public_dir,
+        copy=use_copy,
+        prefer_rigged=prefer_rigged,
+        prefer_parts=prefer_parts,
+        with_textures=with_textures,
+        dry_run=dry_run,
+    )
+
+
 @main.command("batch")
 @click.option(
     "--profile",
@@ -787,6 +893,13 @@ def prompts_cmd(
     "--dry-run",
     is_flag=True,
     help="Mostra comandos sem executar",
+)
+@click.option(
+    "--dry-run-json",
+    "dry_run_json",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help="Com --dry-run, grava plano JSON (fases e argv por linha) para agentes/CI.",
 )
 @click.option(
     "--fail-fast",
@@ -855,6 +968,7 @@ def batch_cmd(
     presets_local: Path | None,
     with_3d: bool,
     dry_run: bool,
+    dry_run_json: Path | None,
     fail_fast: bool,
     log_path: Path | None,
     skip_batch_lock: bool,
@@ -868,6 +982,9 @@ def batch_cmd(
 ) -> None:
     """Gera imagens (e opcionalmente meshes) para cada linha do manifest."""
     profile, rows, _bundle, preset = _build_context(profile_path, manifest_path, presets_local)
+
+    if dry_run_json is not None and not dry_run:
+        raise click.ClickException("--dry-run-json requer --dry-run")
 
     if skip_text2d and not with_3d:
         raise click.ClickException("--skip-text2d só é válido com --with-3d (PNGs já existem; só corre Text3D).")
@@ -1076,6 +1193,7 @@ def batch_cmd(
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
     if dry_run:
+        dry_plan: list[dict[str, Any]] | None = [] if dry_run_json else None
         if not skip_text2d:
             if any_texture2d_row and any_text2d_row:
                 p1_title = "--- Fase 1: Text2D / Texture2D (por linha) ---"
@@ -1083,7 +1201,7 @@ def batch_cmd(
                 p1_title = "--- Fase 1: Texture2D (todas as linhas) ---"
             else:
                 p1_title = "--- Fase 1: Text2D (todas as linhas) ---"
-            console.print(f"[dim]{p1_title}[/dim]")
+            _dry_run_header(dry_plan, p1_title)
             for row in rows:
                 prompt = build_prompt(profile, preset, row, for_3d=False)
                 img_path, mesh_path = _paths_for_row_manifest(profile, manifest_dir, row)
@@ -1111,7 +1229,7 @@ def batch_cmd(
                     if seed is not None:
                         t2d_args.extend(["--seed", str(seed)])
                     _append_text2d_profile_args(profile, t2d_args)
-                console.print(f"[dim]{' '.join(t2d_args)}[/dim]")
+                _dry_run_emit(dry_plan, phase=p1_title, row_id=row.id, argv=t2d_args)
                 if _row_uses_texture2d(profile, row) and tt_line.materialize:
                     maps_ph = _texture2d_material_maps_path(profile, row)
                     try:
@@ -1119,7 +1237,7 @@ def batch_cmd(
                     except FileNotFoundError:
                         mbin_dr = "materialize"
                     margv = _materialize_diffuse_argv(mbin_dr, tt_line, img_path, maps_ph)
-                    console.print(f"[dim]{' '.join(margv)}[/dim]")
+                    _dry_run_emit(dry_plan, phase=p1_title + " materialize", row_id=row.id, argv=margv)
                 if not skip_audio and text2sound_bin and row.generate_audio:
                     ts_line = _text2sound_profile_effective(profile)
                     audio_final = _audio_path_for_row_manifest(profile, manifest_dir, row)
@@ -1135,11 +1253,14 @@ def batch_cmd(
                     if seed_a is not None:
                         argv_au.extend(["--seed", str(seed_a)])
                     _append_text2sound_profile_args(ts_line, argv_au)
-                    console.print(f"[dim]{' '.join(argv_au)}[/dim]")
+                    _dry_run_emit(dry_plan, phase=p1_title + " text2sound", row_id=row.id, argv=argv_au)
         else:
-            console.print("[dim]--- Text2D omitido (--skip-text2d) ---[/dim]")
+            _dry_run_header(dry_plan, "--- Text2D omitido (--skip-text2d) ---")
             if not skip_audio and text2sound_bin and any(r.generate_audio for r in rows):
-                console.print("[dim]--- Text2Sound (generate_audio; PNG em output_dir) ---[/dim]")
+                _dry_run_header(
+                    dry_plan,
+                    "--- Text2Sound (generate_audio; PNG em output_dir) ---",
+                )
                 for row in rows:
                     if not row.generate_audio:
                         continue
@@ -1157,12 +1278,20 @@ def batch_cmd(
                     if seed_a is not None:
                         argv_au.extend(["--seed", str(seed_a)])
                     _append_text2sound_profile_args(ts_line, argv_au)
-                    console.print(f"[dim]{' '.join(argv_au)}[/dim]")
+                    _dry_run_emit(
+                        dry_plan,
+                        phase="text2sound (skip-text2d)",
+                        row_id=row.id,
+                        argv=argv_au,
+                    )
         if with_3d and text3d_bin and any(r.generate_3d for r in rows):
             t3d = profile.text3d
             phased = bool(t3d and t3d.texture)
             if phased:
-                console.print("[dim]--- Text3D + paint3d: shape → texture (PBR no GLB via Paint 2.1) ---[/dim]")
+                _dry_run_header(
+                    dry_plan,
+                    "--- Text3D + paint3d: shape → texture (PBR no GLB via Paint 2.1) ---",
+                )
                 for row in rows:
                     if not row.generate_3d:
                         continue
@@ -1179,7 +1308,12 @@ def batch_cmd(
                     )
                     if seed is not None:
                         a1 = [*a1, "--seed", str(seed)]
-                    console.print(f"[dim]{' '.join(a1)}[/dim]")
+                    _dry_run_emit(
+                        dry_plan,
+                        phase="text3d shape",
+                        row_id=row.id,
+                        argv=a1,
+                    )
                     pbin = paint3d_bin or "paint3d"
                     a2 = _texture_subprocess_argv(
                         pbin,
@@ -1188,9 +1322,14 @@ def batch_cmd(
                         img_path,
                         mesh_path,
                     )
-                    console.print(f"[dim]{' '.join(a2)}[/dim]")
+                    _dry_run_emit(
+                        dry_plan,
+                        phase="paint3d texture",
+                        row_id=row.id,
+                        argv=a2,
+                    )
             else:
-                console.print("[dim]--- Fase 2: Text3D (generate_3d=true) ---[/dim]")
+                _dry_run_header(dry_plan, "--- Fase 2: Text3D (generate_3d=true) ---")
                 for row in rows:
                     if not row.generate_3d:
                         continue
@@ -1199,9 +1338,17 @@ def batch_cmd(
                     t3d_args = _text3d_argv(text3d_bin, profile, img_path, mesh_path, row)
                     if seed is not None:
                         t3d_args.extend(["--seed", str(seed)])
-                    console.print(f"[dim]{' '.join(t3d_args)}[/dim]")
+                    _dry_run_emit(
+                        dry_plan,
+                        phase="text3d",
+                        row_id=row.id,
+                        argv=t3d_args,
+                    )
         if with_parts and part3d_bin and any(r.generate_3d and r.generate_parts for r in rows):
-            console.print("[dim]--- Part3D (após GLB Text3D; generate_parts=true) ---[/dim]")
+            _dry_run_header(
+                dry_plan,
+                "--- Part3D (após GLB Text3D; generate_parts=true) ---",
+            )
             for row in rows:
                 if not row.generate_3d or not row.generate_parts:
                     continue
@@ -1210,9 +1357,12 @@ def batch_cmd(
                 out_p, out_s = _part3d_output_paths(mesh_path, p3)
                 seed = _seed_for_row(profile, f"{row.id}:part3d")
                 pa = _part3d_decompose_argv(part3d_bin, mesh_path, out_p, out_s, p3, seed)
-                console.print(f"[dim]{' '.join(pa)}[/dim]")
+                _dry_run_emit(dry_plan, phase="part3d", row_id=row.id, argv=pa)
         if with_rig and rigging3d_bin and any(r.generate_3d and r.generate_rig for r in rows):
-            console.print("[dim]--- Rigging3D (entrada: *_parts.glb se parts+rig; senão GLB base) ---[/dim]")
+            _dry_run_header(
+                dry_plan,
+                "--- Rigging3D (entrada: *_parts.glb se parts+rig; senão GLB base) ---",
+            )
             for row in rows:
                 if not row.generate_3d or not row.generate_rig:
                     continue
@@ -1233,8 +1383,37 @@ def batch_cmd(
                     seed=seed,
                     rig_profile=rg,
                 )
-                console.print(f"[dim]{' '.join(rg_args)}[/dim]")
-        console.print(Panel("[green]dry-run concluído[/green]", border_style="green", title="Batch"))
+                _dry_run_emit(dry_plan, phase="rigging3d", row_id=row.id, argv=rg_args)
+        if dry_run_json is not None and dry_plan is not None:
+            payload = {
+                "version": 1,
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "profile": str(profile_path.resolve()),
+                "manifest": str(manifest_path.resolve()),
+                "options": {
+                    "with_3d": with_3d,
+                    "with_rig": with_rig,
+                    "with_parts": with_parts,
+                    "skip_text2d": skip_text2d,
+                    "skip_audio": skip_audio,
+                },
+                "steps": dry_plan,
+            }
+            dry_run_json.parent.mkdir(parents=True, exist_ok=True)
+            dry_run_json.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            console.print(
+                Panel(
+                    f"[green]dry-run[/green] — plano JSON: [bold]{dry_run_json}[/bold] "
+                    f"({len(dry_plan)} passo(s))",
+                    border_style="green",
+                    title="Batch",
+                )
+            )
+        else:
+            console.print(Panel("[green]dry-run concluído[/green]", border_style="green", title="Batch"))
         return
 
     if not rows:

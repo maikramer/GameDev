@@ -74,6 +74,7 @@ O ficheiro `activate.sh` segue o padrão do Text2D: corre um comando já com o v
 | `gameassets init` | Cria `game.yaml` e `manifest.csv` numa pasta |
 | `gameassets prompts` | Pré-visualiza prompts sem gerar imagens |
 | `gameassets batch` | Gera imagens (e opcionalmente 3D/áudio) em batch |
+| `gameassets handoff` | Copia/symlink do `output_dir` para `public/assets` e grava `assets/gameassets_handoff.json` |
 | `gameassets info` | Mostra configuração, binários detetados, e ambiente |
 | `gameassets skill install` | Instala Agent Skill Cursor no projeto |
 

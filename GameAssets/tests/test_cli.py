@@ -89,6 +89,55 @@ def test_prompts_jsonl_output(runner: CliRunner, tmp_path: Path) -> None:
     assert "id" in first and "prompt" in first
 
 
+def test_batch_dry_run_json(runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    true_bin = shutil.which("true")
+    if not true_bin:
+        pytest.skip("comando 'true' não encontrado no PATH")
+    monkeypatch.setenv("TEXT2D_BIN", true_bin)
+    runner.invoke(cli, ["init", "--path", str(tmp_path)])
+    out = tmp_path / "plan.json"
+    r = runner.invoke(
+        cli,
+        [
+            "batch",
+            "--dry-run",
+            "--dry-run-json",
+            str(out),
+            "--profile",
+            str(tmp_path / "game.yaml"),
+            "--manifest",
+            str(tmp_path / "manifest.csv"),
+        ],
+    )
+    assert r.exit_code == 0
+    data = json.loads(out.read_text(encoding="utf-8"))
+    assert data.get("version") == 1
+    assert "steps" in data
+    assert isinstance(data["steps"], list)
+    assert any("argv" in s for s in data["steps"])
+
+
+def test_handoff_dry_run(runner: CliRunner, tmp_path: Path) -> None:
+    runner.invoke(cli, ["init", "--path", str(tmp_path)])
+    pub = tmp_path / "public"
+    pub.mkdir()
+    r = runner.invoke(
+        cli,
+        [
+            "handoff",
+            "--profile",
+            str(tmp_path / "game.yaml"),
+            "--manifest",
+            str(tmp_path / "manifest.csv"),
+            "--public-dir",
+            str(pub),
+            "--dry-run",
+        ],
+    )
+    assert r.exit_code == 0
+    assert "public_dir" in r.output or "assets_base_url" in r.output
+
+
 def test_batch_dry_run(runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Integração: batch --dry-run sem executar text2d (binário inócuo via env)."""
     true_bin = shutil.which("true")
@@ -109,6 +158,24 @@ def test_batch_dry_run(runner: CliRunner, tmp_path: Path, monkeypatch: pytest.Mo
     )
     assert r.exit_code == 0
     assert "dry-run" in r.output.lower()
+
+
+def test_batch_dry_run_json_requires_dry_run(runner: CliRunner, tmp_path: Path) -> None:
+    runner.invoke(cli, ["init", "--path", str(tmp_path)])
+    out = tmp_path / "plan.json"
+    r = runner.invoke(
+        cli,
+        [
+            "batch",
+            "--dry-run-json",
+            str(out),
+            "--profile",
+            str(tmp_path / "game.yaml"),
+            "--manifest",
+            str(tmp_path / "manifest.csv"),
+        ],
+    )
+    assert r.exit_code != 0
 
 
 def test_batch_skip_text2d_requires_with_3d(runner: CliRunner, tmp_path: Path) -> None:
