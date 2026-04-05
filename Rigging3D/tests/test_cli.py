@@ -16,7 +16,7 @@ def _mock_tree(p: Path) -> None:
     (p / "src").mkdir()
 
 
-def _bash_write_output_fbx(root: Path, script: str, args: list[str], *, python_bin: str | None = None) -> int:
+def _bash_write_output_fbx(root: Path, script: str, args: list[str], *, python_bin: str | None = None, propagate_profile: bool = False) -> int:
     """Simula generate_skeleton / generate_skin: escreve o ficheiro indicado em --output (GLB/FBX)."""
     if "--output" in args:
         i = args.index("--output")
@@ -299,11 +299,11 @@ class TestPipeline:
         _ur, mesh = self._setup(tmp_path, monkeypatch)
         call_count = 0
 
-        def bash_side_effect(root: Path, script: str, args: list[str], *, python_bin: str | None = None) -> int:
+        def bash_side_effect(root: Path, script: str, args: list[str], *, python_bin: str | None = None, propagate_profile: bool = False) -> int:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                return _bash_write_output_fbx(root, script, args, python_bin=python_bin)
+                return _bash_write_output_fbx(root, script, args, python_bin=python_bin, propagate_profile=propagate_profile)
             return 1
 
         with (
