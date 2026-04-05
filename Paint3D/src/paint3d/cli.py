@@ -110,7 +110,45 @@ def cli(ctx, verbose):
 )
 @click.option("--max-views", default=_defaults.DEFAULT_PAINT_MAX_VIEWS, show_default=True, type=int)
 @click.option("--view-resolution", default=_defaults.DEFAULT_PAINT_VIEW_RESOLUTION, show_default=True, type=int)
+@click.option(
+    "--render-size",
+    default=None,
+    type=int,
+    help="Resolução de rasterização para back-projection (padrão: 2048). Maior = mais detalhe no bake.",
+)
+@click.option(
+    "--texture-size",
+    default=None,
+    type=int,
+    help="Resolução do atlas UV (padrão: 4096). Maior = textura final mais nítida.",
+)
+@click.option(
+    "--bake-exp",
+    default=_defaults.DEFAULT_PAINT_BAKE_EXP,
+    show_default=True,
+    type=int,
+    help="Expoente de blending entre vistas (maior = costuras mais nítidas, menos sangramento).",
+)
+@click.option(
+    "--smooth/--no-smooth",
+    default=_defaults.DEFAULT_SMOOTH,
+    show_default=True,
+    help="Suavizar textura com filtro bilateral (remove artefatos de costura sem alterar resolução).",
+)
+@click.option(
+    "--smooth-passes",
+    default=_defaults.DEFAULT_SMOOTH_PASSES,
+    show_default=True,
+    type=int,
+    help="Número de passadas do filtro bilateral (mais = mais suave).",
+)
 @click.option("-v", "--verbose", "texture_verbose", is_flag=True, help="Logs detalhados.")
+@click.option(
+    "--preserve-origin/--no-preserve-origin",
+    default=True,
+    show_default=True,
+    help="Reposicionar saída: base do AABB em Y=0 e XZ centrado (convenção Text3D / pés).",
+)
 @click.option("--allow-shared-gpu", is_flag=True, help="Permite GPU com outros processos.")
 @click.option(
     "--gpu-kill-others/--no-gpu-kill-others",
@@ -128,7 +166,13 @@ def texture(
     upscale_factor,
     max_views,
     view_resolution,
+    render_size,
+    texture_size,
+    bake_exp,
+    smooth,
+    smooth_passes,
     texture_verbose,
+    preserve_origin,
     allow_shared_gpu,
     gpu_kill_others,
     profile,
@@ -146,6 +190,9 @@ def texture(
         "expandable_segments:True,max_split_size_mb:64,garbage_collection_threshold:0.6",
     )
 
+    rs_label = render_size or "1024 (cpu_offload)" if render_size is None else render_size
+    ts_label = texture_size or "2048 (cpu_offload)" if texture_size is None else texture_size
+
     info_table = Table(show_header=False, box=box.SIMPLE)
     info_table.add_row("[bold]Mesh[/bold]", f"[cyan]{mesh_path}[/cyan]")
     info_table.add_row("[bold]Imagem[/bold]", f"[cyan]{image_file}[/cyan]")
@@ -154,6 +201,12 @@ def texture(
         "[bold]Config[/bold]",
         f"{max_views} vistas @ {view_resolution}px · SDNQ uint8 · VAE tiling",
     )
+    info_table.add_row(
+        "[bold]Bake[/bold]",
+        f"render={rs_label} · texture={ts_label} · bake_exp={bake_exp}",
+    )
+    if smooth:
+        info_table.add_row("[bold]Smooth[/bold]", f"bilateral × {smooth_passes} passes")
     if upscale:
         info_table.add_row("[bold]Upscale[/bold]", f"Real-ESRGAN {upscale_factor}x")
     console.print(Panel(info_table, title="[bold green]Hunyuan3D-Paint 2.1", border_style="green"))
@@ -176,8 +229,28 @@ def texture(
                     output,
                     max_num_view=max_views,
                     view_resolution=view_resolution,
+                    render_size=render_size,
+                    texture_size=texture_size,
+                    bake_exp=bake_exp,
                     verbose=verbose,
+                    preserve_origin=preserve_origin,
                 )
+
+            if smooth:
+                from .texture_smooth import smooth_trimesh_texture
+                from .utils.mesh_io import load_mesh_trimesh, save_glb
+
+                with console.status(
+                    "[bold yellow]Suavizando textura (filtro bilateral)...",
+                    spinner="dots",
+                ):
+                    mesh = load_mesh_trimesh(out)
+                    mesh = smooth_trimesh_texture(
+                        mesh,
+                        passes=smooth_passes,
+                        verbose=verbose,
+                    )
+                    save_glb(mesh, out)
 
             if upscale:
                 from .texture_upscale import upscale_trimesh_texture
