@@ -26,6 +26,8 @@ Monorepo com ferramentas de **texto→imagem**, **texto→3D**, **texto→áudio
 | [**Rigging3D**](Rigging3D/) | **rigging3d** — auto-rigging 3D com [**UniRig**](https://github.com/VAST-AI-Research/UniRig) (skeleton + skinning + merge); GPU CUDA; Python **3.11**, **bpy** 5.0.x (Open3D). |
 | [**Animator3D**](Animator3D/) | **animator3d** — animação com **bpy** 5.1 (Blender 5.1); Python **3.13**; inspeção, keyframes de teste, export GLB/FBX após rigging. |
 | [**Materialize**](Materialize/) | CLI **PBR maps** (Rust/wgpu): gera normal, AO, metallic, smoothness a partir de textura difusa. |
+| [**GameDevLab**](GameDevLab/) | **Lab CLI**: debug 3D, bancos de quantização, profiling, otimização de pipeline. |
+| [**VibeGame**](VibeGame/) | **vibegame** — motor 3D em TypeScript (ECS, Three.js, XML declarativo); **Bun** + **Vite**. Ver [VibeGame/README.md](VibeGame/README.md). |
 
 Cada projeto tem o seu próprio `README`, `setup`, requisitos e licença.
 
@@ -44,18 +46,25 @@ GameDev/
   Text2Sound/        ← text2sound (pip) — depende de Shared; Stable Audio Open 1.0
   Rigging3D/         ← rigging3d (pip) — Shared; inferência Py 3.11 + bpy 5.0.x
   Animator3D/        ← animator3d (pip) — Shared; Py 3.13 + bpy 5.1 (animação)
+  GameDevLab/        ← gamedev-lab (pip) — depende de Shared; debug 3D, benches, profiling
   Materialize/       ← materialize-cli (cargo) — instalador Python usa Shared
+  VibeGame/          ← vibegame (npm/Bun + Vite) — motor 3D no browser; standalone, não é pip
 ```
 
 ## Requisitos gerais
 
 - **Python**: a maioria das ferramentas pede **3.10+**; exceções: **Rigging3D** (3.11), **Animator3D** (3.13 + `bpy` 5.1). Ver README de cada pasta.
+- **VibeGame** usa **Bun** e ferramentas compatíveis com **Node** (ver `VibeGame/package.json`); na raiz do repositório, `make test-vibegame` após instalar o Bun.
 - **GPU** opcional no Text2D; no Text3D/Paint3D/Part3D/Rigging3D, CUDA com VRAM suficiente é recomendado para tempos aceitáveis. **Texture2D** e **Skymap2D** não precisam de GPU local (API Hugging Face). **GameAssets** só exige GPU se o perfil/linha invocar ferramentas locais (ex. text2d, text3d).
 - Os **pesos dos modelos** (Hugging Face, etc.) têm licenças próprias — consulta os model cards antes de distribuir ou usar em produção.
 
 ## Arranque rápido
 
 Guia completo em português: **[docs/INSTALLING_PT.md](docs/INSTALLING_PT.md)**. Versão em inglês: [docs/INSTALLING.md](docs/INSTALLING.md).
+
+**Pipeline jogo (GameAssets → Vite / VibeGame, pastas, handoff GLB):** [docs/MONOREPO_GAME_PIPELINE.md](docs/MONOREPO_GAME_PIPELINE.md) (documento em inglês).
+
+**Do zero ao jogo com IA (modelos + orquestração + agentes):** [docs/ZERO_TO_GAME_AI_PT.md](docs/ZERO_TO_GAME_AI_PT.md) · [English](docs/ZERO_TO_GAME_AI.md).
 
 ### Formas de instalação
 

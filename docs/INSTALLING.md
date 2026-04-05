@@ -40,10 +40,13 @@ Useful variable: `PYTHON_CMD` — interpreter to use (default `python3`, or `pyt
 | `part3d` | Part3D | Python | 3.10 | torch-scatter/cluster after venv |
 | `paint3d` | Paint3D | Python | 3.10 | Vendored code in `Paint3D/src/paint3d/hy3dpaint/` + patches + Real-ESRGAN; models on-demand via `huggingface_hub`; nvdiffrast after venv |
 | `materialize` | Materialize | Rust | — | Needs `cargo`; binary in `~/.local/bin` by default |
+| `vibegame` | VibeGame | Bun | — | Needs **Bun** and **Node** on PATH; `bun install` + `bun run build`; CLI `vibegame` → `~/.local/bin` |
 
 Install everything present in the checkout: `./install.sh all`.
 
 Technical details: [`Shared/src/gamedev_shared/installer/registry.py`](../Shared/src/gamedev_shared/installer/registry.py).
+
+**From batch assets to a browser game (folder layout, GLB handoff, VibeGame):** [MONOREPO_GAME_PIPELINE.md](MONOREPO_GAME_PIPELINE.md).
 
 ---
 
