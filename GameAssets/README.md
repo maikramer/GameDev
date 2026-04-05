@@ -74,6 +74,7 @@ source /path/to/GameDev/GameAssets/.venv/bin/activate
 | `gameassets init` | Creates `game.yaml` and `manifest.csv` in a folder |
 | `gameassets prompts` | Preview prompts without generating images |
 | `gameassets batch` | Batch-generate images (and optionally 3D/audio) |
+| `gameassets handoff` | Copy/symlink `output_dir` assets into a Vite `public/` tree and write `assets/gameassets_handoff.json` |
 | `gameassets info` | Show config, detected binaries, environment |
 | `gameassets skill install` | Install Cursor Agent Skill in the project |
 
