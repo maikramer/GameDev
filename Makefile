@@ -1,11 +1,11 @@
-# GameDev monorepo — common tasks for Python packages (ruff, pytest, mypy) and Rust (Materialize).
+# GameDev monorepo — common tasks for Python packages (ruff, pytest, mypy), Rust (Materialize), and VibeGame (Bun).
 # Requires GNU Make; on Windows, use Git Bash / MSYS2 / WSL so shell recipes and `find` work as expected.
 
 PYTHON_PROJECTS := Shared Text2D Text3D Paint3D Part3D GameAssets Texture2D Text2Sound GameDevLab
 
 .DEFAULT_GOAL := help
 
-.PHONY: help lint fmt fmt-check test test-shared test-text2d test-text3d test-paint3d test-part3d test-gameassets test-texture2d test-text2sound test-gamedevlab test-materialize test-rust clean typecheck check install-hooks
+.PHONY: help lint fmt fmt-check test test-shared test-text2d test-text3d test-paint3d test-part3d test-gameassets test-texture2d test-text2sound test-gamedevlab test-materialize test-rust test-vibegame check-vibegame lint-vibegame fmt-vibegame fmt-check-vibegame build-vibegame clean typecheck check install-hooks
 
 # Prefer .venv only if pytest is installed there; else python3, then python.
 define run-pytest
@@ -19,7 +19,10 @@ endef
 help: ## List all targets (default)
 	@echo "GameDev monorepo targets:"
 	@echo ""
-	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-18s %s\n", $$1, $$2}'
+	@echo "Full Python/Rust CI (no VibeGame): make check"
+	@echo "VibeGame (Bun): make test-vibegame | make check-vibegame | make lint-vibegame | make build-vibegame"
+	@echo ""
+	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-22s %s\n", $$1, $$2}'
 
 lint: ## ruff check at repo root; cargo clippy in Materialize/
 	ruff check .
@@ -73,6 +76,25 @@ test-materialize: ## cargo test in Materialize/
 	cd Materialize && cargo test
 
 test-rust: test-materialize ## alias for test-materialize
+
+# VibeGame: requires Bun (https://bun.sh/) on PATH. Not part of `make test` / `make check`.
+test-vibegame: ## bun install (frozen) + bun test in VibeGame/
+	cd VibeGame && bun install --frozen-lockfile && bun test
+
+check-vibegame: ## tsc --noEmit in VibeGame/
+	cd VibeGame && bun install --frozen-lockfile && bun run check
+
+lint-vibegame: ## eslint in VibeGame/
+	cd VibeGame && bun install --frozen-lockfile && bun run lint
+
+fmt-vibegame: ## prettier --write in VibeGame/
+	cd VibeGame && bun install --frozen-lockfile && bun run format
+
+fmt-check-vibegame: ## prettier --check in VibeGame/
+	cd VibeGame && bun install --frozen-lockfile && bun run format:check
+
+build-vibegame: ## vite build in VibeGame/
+	cd VibeGame && bun install --frozen-lockfile && bun run build
 
 clean: ## Remove __pycache__, caches, build/, dist/, *.egg-info under the repo
 	@find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null; true
