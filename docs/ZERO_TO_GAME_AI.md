@@ -57,19 +57,24 @@ None of these replaces the others: **prompts become files**, **files become URLs
 
 Avoid pasting large generated assets into the chat; **link paths** under `public/` or attach **small** manifests instead.
 
-## 4. Gaps and R&D backlog (prioritized)
+## 4. Implemented follow-ups (recent)
 
-These are intentional **next steps**, not bugs.
+| Item | Where |
+|------|--------|
+| Animator3D after rig (doc + commands) | [ANIMATOR3D_AFTER_RIG.md](ANIMATOR3D_AFTER_RIG.md) |
+| Sky / env (equirect → PMREM) | `applyEquirectSkyEnvironment` in VibeGame (`vibegame`, export `vibegame/extras/sky`) |
+| Export pack | `gameassets handoff --public-dir …` → `public/assets/…` + `gameassets_handoff.json` |
+| Batch plan JSON for agents | `gameassets batch --dry-run --dry-run-json plan.json` |
+| Declarative GLB | `<gltf-load url="/assets/models/foo.glb"></gltf-load>` in world XML |
 
-| Priority | Item | Notes |
-|----------|------|--------|
-| High | **Animator3D** after rig in a documented script | Today rig is in batch; animation export remains manual ([Animator3D](../Animator3D/)). |
-| High | **Sky / env** from Skymap2D into Three.js | Handoff doc mentions manual PMREM; a small helper or recipe would tighten the loop. |
-| Medium | **Single “export pack” script** | Zip or symlink `output_dir` → `my-game/public/assets` with a manifest JSON for URLs. |
-| Medium | **gameassets dry-run** for AI | Already partially via `--dry-run`; could emit machine-readable plan JSON for agents. |
-| Low | **VibeGame XML recipe** for `gltf-url` | Would avoid imperative `main.ts` for simple cases; needs design with ECS. |
+## 5. Further R&D (optional)
 
-## 5. References
+| Priority | Idea |
+|----------|------|
+| Medium | Zip/tar of `public/assets` for CI artefacts |
+| Low | `gameassets resume --dry-run-json` parity with `batch` |
+
+## 6. References
 
 - [MONOREPO_GAME_PIPELINE.md](MONOREPO_GAME_PIPELINE.md) — folder layout and web contract  
 - [VibeGame README — GLB handoff](../VibeGame/README.md)  
