@@ -106,7 +106,7 @@ Formatting: Prettier (`make fmt-vibegame` / `make fmt-check-vibegame`, or `bun r
 
 This runs `bun install --frozen-lockfile` and `bun run build` in `VibeGame/`, then installs `vibegame` into `~/.local/bin` (wrapper → `scripts/vibegame-cli.mjs`). Subcommands: `vibegame create <name>`, `vibegame --version`.
 
-**GLB handoff (Text3D / Paint3D / GameAssets → browser):** export `loadGltfToScene` from `vibegame` (see `VibeGame/src/extras/gltf-bridge.ts`). End-to-end layout and steps: [`docs/MONOREPO_GAME_PIPELINE.md`](docs/MONOREPO_GAME_PIPELINE.md). Example project: [`VibeGame/examples/monorepo-game/`](VibeGame/examples/monorepo-game/). AI-centric workflow (generative + batch + agents): [`docs/ZERO_TO_GAME_AI.md`](docs/ZERO_TO_GAME_AI.md).
+**GLB handoff (Text3D / Paint3D / GameAssets → browser):** export `loadGltfToScene` from `vibegame` (see `VibeGame/src/extras/gltf-bridge.ts`), or declarative `<gltf-load url="…">` in world XML (`VibeGame/src/plugins/gltf-xml/`). Equirect sky → PMREM: `applyEquirectSkyEnvironment` (`VibeGame/src/extras/sky-env.ts`). Pack to `public/`: `gameassets handoff --public-dir …`. End-to-end layout: [`docs/MONOREPO_GAME_PIPELINE.md`](docs/MONOREPO_GAME_PIPELINE.md). Example: [`VibeGame/examples/monorepo-game/`](VibeGame/examples/monorepo-game/). Animator3D after rig: [`docs/ANIMATOR3D_AFTER_RIG.md`](docs/ANIMATOR3D_AFTER_RIG.md). AI workflow: [`docs/ZERO_TO_GAME_AI.md`](docs/ZERO_TO_GAME_AI.md).
 
 ### Tests — single test file or test class
 

@@ -53,10 +53,10 @@ For the runtime to load content **without** a custom CMS:
 1. **Install CLIs** (repo root): `./install.sh` for the tools you need (see [INSTALLING.md](INSTALLING.md)); include `gameassets`, `text2d`/`texture2d`, `text3d`, optional `paint3d`, `text2sound`, `vibegame`, etc.
 2. **Author** `game.yaml` + `manifest.csv` + presets ([GameAssets README](../GameAssets/README.md)).
 3. **Batch**: `gameassets batch --profile game.yaml --manifest manifest.csv --with-3d` (add `--with-rig`, `--with-parts`, audio columns as needed).
-4. **Copy** generated GLBs/audio into `public/assets/...` of a Vite project (see [VibeGame/examples/monorepo-game](../VibeGame/examples/monorepo-game/)).
-5. **Run** the web app: `bun dev` / `npm run dev`; GLB loads via `loadGltfToScene` after `run()`.
+4. **Copy** generated GLBs/audio into `public/assets/...` of a Vite project (see [VibeGame/examples/monorepo-game](../VibeGame/examples/monorepo-game/)), or use **`gameassets handoff --public-dir path/to/public`** to copy/symlink from the profile `output_dir` and write `assets/gameassets_handoff.json` (URLs per row).
+5. **Run** the web app: `bun dev` / `npm run dev`; GLB loads via `loadGltfToScene` after `run()`, or declaratively with `<gltf-load url="...">` in the world XML. **Skymap2D** equirect PNG/JPG: use `applyEquirectSkyEnvironment` from `vibegame` (PMREM + optional background).
 
-**Animator3D** (bpy animation export) is **not** in `gameassets batch` — treat it as a manual post-step on rigged GLBs, then copy the exported GLB into `public/assets/models/`.
+**Animator3D** (bpy animation export) is **not** in `gameassets batch` — see [ANIMATOR3D_AFTER_RIG.md](ANIMATOR3D_AFTER_RIG.md), then copy the exported GLB into `public/assets/models/`.
 
 ## 5. Synergy limits (honest scope)
 
@@ -68,4 +68,5 @@ For the runtime to load content **without** a custom CMS:
 
 - [VibeGame/examples/monorepo-game/README.md](../VibeGame/examples/monorepo-game/README.md) — runnable bridge example
 - [GameAssets cursor skill / batch behavior](../GameAssets/src/gameassets/cursor_skill/SKILL.md)
+- [ANIMATOR3D_AFTER_RIG.md](ANIMATOR3D_AFTER_RIG.md) — animation after rigging
 - Root [README.md](../README.md) — project map
