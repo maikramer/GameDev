@@ -1,7 +1,8 @@
 """Registry de ferramentas do monorepo GameDev.
 
-Define metadata (tipo, caminhos, nomes) para cada ferramenta instalável,
-permitindo que um CLI unificado descubra e instale qualquer uma delas.
+Define metadata (tipo, caminhos, nomes) para cada ferramenta instalável
+(Python, Rust ou Bun/TypeScript), permitindo que um CLI unificado descubra
+e instale qualquer uma delas.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from pathlib import Path
 class ToolKind(Enum):
     PYTHON = "python"
     RUST = "rust"
+    BUN = "bun"
 
 
 @dataclass(frozen=True)
@@ -42,6 +44,8 @@ class ToolSpec:
             return (root / "setup.py").is_file() or (root / "pyproject.toml").is_file()
         if self.kind == ToolKind.RUST:
             return (root / "Cargo.toml").is_file()
+        if self.kind == ToolKind.BUN:
+            return (root / "package.json").is_file()
         return root.is_dir()
 
 
@@ -176,6 +180,13 @@ TOOLS: dict[str, ToolSpec] = {
         cli_name="materialize",
         cargo_bin_name="materialize-cli",
         description="PBR maps (normal, AO, metallic, smoothness) via GPU/wgpu",
+    ),
+    "vibegame": ToolSpec(
+        name="VibeGame",
+        kind=ToolKind.BUN,
+        folder="VibeGame",
+        cli_name="vibegame",
+        description="Motor 3D (TypeScript/Bun); CLI `vibegame create` + build da biblioteca",
     ),
 }
 

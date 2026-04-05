@@ -29,6 +29,7 @@ class TestToolSpec:
         assert "paint3d" in TOOLS
         assert "gamedevlab" in TOOLS
         assert "materialize" in TOOLS
+        assert "vibegame" in TOOLS
 
     def test_text2sound_is_python(self):
         spec = TOOLS["text2sound"]
@@ -43,6 +44,12 @@ class TestToolSpec:
         assert spec.kind == ToolKind.RUST
         assert spec.cargo_bin_name == "materialize-cli"
         assert spec.cli_name == "materialize"
+
+    def test_vibegame_is_bun(self):
+        spec = TOOLS["vibegame"]
+        assert spec.kind == ToolKind.BUN
+        assert spec.cli_name == "vibegame"
+        assert spec.folder == "VibeGame"
 
     def test_text2d_is_python(self):
         spec = TOOLS["text2d"]
@@ -108,6 +115,20 @@ class TestToolSpec:
         (tmp_path / "RustTool" / "Cargo.toml").touch()
         assert spec.exists(tmp_path) is True
 
+    def test_exists_bun(self, tmp_path: Path):
+        spec = ToolSpec(
+            name="Test",
+            kind=ToolKind.BUN,
+            folder="BunTool",
+            cli_name="buntool",
+            description="test",
+        )
+        assert spec.exists(tmp_path) is False
+
+        (tmp_path / "BunTool").mkdir()
+        (tmp_path / "BunTool" / "package.json").touch()
+        assert spec.exists(tmp_path) is True
+
 
 class TestFindMonorepoRoot:
     def test_finds_root(self):
@@ -138,6 +159,7 @@ class TestListAvailableTools:
         assert len(tools) >= 1
         names = {t.cli_name for t in tools}
         assert "materialize" in names
+        assert "vibegame" in names
 
     def test_empty_monorepo(self, tmp_path: Path):
         tools = list_available_tools(tmp_path)
@@ -171,3 +193,9 @@ class TestGetTool:
         spec2 = get_tool("GameDevLab")
         assert spec1.name == spec2.name
         assert spec1.cli_name == "gamedev-lab"
+
+    def test_vibegame_variants(self):
+        spec1 = get_tool("vibegame")
+        spec2 = get_tool("VibeGame")
+        assert spec1.name == spec2.name
+        assert spec1.cli_name == "vibegame"

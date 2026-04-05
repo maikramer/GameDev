@@ -1,7 +1,7 @@
 """Instalador unificado do monorepo GameDev.
 
 Fornece ``install_tool`` e ``UnifiedInstaller`` — interface única para
-instalar qualquer ferramenta (Python ou Rust) registada no registry.
+instalar qualquer ferramenta (Python, Rust ou Bun/TypeScript) registada no registry.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 
 from ..logging import Logger
+from .bun_installer import BunProjectInstaller
 from .python_installer import PythonProjectInstaller
 from .registry import TOOLS, ToolKind, ToolSpec, find_monorepo_root, get_tool, list_available_tools
 from .rust_installer import RustProjectInstaller
@@ -263,6 +264,13 @@ def install_tool(
             monorepo,
             install_prefix=install_prefix,
         )
+    elif spec.kind == ToolKind.BUN:
+        inst = BunProjectInstaller(
+            project_name=spec.name,
+            cli_name=spec.cli_name,
+            project_root=spec.project_root(monorepo),
+            install_prefix=install_prefix,
+        )
     else:
         Logger().error(f"Tipo de ferramenta não suportado: {spec.kind}")
         return False
@@ -272,10 +280,14 @@ def install_tool(
     elif action == "uninstall":
         if spec.kind == ToolKind.RUST:
             return inst.run_uninstall()  # type: ignore[union-attr]
+        if spec.kind == ToolKind.BUN:
+            return inst.run_uninstall()  # type: ignore[union-attr]
         Logger().warn("Uninstall para Python: pip uninstall <pacote>")
         return True
     elif action == "reinstall":
         if spec.kind == ToolKind.RUST:
+            return inst.run_reinstall()  # type: ignore[union-attr]
+        if spec.kind == ToolKind.BUN:
             return inst.run_reinstall()  # type: ignore[union-attr]
         Logger().warn("Reinstall: use --force com install")
         return install_tool(
@@ -362,7 +374,8 @@ def main(argv: list[str] | None = None) -> int:
         prog="gamedev-install",
         description=(
             "Instalador unificado do monorepo GameDev. "
-            "Ferramentas Python: instalação em modo editável (pip install -e) por defeito."
+            "Ferramentas Python: instalação em modo editável (pip install -e) por defeito. "
+            "VibeGame: requer Bun e Node no PATH (bun install + build + wrapper vibegame)."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=_build_epilog(available),
@@ -462,13 +475,22 @@ def _build_epilog(available: list[ToolSpec]) -> str:
         "",
     ]
     for spec in available:
-        kind = "Python" if spec.kind == ToolKind.PYTHON else "Rust"
+        kind = (
+            "Python"
+            if spec.kind == ToolKind.PYTHON
+            else "Rust"
+            if spec.kind == ToolKind.RUST
+            else "Bun"
+            if spec.kind == ToolKind.BUN
+            else spec.kind.value
+        )
         lines.append(f"  {spec.cli_name:<14s}  [{kind}]  {spec.description}")
     lines.extend(
         [
             "",
             "Exemplos:",
             "  gamedev-install materialize               # Instalar Materialize (Rust)",
+            "  gamedev-install vibegame                  # VibeGame: bun install + build + ~/.local/bin/vibegame",
             "  gamedev-install text2d                    # Text2D: venv + wrappers",
             "  gamedev-install text3d                    # text2d + Text3D (import + venv)",
             "  gamedev-install text3d --text2d-venv-only # Only text2d editable in venv",
@@ -485,7 +507,15 @@ def _build_epilog(available: list[ToolSpec]) -> str:
 def _print_tool_list(available: list[ToolSpec], logger: Logger) -> None:
     rows = []
     for spec in available:
-        kind = "Python" if spec.kind == ToolKind.PYTHON else "Rust"
+        kind = (
+            "Python"
+            if spec.kind == ToolKind.PYTHON
+            else "Rust"
+            if spec.kind == ToolKind.RUST
+            else "Bun"
+            if spec.kind == ToolKind.BUN
+            else spec.kind.value
+        )
         rows.append((f"{spec.cli_name} [{kind}]", spec.description))
     logger.table(rows, title="Ferramentas GameDev disponíveis")
 
