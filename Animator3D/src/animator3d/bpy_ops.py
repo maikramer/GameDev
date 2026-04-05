@@ -350,12 +350,54 @@ def wave_idle_keyframes(
     finalize_current_action_to_nla(armature_name)
 
 
+def _identify_root_layout(root_kids: list) -> tuple[object | None, list[tuple[object, str]]]:
+    """Detect humanoid layout: one central spine + two lateral leg branches.
+
+    Returns (spine_candidate, [(child, 'r'|'l'), ...]) for identified legs.
+    Works even when leg branches have small lateral offset (|x| < 0.15),
+    common in UniRig and similar generic-named skeletons.
+    """
+    if len(root_kids) < 3:
+        return None, []
+
+    by_abs_x = sorted(root_kids, key=lambda c: abs(c.bone.head_local.x))
+    spine_candidate = by_abs_x[0]
+    laterals = by_abs_x[1:]
+
+    # Need at least one positive-x and one negative-x child (symmetric pair).
+    pos = [c for c in laterals if c.bone.head_local.x > 0.02]
+    neg = [c for c in laterals if c.bone.head_local.x < -0.02]
+    if not pos or not neg:
+        return None, []
+
+    # Verify spine candidate leads to a hub (branching skeleton above).
+    cursor = spine_candidate
+    has_hub = False
+    for _ in range(10):
+        if len(cursor.children) >= 2:
+            has_hub = True
+            break
+        if len(cursor.children) == 1:
+            cursor = cursor.children[0]
+        else:
+            break
+    if not has_hub:
+        return None, []
+
+    pairs: list[tuple[object, str]] = []
+    for c in pos:
+        pairs.append((c, "r"))
+    for c in neg:
+        pairs.append((c, "l"))
+    return spine_candidate, pairs
+
+
 def _classify_bone_chains(armature_name: str) -> dict[str, list[str]]:
     """Classifica ossos em cadeias funcionais por posicao/hierarquia.
 
     Suporta hierarquias profundas (hub nao-raiz, patas na cauda, dedos nas asas).
     Retorna dict com chaves: body, spine, tail, neck, wing_r, wing_l,
-    wing_r_fingers, wing_l_fingers, leg_r, leg_l.
+    wing_r_fingers, wing_l_fingers, leg_r, leg_l, arm_r, arm_l.
     """
     bpy = _bpy()
     arm = bpy.data.objects.get(armature_name)
@@ -439,31 +481,61 @@ def _classify_bone_chains(armature_name: str) -> dict[str, list[str]]:
         else:
             chains[key] = sub
 
-    def _classify_hub_children(hub, hub_path_names: list[str]):
-        """Classifica filhos de um hub por posicao espacial."""
-        sub_chains = [(sc, _collect_all(sc)) for sc in hub.children]
+    def _merge_arm_chain(side: str, sc) -> None:
+        key = "arm_r" if side == "r" else "arm_l"
+        sub = _collect_all(sc)
+        if key in chains:
+            chains[key].extend(sub)
+        else:
+            chains[key] = sub
 
+    def _classify_hub_children(hub, hub_path_names: list[str]):
+        """Classifica filhos de um hub por posicao espacial.
+
+        When legs were already detected at root level (humanoid layout),
+        lateral branches at the upper hub are classified as arms, not wings.
+        """
+        _has_legs = "leg_r" in chains or "leg_l" in chains
+        kids = list(hub.children)
         center_z = hub.bone.head_local.z
-        for sc, sub in sub_chains:
+
+        # Sort by |x| so we can pick the most central child as head/neck.
+        by_abs_x = sorted(kids, key=lambda c: abs(c.bone.head_local.x))
+        head_candidate = by_abs_x[0] if by_abs_x else None
+
+        for sc in kids:
             sx = sc.bone.head_local.x
             sz = sc.bone.head_local.z
 
-            if abs(sx) < 0.12 and sz > center_z + 0.02:
-                neck_linear, neck_tip = _linear_until_branch(sc)
-                chains["neck"] = neck_linear
-            elif abs(sx) < 0.12 and sz <= center_z:
+            if sc is head_candidate and abs(sx) < 0.12:
+                if sz > center_z - 0.05:
+                    neck_linear, _neck_tip = _linear_until_branch(sc)
+                    chains["neck"] = neck_linear
+                    continue
+                else:
+                    tail_chain, tail_hub = _linear_until_branch(sc)
+                    chains["tail"] = tail_chain
+                    if tail_hub and len(tail_hub.children) >= 2:
+                        _classify_tail_hub(tail_hub)
+                    continue
+
+            if abs(sx) < 0.12 and sz <= center_z:
                 tail_chain, tail_hub = _linear_until_branch(sc)
-                chains["tail"] = tail_chain
+                chains.setdefault("tail", tail_chain)
                 if tail_hub and len(tail_hub.children) >= 2:
                     _classify_tail_hub(tail_hub)
-            elif sx > 0.05:
+            elif sx > 0.03:
                 if _lateral_branch_is_leg(sc, center_z):
                     _merge_leg_chain("r", sc)
+                elif _has_legs:
+                    _merge_arm_chain("r", sc)
                 else:
                     _classify_wing(sc, "wing_r")
-            elif sx < -0.05:
+            elif sx < -0.03:
                 if _lateral_branch_is_leg(sc, center_z):
                     _merge_leg_chain("l", sc)
+                elif _has_legs:
+                    _merge_arm_chain("l", sc)
                 else:
                     _classify_wing(sc, "wing_l")
 
@@ -486,7 +558,20 @@ def _classify_bone_chains(armature_name: str) -> dict[str, list[str]]:
 
     # Procurar primeiro hub a partir da raiz
     rz = root.bone.head_local.z
-    for child in root.children:
+    root_kids = list(root.children)
+
+    # Humanoid heuristic: when root has 3+ children and two form a left/right
+    # pair (symmetric about x≈0) with the third being roughly centered, the
+    # lateral pair are legs even if |x| < 0.15.
+    spine_candidate, lateral_pairs = _identify_root_layout(root_kids)
+
+    for sc, side in lateral_pairs:
+        _merge_leg_chain(side, sc)
+
+    for child in root_kids:
+        if any(child is sc for sc, _ in lateral_pairs):
+            continue
+
         cx = child.bone.head_local.x
         if abs(cx) > 0.15:
             if _lateral_branch_is_leg(child, rz):
@@ -604,6 +689,11 @@ def breathe_idle_keyframes(
             secondary_amp=neck_amp * 0.3,
             decay=0.15,
         )
+
+    if "arm_r" in chains:
+        _anim_chain(chains["arm_r"], axis=0, amp=breath_amp * 0.5, freq=cycles, phase_step=0.2, decay=0.15)
+    if "arm_l" in chains:
+        _anim_chain(chains["arm_l"], axis=0, amp=breath_amp * 0.5, freq=cycles, phase_step=0.2, decay=0.15)
 
     if "wing_r" in chains:
         _anim_chain(
@@ -868,6 +958,13 @@ def walk_cycle_keyframes(
         _anim_chain(chains["leg_r"], axis=0, amp=leg_amp, freq=cycles, phase_global=0.0, decay=0.12)
     if "leg_l" in chains:
         _anim_chain(chains["leg_l"], axis=0, amp=leg_amp, freq=cycles, phase_global=math.pi, decay=0.12)
+
+    # Arms swing opposite to legs (natural human gait).
+    arm_amp = leg_amp * 0.7
+    if "arm_r" in chains:
+        _anim_chain(chains["arm_r"], axis=0, amp=arm_amp, freq=cycles, phase_global=math.pi, decay=0.1)
+    if "arm_l" in chains:
+        _anim_chain(chains["arm_l"], axis=0, amp=arm_amp, freq=cycles, phase_global=0.0, decay=0.1)
 
     if "tail" in chains:
         _anim_chain(
@@ -1609,6 +1706,238 @@ def victory_roar_keyframes(
                 bpy.context.scene.frame_set(frame)
                 _set_pose_bone_rotation(pb, (0.0, wave, tail_z * scale))
                 pb.keyframe_insert(data_path=_rotation_data_path(pb), frame=frame)
+
+    finalize_current_action_to_nla(armature_name)
+    return chains
+
+
+def run_cycle_keyframes(
+    armature_name: str,
+    *,
+    frame_start: int = 1,
+    frame_end: int = 36,
+    cycles: float = 2.0,
+    body_amp: float = 0.08,
+    leg_amp: float = 0.22,
+    arm_amp: float = 0.18,
+    wing_amp: float = 0.08,
+    tail_amp: float = 0.12,
+    action_name: str = "Animator3D_Run",
+) -> dict[str, list[str]]:
+    """Running cycle: faster cadence, larger leg amplitude, vertical body bounce."""
+    import math
+
+    bpy = _bpy()
+    normalize_armature_before_animation(armature_name)
+    stash_if_needed_for_action(armature_name, action_name)
+    ensure_action(armature_name, action_name)
+    bpy.context.scene.frame_start = frame_start
+    bpy.context.scene.frame_end = frame_end
+    _ensure_pose_mode(armature_name)
+
+    chains = _classify_bone_chains(armature_name)
+    arm_obj = bpy.data.objects[armature_name]
+    total = frame_end - frame_start + 1
+
+    def _anim_chain(
+        bone_names: list[str],
+        axis: int,
+        amp: float,
+        freq: float,
+        *,
+        phase_step: float = 0.35,
+        phase_global: float = 0.0,
+        decay: float = 0.0,
+    ):
+        for ci, bname in enumerate(bone_names):
+            pb = arm_obj.pose.bones.get(bname)
+            if pb is None:
+                continue
+            scale = max(0.25, 1.0 - ci * decay) if decay > 0 else 1.0
+            phase = ci * phase_step + phase_global
+            for fi in range(total):
+                t = fi / max(total - 1, 1)
+                frame = frame_start + fi
+                angle = amp * scale * math.sin(t * math.pi * 2 * freq + phase)
+                bpy.context.scene.frame_set(frame)
+                euler = list(pb.rotation_euler)
+                euler[axis] = angle
+                _set_pose_bone_rotation(pb, tuple(euler))
+                pb.keyframe_insert(data_path=_rotation_data_path(pb), frame=frame)
+
+    if "body" in chains:
+        _anim_chain(chains["body"], axis=0, amp=body_amp, freq=cycles, phase_global=0.0)
+
+    if "spine" in chains:
+        _anim_chain(chains["spine"], axis=0, amp=body_amp * 0.6, freq=cycles, phase_step=0.15, phase_global=0.2)
+
+    if "leg_r" in chains:
+        _anim_chain(chains["leg_r"], axis=0, amp=leg_amp, freq=cycles, phase_global=0.0, decay=0.1)
+    if "leg_l" in chains:
+        _anim_chain(chains["leg_l"], axis=0, amp=leg_amp, freq=cycles, phase_global=math.pi, decay=0.1)
+
+    if "arm_r" in chains:
+        _anim_chain(chains["arm_r"], axis=0, amp=arm_amp, freq=cycles, phase_global=math.pi, decay=0.08)
+    if "arm_l" in chains:
+        _anim_chain(chains["arm_l"], axis=0, amp=arm_amp, freq=cycles, phase_global=0.0, decay=0.08)
+
+    if "wing_r" in chains:
+        _anim_chain(chains["wing_r"], axis=1, amp=wing_amp, freq=cycles, phase_step=0.25, decay=0.15)
+    if "wing_l" in chains:
+        _anim_chain(chains["wing_l"], axis=1, amp=-wing_amp, freq=cycles, phase_step=0.25, decay=0.15)
+
+    if "tail" in chains:
+        _anim_chain(chains["tail"], axis=2, amp=tail_amp, freq=cycles * 0.9, phase_step=0.4, decay=0.1)
+
+    if "neck" in chains:
+        _anim_chain(chains["neck"], axis=0, amp=body_amp * 0.3, freq=cycles, phase_step=0.2, decay=0.15)
+
+    finalize_current_action_to_nla(armature_name)
+    return chains
+
+
+def jump_keyframes(
+    armature_name: str,
+    *,
+    frame_start: int = 1,
+    frame_end: int = 36,
+    leg_amp: float = 0.25,
+    arm_amp: float = 0.2,
+    body_amp: float = 0.1,
+    action_name: str = "Animator3D_Jump",
+) -> dict[str, list[str]]:
+    """Jump: crouch -> extend -> airborne -> land. Non-looping."""
+    import math
+
+    bpy = _bpy()
+    normalize_armature_before_animation(armature_name)
+    stash_if_needed_for_action(armature_name, action_name)
+    ensure_action(armature_name, action_name)
+    bpy.context.scene.frame_start = frame_start
+    bpy.context.scene.frame_end = frame_end
+    _ensure_pose_mode(armature_name)
+
+    chains = _classify_bone_chains(armature_name)
+    arm_obj = bpy.data.objects[armature_name]
+    total = frame_end - frame_start + 1
+
+    def _jump_profile(t: float) -> tuple[float, float, float]:
+        """Returns (leg_bend, arm_raise, body_lean) for normalized t."""
+        if t < 0.2:
+            p = t / 0.2
+            return (-leg_amp * p, -arm_amp * 0.3 * p, body_amp * p)
+        elif t < 0.4:
+            p = (t - 0.2) / 0.2
+            return (-leg_amp * (1 - p * 1.5), arm_amp * p, -body_amp * 0.5 * p)
+        elif t < 0.75:
+            p = (t - 0.4) / 0.35
+            tuck = 0.3 * math.sin(p * math.pi)
+            return (-leg_amp * 0.15 - tuck * 0.1, arm_amp * (1 - p * 0.3), -body_amp * 0.3)
+        else:
+            p = (t - 0.75) / 0.25
+            return (-leg_amp * 0.3 * (1 - p), arm_amp * 0.2 * (1 - p), body_amp * 0.4 * (1 - p))
+
+    def _pose_chain(bone_names: list[str], axis: int, value: float, decay: float = 0.1):
+        for ci, bname in enumerate(bone_names):
+            pb = arm_obj.pose.bones.get(bname)
+            if pb is None:
+                continue
+            scale = max(0.3, 1.0 - ci * decay)
+            euler = list(pb.rotation_euler)
+            euler[axis] = value * scale
+            _set_pose_bone_rotation(pb, tuple(euler))
+            pb.keyframe_insert(data_path=_rotation_data_path(pb), frame=bpy.context.scene.frame_current)
+
+    for fi in range(total):
+        t = fi / max(total - 1, 1)
+        frame = frame_start + fi
+        bpy.context.scene.frame_set(frame)
+        leg_bend, arm_raise, body_lean = _jump_profile(t)
+
+        if "body" in chains:
+            _pose_chain(chains["body"], axis=0, value=body_lean)
+        if "spine" in chains:
+            _pose_chain(chains["spine"], axis=0, value=body_lean * 0.5, decay=0.15)
+        if "leg_r" in chains:
+            _pose_chain(chains["leg_r"], axis=0, value=leg_bend, decay=0.12)
+        if "leg_l" in chains:
+            _pose_chain(chains["leg_l"], axis=0, value=leg_bend, decay=0.12)
+        if "arm_r" in chains:
+            _pose_chain(chains["arm_r"], axis=0, value=arm_raise, decay=0.1)
+        if "arm_l" in chains:
+            _pose_chain(chains["arm_l"], axis=0, value=arm_raise, decay=0.1)
+        if "wing_r" in chains:
+            _pose_chain(chains["wing_r"], axis=1, value=arm_raise * 0.5, decay=0.12)
+        if "wing_l" in chains:
+            _pose_chain(chains["wing_l"], axis=1, value=-arm_raise * 0.5, decay=0.12)
+        if "neck" in chains:
+            _pose_chain(chains["neck"], axis=0, value=-body_lean * 0.4, decay=0.15)
+
+    finalize_current_action_to_nla(armature_name)
+    return chains
+
+
+def fall_keyframes(
+    armature_name: str,
+    *,
+    frame_start: int = 1,
+    frame_end: int = 24,
+    leg_spread: float = 0.08,
+    arm_spread: float = 0.15,
+    body_lean: float = 0.06,
+    action_name: str = "Animator3D_Fall",
+) -> dict[str, list[str]]:
+    """Falling pose: slight spread, gentle wind sway. Non-looping."""
+    import math
+
+    bpy = _bpy()
+    normalize_armature_before_animation(armature_name)
+    stash_if_needed_for_action(armature_name, action_name)
+    ensure_action(armature_name, action_name)
+    bpy.context.scene.frame_start = frame_start
+    bpy.context.scene.frame_end = frame_end
+    _ensure_pose_mode(armature_name)
+
+    chains = _classify_bone_chains(armature_name)
+    arm_obj = bpy.data.objects[armature_name]
+    total = frame_end - frame_start + 1
+
+    for fi in range(total):
+        t = fi / max(total - 1, 1)
+        frame = frame_start + fi
+        bpy.context.scene.frame_set(frame)
+        wind = 0.03 * math.sin(t * math.pi * 4)
+        settle = min(t / 0.3, 1.0)
+
+        def _set(bone_names: list[str], axis: int, val: float, decay: float = 0.1):
+            for ci, bname in enumerate(bone_names):
+                pb = arm_obj.pose.bones.get(bname)
+                if pb is None:
+                    continue
+                s = max(0.3, 1.0 - ci * decay)
+                euler = list(pb.rotation_euler)
+                euler[axis] = val * s
+                _set_pose_bone_rotation(pb, tuple(euler))
+                pb.keyframe_insert(data_path=_rotation_data_path(pb), frame=frame)
+
+        if "body" in chains:
+            _set(chains["body"], 0, body_lean * settle + wind)
+        if "spine" in chains:
+            _set(chains["spine"], 0, body_lean * 0.5 * settle + wind * 0.5, decay=0.15)
+        if "leg_r" in chains:
+            _set(chains["leg_r"], 0, -leg_spread * settle, decay=0.12)
+        if "leg_l" in chains:
+            _set(chains["leg_l"], 0, -leg_spread * settle, decay=0.12)
+        if "arm_r" in chains:
+            _set(chains["arm_r"], 2, arm_spread * settle + wind, decay=0.08)
+        if "arm_l" in chains:
+            _set(chains["arm_l"], 2, -arm_spread * settle - wind, decay=0.08)
+        if "wing_r" in chains:
+            _set(chains["wing_r"], 1, arm_spread * 2 * settle + wind, decay=0.1)
+        if "wing_l" in chains:
+            _set(chains["wing_l"], 1, -arm_spread * 2 * settle - wind, decay=0.1)
+        if "neck" in chains:
+            _set(chains["neck"], 0, -body_lean * 0.3 * settle, decay=0.15)
 
     finalize_current_action_to_nla(armature_name)
     return chains

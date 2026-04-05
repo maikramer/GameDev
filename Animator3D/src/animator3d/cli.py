@@ -705,6 +705,245 @@ def cmd_roar(
     )
 
 
+@main.command("run")
+@click.argument("input_path", type=click.Path(path_type=Path, exists=True))
+@click.argument("output_path", type=click.Path(path_type=Path))
+@click.option("--frames", default=36, show_default=True, type=int, help="Duração do ciclo de corrida.")
+@click.option("--cycles", default=2.0, show_default=True, type=float, help="Ciclos de corrida no intervalo.")
+@click.option("--leg-amp", "leg_amp", default=0.22, show_default=True, type=float, help="Amplitude pernas (rad).")
+@click.option(
+    "--append/--no-append",
+    "append_mode",
+    default=True,
+    show_default=True,
+    help="Acrescenta ao GLB sem apagar clips anteriores (defeito).",
+)
+@click.option("--clip-name", "clip_name", default=None, type=str, help="Nome da animação no glTF.")
+def cmd_run(
+    input_path: Path,
+    output_path: Path,
+    frames: int,
+    cycles: float,
+    leg_amp: float,
+    append_mode: bool,
+    clip_name: str | None,
+) -> None:
+    """Ciclo de corrida: cadência rápida, amplitude alta, balanço de braços."""
+    _require_bpy()
+    from . import bpy_ops
+
+    if frames < 2:
+        raise click.ClickException("--frames deve ser >= 2")
+
+    bpy_ops.clear_scene()
+    bpy_ops.import_asset(input_path)
+    arms = bpy_ops.list_armatures()
+    if not arms:
+        raise click.ClickException("Nenhum armature encontrado no ficheiro.")
+    arm_name = arms[0].name
+    if not append_mode:
+        bpy_ops.clear_armature_animations(arm_name)
+
+    chains = bpy_ops.run_cycle_keyframes(
+        arm_name,
+        frame_start=1,
+        frame_end=frames,
+        cycles=cycles,
+        leg_amp=leg_amp,
+        action_name=_clip_name_or_default(clip_name, "Animator3D_Run"),
+    )
+    nclips = bpy_ops.count_nla_tracks(arm_name)
+    bpy_ops.export_auto(output_path)
+    chain_info = ", ".join(f"{k}({len(v)})" for k, v in chains.items())
+    console.print(
+        f"[green]Run[/green] armature={arm_name!r} cadeias=\\[{chain_info}] "
+        f"· {nclips} clip(s) no GLB → {output_path.resolve()}"
+    )
+
+
+@main.command("jump")
+@click.argument("input_path", type=click.Path(path_type=Path, exists=True))
+@click.argument("output_path", type=click.Path(path_type=Path))
+@click.option("--frames", default=36, show_default=True, type=int, help="Duração do salto.")
+@click.option(
+    "--append/--no-append",
+    "append_mode",
+    default=True,
+    show_default=True,
+    help="Acrescenta ao GLB sem apagar clips anteriores (defeito).",
+)
+@click.option("--clip-name", "clip_name", default=None, type=str, help="Nome da animação no glTF.")
+def cmd_jump(
+    input_path: Path,
+    output_path: Path,
+    frames: int,
+    append_mode: bool,
+    clip_name: str | None,
+) -> None:
+    """Salto: agachar → estender → aéreo → aterrar. Não-cíclico."""
+    _require_bpy()
+    from . import bpy_ops
+
+    if frames < 2:
+        raise click.ClickException("--frames deve ser >= 2")
+
+    bpy_ops.clear_scene()
+    bpy_ops.import_asset(input_path)
+    arms = bpy_ops.list_armatures()
+    if not arms:
+        raise click.ClickException("Nenhum armature encontrado no ficheiro.")
+    arm_name = arms[0].name
+    if not append_mode:
+        bpy_ops.clear_armature_animations(arm_name)
+
+    chains = bpy_ops.jump_keyframes(
+        arm_name,
+        frame_start=1,
+        frame_end=frames,
+        action_name=_clip_name_or_default(clip_name, "Animator3D_Jump"),
+    )
+    nclips = bpy_ops.count_nla_tracks(arm_name)
+    bpy_ops.export_auto(output_path)
+    chain_info = ", ".join(f"{k}({len(v)})" for k, v in chains.items())
+    console.print(
+        f"[green]Jump[/green] armature={arm_name!r} cadeias=\\[{chain_info}] "
+        f"· {nclips} clip(s) no GLB → {output_path.resolve()}"
+    )
+
+
+@main.command("fall")
+@click.argument("input_path", type=click.Path(path_type=Path, exists=True))
+@click.argument("output_path", type=click.Path(path_type=Path))
+@click.option("--frames", default=24, show_default=True, type=int, help="Duração da queda.")
+@click.option(
+    "--append/--no-append",
+    "append_mode",
+    default=True,
+    show_default=True,
+    help="Acrescenta ao GLB sem apagar clips anteriores (defeito).",
+)
+@click.option("--clip-name", "clip_name", default=None, type=str, help="Nome da animação no glTF.")
+def cmd_fall(
+    input_path: Path,
+    output_path: Path,
+    frames: int,
+    append_mode: bool,
+    clip_name: str | None,
+) -> None:
+    """Pose de queda: braços abertos, balanço de vento. Não-cíclico."""
+    _require_bpy()
+    from . import bpy_ops
+
+    if frames < 2:
+        raise click.ClickException("--frames deve ser >= 2")
+
+    bpy_ops.clear_scene()
+    bpy_ops.import_asset(input_path)
+    arms = bpy_ops.list_armatures()
+    if not arms:
+        raise click.ClickException("Nenhum armature encontrado no ficheiro.")
+    arm_name = arms[0].name
+    if not append_mode:
+        bpy_ops.clear_armature_animations(arm_name)
+
+    chains = bpy_ops.fall_keyframes(
+        arm_name,
+        frame_start=1,
+        frame_end=frames,
+        action_name=_clip_name_or_default(clip_name, "Animator3D_Fall"),
+    )
+    nclips = bpy_ops.count_nla_tracks(arm_name)
+    bpy_ops.export_auto(output_path)
+    chain_info = ", ".join(f"{k}({len(v)})" for k, v in chains.items())
+    console.print(
+        f"[green]Fall[/green] armature={arm_name!r} cadeias=\\[{chain_info}] "
+        f"· {nclips} clip(s) no GLB → {output_path.resolve()}"
+    )
+
+
+# ---------- game-pack: batch animation preset ----------
+
+_PRESETS: dict[str, list[tuple[str, dict[str, object]]]] = {
+    "humanoid": [
+        ("breathe_idle_keyframes", {"frame_end": 72, "action_name": "Animator3D_BreatheIdle"}),
+        ("walk_cycle_keyframes", {"frame_end": 48, "action_name": "Animator3D_Walk"}),
+        ("run_cycle_keyframes", {"frame_end": 36, "action_name": "Animator3D_Run"}),
+        ("jump_keyframes", {"frame_end": 36, "action_name": "Animator3D_Jump"}),
+        ("fall_keyframes", {"frame_end": 24, "action_name": "Animator3D_Fall"}),
+    ],
+    "creature": [
+        ("breathe_idle_keyframes", {"frame_end": 72, "action_name": "Animator3D_BreatheIdle"}),
+        ("walk_cycle_keyframes", {"frame_end": 48, "action_name": "Animator3D_Walk"}),
+        ("attack_keyframes", {"frame_end": 48, "action_name": "Animator3D_Attack"}),
+        ("victory_roar_keyframes", {"frame_end": 60, "action_name": "Animator3D_Roar"}),
+    ],
+    "flying": [
+        ("breathe_idle_keyframes", {"frame_end": 72, "action_name": "Animator3D_BreatheIdle"}),
+        ("hover_flap_keyframes", {"frame_end": 60, "action_name": "Animator3D_Hover"}),
+        ("soar_keyframes", {"frame_end": 48, "action_name": "Animator3D_Soar"}),
+        ("dive_attack_keyframes", {"frame_end": 48, "action_name": "Animator3D_Dive"}),
+        ("land_keyframes", {"frame_end": 48, "action_name": "Animator3D_Land"}),
+    ],
+}
+
+
+@main.command("game-pack")
+@click.argument("input_path", type=click.Path(path_type=Path, exists=True))
+@click.argument("output_path", type=click.Path(path_type=Path))
+@click.option(
+    "--preset",
+    type=click.Choice(list(_PRESETS.keys()), case_sensitive=False),
+    default="humanoid",
+    show_default=True,
+    help="Conjunto de animações a gerar.",
+)
+@click.option(
+    "--clips",
+    "clip_filter",
+    default=None,
+    type=str,
+    help="Lista de clips separada por vírgulas (ex: idle,walk,run). Filtra o preset.",
+)
+def cmd_game_pack(
+    input_path: Path,
+    output_path: Path,
+    preset: str,
+    clip_filter: str | None,
+) -> None:
+    """Gera todas as animações de um preset num único comando."""
+    _require_bpy()
+    from . import bpy_ops
+
+    bpy_ops.clear_scene()
+    bpy_ops.import_asset(input_path)
+    arms = bpy_ops.list_armatures()
+    if not arms:
+        raise click.ClickException("Nenhum armature encontrado no ficheiro.")
+    arm_name = arms[0].name
+
+    steps = _PRESETS[preset.lower()]
+
+    if clip_filter:
+        allowed = {s.strip().lower() for s in clip_filter.split(",")}
+        steps = [(fn, kw) for fn, kw in steps if any(a in kw["action_name"].lower() for a in allowed)]
+        if not steps:
+            raise click.ClickException(f"Nenhum clip corresponde ao filtro: {clip_filter}")
+
+    generated = []
+    for fn_name, kwargs in steps:
+        fn = getattr(bpy_ops, fn_name)
+        fn(arm_name, frame_start=1, **kwargs)
+        generated.append(kwargs["action_name"])
+        console.print(f"  [dim]✓[/dim] {kwargs['action_name']}")
+
+    nclips = bpy_ops.count_nla_tracks(arm_name)
+    bpy_ops.export_auto(output_path)
+    console.print(
+        f"[green]game-pack[/green] preset={preset!r} armature={arm_name!r} "
+        f"· {nclips} clip(s) no GLB → {output_path.resolve()}"
+    )
+
+
 @main.command("list-clips")
 @click.argument("input_path", type=click.Path(path_type=Path, exists=True))
 def cmd_list_clips(input_path: Path) -> None:
