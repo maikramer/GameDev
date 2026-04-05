@@ -4,7 +4,7 @@ Guide for agentic coding agents working in this repository.
 
 ## Repository Overview
 
-Monorepo for game-dev AI tools: text-to-image, text-to-3D, text-to-audio, textures, skymaps, PBR map generation, part decomposition, rigging, animation, and asset batching. Primarily Python with one Rust crate (Materialize).
+Monorepo for game-dev AI tools: text-to-image, text-to-3D, text-to-audio, textures, skymaps, PBR map generation, part decomposition, rigging, animation, asset batching, and a browser 3D engine. Primarily Python with one Rust crate (Materialize) and one TypeScript package (VibeGame).
 
 **Key directories:**
 
@@ -23,8 +23,9 @@ Monorepo for game-dev AI tools: text-to-image, text-to-3D, text-to-audio, textur
 | `Animator3D/` | Python | `animator3d` | Animation (bpy 5.1, Python 3.13) |
 | `GameDevLab/` | Python | `gamedev-lab` | Debug 3D, benches, profiling |
 | `Materialize/` | Rust | `materialize-cli` | PBR map generation (wgpu compute) |
+| `VibeGame/` | TypeScript | `vibegame` (npm) | 3D game engine (bitecs, Three.js, Vite build; Bun tests) |
 
-All Python packages depend on `gamedev-shared` (install Shared first).
+All Python packages depend on `gamedev-shared` (install Shared first). VibeGame is standalone (Bun + Vite); it does not use `gamedev-shared`.
 
 ## Build / Lint / Test Commands
 
@@ -34,7 +35,7 @@ All Python packages depend on `gamedev-shared` (install Shared first).
 make check
 ```
 
-This runs: lint + format check + typecheck + all tests.
+This runs: lint + format check + typecheck + all **Python** tests and **Materialize** (`cargo test`). It does **not** run VibeGame (Bun/TypeScript); use `make test-vibegame` and related targets in `VibeGame/`.
 
 ### Lint
 
@@ -77,7 +78,22 @@ make test-gameassets   # pytest GameAssets only
 make test-texture2d    # pytest Texture2D only
 make test-text2sound   # pytest Text2Sound only
 make test-materialize  # cargo test in Materialize/
+make test-vibegame     # bun install (frozen) + bun test in VibeGame/
 ```
+
+### VibeGame (TypeScript / Bun)
+
+From repo root (requires [Bun](https://bun.sh/) on `PATH`):
+
+```bash
+cd VibeGame && bun install --frozen-lockfile   # install deps
+make test-vibegame    # tests (runs install first)
+make check-vibegame   # tsc --noEmit
+make lint-vibegame    # eslint
+make build-vibegame   # vite build
+```
+
+Formatting: Prettier (`bun run format` / `bun run format:check` in `VibeGame/`).
 
 ### Tests — single test file or test class
 
@@ -244,8 +260,10 @@ CI runs on push/PR to `main` (`.github/workflows/ci.yml`):
 
 1. **lint:** ruff check + ruff format --check + pre-commit
 2. **test-python:** pytest per package on multiple Python versions (3.10, 3.12, 3.11 for Rigging3D, 3.13 for Animator3D)
-3. **test-rust:** cargo fmt --check + cargo clippy + cargo test (Materialize)
-4. **smoke-heavy:** Editable install + import check for Text2D, Text3D
+3. **test-rust:** cargo fmt --check + cargo clippy + cargo test (Materialize; continue-on-error)
+
+Excluded from CI (heavy PyTorch / diffusers deps, not viable on GPU-less runners): Text2D, Text3D, Paint3D.
+VibeGame has its own CI workflow in `VibeGame/.github/workflows/` (Bun + TypeScript).
 
 ## Important Notes
 
