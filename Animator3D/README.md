@@ -40,16 +40,51 @@ animator3d inspect rigged.glb --json-out
 animator3d export rigged.glb copy.glb
 animator3d wave-idle rigged.glb animated.glb --frames 60
 animator3d wave-idle rigged.glb animated.glb --bone mixamorig:Spine
+animator3d game-pack rigged.glb animated.glb --preset humanoid
 ```
 
 | Command | Description |
 |---------|-------------|
+| **Utility** | |
 | `check` | Verifies `bpy` and prints Blender version |
 | `inspect` | Imports and lists armatures, bone sample, actions |
+| `export` | Re-exports (import/export roundtrip test) |
+| `list-clips` | JSON list of animation clips in a file |
 | `screenshot` | Multi-view PNG renders (Workbench default; `--engine eevee`, `--ortho`, `--no-transparent-film`) |
 | `inspect-rig` | Rig views with bones visible; optional weight heatmap (`--show-weights`) |
-| `export` | Re-exports (import/export roundtrip test) |
-| `wave-idle` | Test animation (oscillation on one bone) and export |
+| **Animation** | |
+| `wave-idle` | Test animation (oscillation on one bone) |
+| `breathe-idle` | Multi-bone idle (breathing, wings, tail, neck, arms) |
+| `attack` | Strike/bite animation |
+| `walk` | Walk cycle with leg alternation and arm counter-swing |
+| `run` | Run cycle (faster cadence, larger amplitude) |
+| `jump` | Jump: crouch → extend → airborne → land (non-looping) |
+| `fall` | Falling pose with wind sway (non-looping) |
+| `hover` | Hovering (wing flapping) |
+| `soar` | Soaring/gliding |
+| `dive` | Dive attack |
+| `fire` | Fire breath |
+| `land` | Landing |
+| `roar` | Victory roar |
+| **Batch** | |
+| `game-pack` | Generate all game animations in one command (`--preset humanoid` / `creature` / `flying`; optional `--clips` filter) |
+
+### `game-pack`
+
+Generates every clip defined by a preset in a single pass. Presets:
+
+- **`humanoid`** — idle, walk, run, jump, fall
+- **`creature`** — idle, walk, attack, roar
+- **`flying`** — idle, hover, soar, dive, land
+
+Use `--clips` with a comma-separated list of short names (matched against clip names in the GLB, e.g. `idle`, `walk`, `run`) to run only a subset of the preset.
+
+```bash
+animator3d game-pack rigged.glb animated.glb --preset humanoid
+animator3d game-pack dragon.glb dragon_anim.glb --preset flying
+animator3d game-pack monster.glb monster_anim.glb --preset creature
+animator3d game-pack hero.glb hero_anim.glb --preset humanoid --clips idle,walk,run
+```
 
 ## Flow with Rigging3D
 
