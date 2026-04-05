@@ -75,6 +75,7 @@ source /path/to/GameDev/GameAssets/.venv/bin/activate
 | `gameassets prompts` | Preview prompts without generating images |
 | `gameassets batch` | Batch-generate images (and optionally 3D/audio) |
 | `gameassets handoff` | Copy/symlink `output_dir` assets into a Vite `public/` tree and write `assets/gameassets_handoff.json` |
+| `gameassets dream` | AI-powered idea-to-game: LLM plans assets+scene, batch generates, scaffolds Vite project |
 | `gameassets info` | Show config, detected binaries, environment |
 | `gameassets skill install` | Install Cursor Agent Skill in the project |
 

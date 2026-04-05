@@ -45,6 +45,12 @@ class Text3DProfile:
     paint_max_views: int | None = None
     # Resolução das vistas internas (menor = mais rápido; padrão 512)
     paint_view_resolution: int | None = None
+    # Resolução de rasterização para back-projection (padrão upstream: 2048)
+    paint_render_size: int | None = None
+    # Resolução do atlas UV final (padrão upstream: 4096)
+    paint_texture_size: int | None = None
+    # Expoente de blending entre vistas (maior = costuras mais nítidas; padrão 6)
+    paint_bake_exp: int | None = None
     # --- Otimizações de VRAM para Paint3D ---
     # Modo de quantização: auto, none, fp8, int8, int4, quanto-int8, quanto-int4
     paint_quantization: str | None = None
@@ -390,11 +396,20 @@ class GameProfile:
             # Paint3D texture options (performance tuning)
             pmv = raw_t3.get("paint_max_views")
             pvr = raw_t3.get("paint_view_resolution")
+            prs = raw_t3.get("paint_render_size")
+            pts = raw_t3.get("paint_texture_size")
+            pbe = raw_t3.get("paint_bake_exp")
             try:
                 pmv_i = int(pmv) if pmv is not None else None
                 pvr_i = int(pvr) if pvr is not None else None
+                prs_i = int(prs) if prs is not None else None
+                pts_i = int(pts) if pts is not None else None
+                pbe_i = int(pbe) if pbe is not None else None
             except (TypeError, ValueError) as e:
-                raise ValueError("text3d.paint_max_views e paint_view_resolution devem ser inteiros") from e
+                raise ValueError(
+                    "text3d.paint_max_views, paint_view_resolution, paint_render_size, "
+                    "paint_texture_size e paint_bake_exp devem ser inteiros"
+                ) from e
             # Paint3D otimizações de VRAM
             paint_quant = raw_t3.get("paint_quantization")
             paint_quant_s = str(paint_quant).strip().lower() if paint_quant not in (None, "") else None
@@ -429,6 +444,9 @@ class GameProfile:
                 model_subfolder=model_sub_s,
                 paint_max_views=pmv_i,
                 paint_view_resolution=pvr_i,
+                paint_render_size=prs_i,
+                paint_texture_size=pts_i,
+                paint_bake_exp=pbe_i,
                 paint_quantization=paint_quant_s,
                 paint_tiny_vae=bool(raw_t3.get("paint_tiny_vae", False)),
                 paint_torch_compile=bool(raw_t3.get("paint_torch_compile", False)),

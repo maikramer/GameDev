@@ -75,6 +75,7 @@ O ficheiro `activate.sh` segue o padrão do Text2D: corre um comando já com o v
 | `gameassets prompts` | Pré-visualiza prompts sem gerar imagens |
 | `gameassets batch` | Gera imagens (e opcionalmente 3D/áudio) em batch |
 | `gameassets handoff` | Copia/symlink do `output_dir` para `public/assets` e grava `assets/gameassets_handoff.json` |
+| `gameassets dream` | Da ideia ao jogo com IA: LLM planeia assets+cena, batch gera, scaffold projecto Vite |
 | `gameassets info` | Mostra configuração, binários detetados, e ambiente |
 | `gameassets skill install` | Instala Agent Skill Cursor no projeto |
 
