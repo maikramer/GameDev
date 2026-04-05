@@ -1,0 +1,30 @@
+title: Simple RPG Demo
+genre: 3D exploration RPG
+tone: bright lowpoly adventure on a green field
+style_preset: lowpoly
+output_dir: .
+path_layout: split
+images_subdir: images
+meshes_subdir: meshes
+image_ext: png
+seed_base: 42
+negative_keywords:
+  - gore
+  - dark
+  - realistic
+text2d:
+  low_vram: true
+  width: 768
+  height: 768
+text3d:
+  preset: fast
+  low_vram: false
+  texture: true
+rigging3d:
+  output_suffix: _rigged
+audio_subdir: audio
+text2sound:
+  duration: 10
+  steps: 100
+  cfg_scale: 4.5
+  audio_format: wav
