@@ -19,7 +19,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Cache pip
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/pip
           key: pip-lint-${{ runner.os }}-${{ hashFiles('ruff.toml', '.pre-commit-config.yaml') }}
@@ -83,7 +83,7 @@ jobs:
         id: repo
         run: echo "path=$(pwd)" >> $GITHUB_OUTPUT
       - name: Cache pip
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/pip
           key: pip-${{ matrix.python-version }}-${{ matrix.package }}-${{ hashFiles(format('Shared/pyproject.toml', matrix.package, '/pyproject.toml')) }}
@@ -126,7 +126,7 @@ jobs:
         with:
           bun-version: "1.2.21"
       - name: Cache bun
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.bun/install/cache
           key: bun-${{ runner.os }}-${{ hashFiles('VibeGame/bun.lock') }}
