@@ -29,7 +29,7 @@ torchmetrics==0.11.4
 tqdm
 transformers
 v-diffusion-pytorch==0.0.2
-vector-quantize-pytorch==1.14.41
+vector-quantize-pytorch==1.28.1
 # 0.15.4 puxa pathtools (setup usa imp, removido no Py3.13)
 wandb>=0.16.0
 webdataset==0.2.100
