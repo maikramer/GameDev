@@ -1,0 +1,1067 @@
+import ast
+import contextlib
+import inspect
+import json
+import os
+import re
+import threading
+import time
+from collections.abc import Mapping
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Type, Union
+from ccimport.buildmeta import _unique_list_keep_order
+
+import pccm
+from pccm.core.funccode import Argument
+import portalocker
+from ccimport import loader, source_iter
+from pccm.builder import build_pybind
+from pccm.constants import PCCM_INLINE_LIBRARY_PATH
+from pccm.core import (Class, ConstructorMeta, DestructorMeta,
+                       ExternalFunctionMeta, FunctionCode, FunctionDecl,
+                       MemberFunctionMeta, ParameterizedClass,
+                       StaticMemberFunctionMeta, get_class_meta)
+from pccm.core.parsers import BaseType, CppType, DeclSpec, QualifiedId
+from pccm.middlewares.pybind import Pybind11MethodMeta
+from pccm.source.core import Replace, Source, execute_modifiers
+from pccm.utils import UniqueNamePool, get_qualname_of_type
+import difflib
+import numpy as np
+
+PCCM_INLINE_MODULE_NAME = "__pccm_inline_module"
+PCCM_INLINE_FUNCTION_NAME = "__pccm_inline_function"
+
+PCCM_INLINE_FUNCTION_NAME_FORMAT = "__pccm_inline_{}"
+PCCM_INLINE_INNER_FUNCTION_NAME = "__pccm_inline_inner_function"  # usually cuda global function
+
+PCCM_INLINE_ARG_PREFIX = "__pccm_arg"
+
+PCCM_INLINE_NAMESPACE = "__pccm_inline_namespace"
+PCCM_INLINE_CLASS_NAME = "__pccm_InlineClass"
+
+
+def gcs(*instances):
+    if len(instances) == 0:
+        return None
+    classes = [inspect.getmro(type(x)) for x in instances]
+    for x in classes[0]:
+        if all(x in mro for mro in classes):
+            return x
+
+
+def get_base_type_string(obj):
+    # bool is int, so we must check it first
+    if isinstance(obj, bool):
+        return "bool", False
+    elif isinstance(obj, int):
+        return "int64_t", False
+    elif isinstance(obj, (float, np.floating)):
+        return "float", False
+    elif isinstance(obj, str):
+        return "std::string", False
+    elif isinstance(obj, np.integer):
+        return "int64_t", False
+    else:
+        return get_qualname_of_type(type(obj)), True
+
+
+def _get_captures_in_code(code_str: str):
+    it = source_iter.CppSourceIterator(code_str)
+    # hold ranges for further replace
+    all_captures: List[CaptureStmt] = []
+    unique_name: Dict[str, CaptureStmt] = {}
+    for pose in it.get_symbol_poses("$"):
+        it.move(pose + 1)
+        next_round = it.next_round()
+        if next_round is not None:
+            cap_name = it.source[next_round[0] + 1:next_round[1]].strip()
+            rep_range = (pose, next_round[1] + 1)
+            sym_range = (next_round[0] + 1, next_round[1])
+            is_expr = True
+        else:
+            iden = it.next_identifier()
+            assert iden is not None, "you can't use $ without a identifier."
+            rep_range = (pose, iden.end)
+            cap_name = iden.name.strip()
+            sym_range = (pose + 1, iden.end)
+            is_expr = False
+
+        if cap_name in unique_name:
+            cap = unique_name[cap_name]
+            cap.replace_range_pairs.append(rep_range)
+        else:
+            all_captures.append(
+                CaptureStmt(cap_name, is_expr, sym_range, [rep_range]))
+            unique_name[all_captures[-1].name] = all_captures[-1]
+    return all_captures, it.identifiers
+
+
+class MultiTypeKindError(Exception):
+    pass
+
+
+class PreCaptureFunctionCode(FunctionCode):
+
+    def __init__(self,
+                 code: str = "",
+                 arguments: Optional[List[Argument]] = None,
+                 return_type: str = "void",
+                 ctor_inits: Optional[List[Tuple[str, str]]] = None,
+                 cached_capture_map: Optional[Dict[str, Any]] = None):
+        super().__init__(code, arguments, return_type, ctor_inits)
+        self._cached_inited = cached_capture_map is not None
+        self._pre_capture_map: Dict[str, Any] = {}
+        if cached_capture_map is not None:
+            self._pre_capture_map = cached_capture_map
+
+    def get_pre_capture_map(self):
+        return self._pre_capture_map
+
+    @contextlib.contextmanager
+    def capture_vars(self, *, _frame_cnt: int = 2):
+        if self._cached_inited:
+            yield
+            return
+        cur_frame = inspect.currentframe()
+        assert cur_frame is not None
+        frame = cur_frame
+        while _frame_cnt > 0:
+            frame = cur_frame.f_back
+            assert frame is not None
+            cur_frame = frame
+            _frame_cnt -= 1
+        # del frame
+        local_vars = cur_frame.f_locals.copy()
+        code_for_inspect = pccm.FunctionCode()
+        with self.capture_to_new_code(code_for_inspect):
+            yield
+        code_str = code_for_inspect.inspect_body()
+        all_captures, _ = _get_captures_in_code(code_str)
+
+        for cap in all_captures:
+            if not cap.is_expr:
+                if cap.name not in local_vars:
+                    raise ValueError(
+                        f"can't find your capture {cap.name} in prev frame.")
+                obj = local_vars[cap.name]
+            else:
+                for cap_name in cap.expr_names:
+                    if cap_name not in local_vars:
+                        raise ValueError(
+                            f"can't find your capture {cap_name} in prev frame."
+                        )
+                # eval expr in prev frame
+                obj = eval(cap.name, local_vars)
+            if cap.name not in self._pre_capture_map:
+                self._pre_capture_map[cap.name] = obj
+            else:
+                assert self._pre_capture_map[
+                    cap.
+                    name] is obj, "you capture different object with same capture expr"
+
+
+class InlineBuilderPlugin:
+
+    def handle_captured_type(
+            self,
+            name: str,
+            code: FunctionCode,
+            obj: Any,
+            user_arg: Optional[Any] = None) -> Optional[Tuple[str, str]]:
+        raise NotImplementedError
+
+    def type_conversion(self, obj: Any, user_arg: Optional[Any] = None):
+        return obj
+
+    def type_conversion_code(
+            self,
+            obj: Any,
+            src_name: str,
+            tgt_name: str,
+            user_arg: Optional[Any] = None) -> Optional[Tuple[str, List[str]]]:
+        return None
+
+    def get_cpp_type(
+            self,
+            obj: Any,
+            user_arg: Optional[Any] = None) -> Union[str, Tuple[str, int]]:
+        raise NotImplementedError
+
+    def prepare_argument(self,
+                         code: FunctionCode,
+                         src_name: str,
+                         tgt_name: str,
+                         tgt_type: str,
+                         obj: Any,
+                         user_arg: Optional[Any] = None) -> Optional[str]:
+        return None
+
+    def is_need_prepared(self,
+                         obj: Any,
+                         user_arg: Optional[Any] = None) -> bool:
+        return False
+
+
+def nested_type_analysis(
+        obj,
+        plugin_dict: Dict[str, InlineBuilderPlugin],
+        iter_limit=10,
+        user_arg: Optional[Any] = None) -> Tuple[BaseType, BaseType]:
+    if isinstance(obj, (list, set)):
+        types_union: Set[CppType] = set()
+        mapped_type = CppType([])
+        for o in obj:
+            if iter_limit < 0:
+                break
+            iter_limit -= 1
+            type_s, type_mapped_s = nested_type_analysis(
+                o, plugin_dict, iter_limit, user_arg)
+            cpp_type = CppType([DeclSpec(type_s)])
+            mapped_type = CppType([DeclSpec(type_mapped_s)])
+            types_union.add(cpp_type)
+        if len(types_union) != 1:
+            raise MultiTypeKindError(
+                "multiple type found, union type isn't supported.")
+        if isinstance(obj, list):
+            name = "vector"
+        else:
+            name = "unordered_set"
+        mapped_type = BaseType(QualifiedId(["std", name]), [mapped_type])
+        return BaseType(QualifiedId(["std", name]),
+                        list(types_union)), mapped_type
+    elif isinstance(obj, tuple):
+        type_tuple: List[CppType] = []
+        mapped_type_tuple: List[CppType] = []
+
+        for o in obj:
+            if iter_limit < 0:
+                break
+            iter_limit -= 1
+            type_s, type_mapped_s = nested_type_analysis(
+                o, plugin_dict, iter_limit, user_arg)
+
+            mapped_type_tuple.append(CppType([DeclSpec(type_mapped_s)]))
+            type_tuple.append(CppType([DeclSpec(type_s)]))
+        mapped_type = BaseType(QualifiedId(["std", "tuple"]),
+                               mapped_type_tuple)
+        return BaseType(QualifiedId(["std", "tuple"]), type_tuple), mapped_type
+    elif isinstance(obj, Mapping):
+        key_types_union: Set[CppType] = set()
+        val_type_union: Set[CppType] = set()
+        key_mapped_type = CppType([])
+        val_mapped_type = CppType([])
+
+        for k, v in obj.items():
+            if iter_limit < 0:
+                break
+            iter_limit -= 1
+            key_type_s, key_m_s = nested_type_analysis(k, plugin_dict,
+                                                       iter_limit, user_arg)
+            val_type_s, val_m_s = nested_type_analysis(v, plugin_dict,
+                                                       iter_limit, user_arg)
+            key_mapped_type = CppType([DeclSpec(key_m_s)])
+            val_mapped_type = CppType([DeclSpec(val_m_s)])
+
+            key_types_union.add(CppType([DeclSpec(key_type_s)]))
+            val_type_union.add(CppType([DeclSpec(val_type_s)]))
+        if len(key_types_union) != 1:
+            raise MultiTypeKindError(
+                "multiple type found, union type isn't supported.")
+        if len(val_type_union) != 1:
+            raise MultiTypeKindError(
+                "multiple type found, union type isn't supported.")
+        res_mapped_type = BaseType(QualifiedId(["std", "unordered_map"]),
+                                   [key_mapped_type, val_mapped_type])
+        res_type = BaseType(
+            QualifiedId(["std", "unordered_map"]),
+            [list(key_types_union)[0],
+             list(val_type_union)[0]])
+        return res_type, res_mapped_type
+    else:
+        base_str, is_custom = get_base_type_string(obj)
+        res_mapped = base_str
+        res_count: Optional[int] = None
+        if is_custom:
+            mapped_may_count = plugin_dict[base_str].get_cpp_type(
+                obj, user_arg)
+            if isinstance(mapped_may_count, str):
+                res_mapped = mapped_may_count
+            else:
+                res_mapped = mapped_may_count[0]
+                res_count = mapped_may_count[1]
+                assert isinstance(res_count, int) and res_count > 0
+        return BaseType(QualifiedId([base_str]),
+                        []), BaseType(QualifiedId([res_mapped]), [], res_count)
+
+
+class NameVisitor(ast.NodeVisitor):
+
+    def __init__(self):
+        self.contain_name = False
+        self.names: List[str] = []
+
+    def visit_Name(self, node: ast.Name):
+        self.names.append(node.id)
+
+
+def extract_names_from_expr(expr: str):
+    tree = ast.parse(expr)
+    vis = NameVisitor()
+    vis.visit(tree)
+    return vis.names
+
+
+@dataclass
+class CaptureStmt:
+    name: str
+    is_expr: bool
+    range_pair: Tuple[int, int]
+    expr_names: List[str]
+    replaced_name: str
+    replace_range_pairs: List[Tuple[int, int]]
+    arg_name: str
+
+    def __init__(self, name: str, is_expr: bool, range_pair: Tuple[int, int],
+                 replace_range_pairs: List[Tuple[int, int]]) -> None:
+        self.name = name
+        self.is_expr = is_expr
+        self.range_pair = range_pair
+        self.replace_range_pairs = replace_range_pairs
+        self.expr_names = []
+        if is_expr:
+            self.expr_names = extract_names_from_expr(name)
+        self.replaced_name = name
+        self.arg_name = name
+
+
+def get_save_file(path: Path):
+    pid = os.getpid()
+
+
+def _non_nested_compile(
+        tgt_name: str,
+        local_var_name: str,
+        obj_type: BaseType,
+        obj,
+        cap: CaptureStmt,
+        plugins: Dict[str, InlineBuilderPlugin],
+        user_arg: Optional[Any] = None) -> Tuple[str, List[str]]:
+    if cap.is_expr:
+        val_stmt = f"eval(\"{cap.name}\", {local_var_name})"
+    else:
+        val_stmt = f"{local_var_name}[\"{cap.name}\"]"
+    qualname = obj_type.qualname
+    if qualname in plugins:
+        plugin = plugins[qualname]
+        code_res = plugin.type_conversion_code(obj, val_stmt, tgt_name,
+                                               user_arg)
+        assert code_res is not None, "you must provide conversion code for custom type."
+        return code_res
+    if obj_type.is_std_type():
+        return f"{tgt_name} = {val_stmt}", []
+    if not qualname.startswith("std"):
+        # custom type
+        if qualname not in plugins:
+            msg = f"can't find {qualname} in plugins, available: {plugins.keys()}"
+            raise ValueError(msg)
+        plugin = plugins[qualname]
+        code_res = plugin.type_conversion_code(obj, val_stmt, tgt_name,
+                                               user_arg)
+        assert code_res is not None, "you must provide conversion code for custom type."
+        # if code is None:
+        #     return f"{tgt_name} = {val_stmt}"
+        return code_res
+    else:
+        raise NotImplementedError("don't support STL containers.")
+
+
+def _get_non_nested_conversion_func_code(stmts: List[str],
+                                         import_stmts: List[str],
+                                         func_name: str):
+    block = "\n".join(stmts)
+    # add indent to block
+    block = "\n".join([f"    {line}" for line in block.split("\n")])
+    stmt_list = ", ".join(f"{PCCM_INLINE_ARG_PREFIX}_{i}"
+                          for i in range(len(stmts)))
+    import_block = "\n".join(import_stmts)
+    return f"""
+{import_block}
+def {func_name}(local_vars):
+{block}
+    return [{stmt_list}]
+    """
+
+
+def _nested_apply_plugin_transform(obj_type: BaseType,
+                                   obj,
+                                   plugins: Dict[str, InlineBuilderPlugin],
+                                   user_arg: Optional[Any] = None):
+    qualname = obj_type.qualname
+    if qualname in plugins:
+        plugin = plugins[qualname]
+        return plugin.type_conversion(obj, user_arg)
+    if obj_type.is_std_type():
+        return obj
+    if not qualname.startswith("std"):
+        # custom type
+        if qualname not in plugins:
+            msg = f"can't find {qualname} in plugins, available: {plugins.keys()}"
+            raise ValueError(msg)
+        plugin = plugins[qualname]
+        return plugin.type_conversion(obj, user_arg)
+
+    elif qualname == "std::vector":
+        res = []
+        vt = obj_type.args[0].base_type
+        for o in obj:
+            o_res = _nested_apply_plugin_transform(vt, o, plugins, user_arg)
+            res.append(o_res)
+        return res
+    elif qualname == "std::unordered_map":
+        res = {}
+        kt = obj_type.args[0].base_type
+        vt = obj_type.args[1].base_type
+        assert kt.is_simple_type(), "only support simple type for key"
+        for (ok, ov) in obj.items():
+            res[ok] = _nested_apply_plugin_transform(vt, ov, plugins, user_arg)
+        return res
+    elif qualname == "std::unordered_set":
+        assert obj_type.is_std_type()
+        return obj
+    elif qualname == "std::tuple":
+        res = []
+        for o, ot in zip(obj, obj_type.args):
+            ott = ot.base_type
+            if ott.is_std_type():
+                res.append(o)
+            else:
+                res.append(
+                    _nested_apply_plugin_transform(ott, o, plugins, user_arg))
+        return tuple(res)
+    else:
+        raise NotImplementedError
+
+
+def _expr_str_to_identifier(name: str):
+    res = ""
+    A = ord("A")
+    Z = ord("Z")
+    a = ord("a")
+    z = ord("z")
+    _0 = ord("0")
+    _9 = ord("9")
+
+    for s in name:
+        c = ord(s)
+        if (c >= A and c <= Z) or (c >= a and c <= z) or (c >= _0 and c <= _9):
+            res += s
+        elif s != " ":
+            res += "_"
+    return res
+
+
+class NumpyPlugin(InlineBuilderPlugin):
+
+    def handle_captured_type(
+            self,
+            name: str,
+            code: FunctionCode,
+            obj: Any,
+            user_arg: Optional[Any] = None) -> Optional[Tuple[str, str]]:
+        return
+
+    def type_conversion(self, obj: Any, user_arg: Optional[Any] = None):
+        return obj
+
+    def get_cpp_type(self, obj: Any, user_arg: Optional[Any] = None) -> str:
+        return "pybind11::array"
+
+
+@dataclass
+class ModuleMetaData:
+    code: str
+    deps: List[str]
+
+
+_DEFAULT_PLUGINS: Dict[str, InlineBuilderPlugin] = {
+    "numpy.ndarray": NumpyPlugin(),
+}
+
+
+class PyBind11(pccm.Class):
+
+    def __init__(self):
+        super().__init__()
+        self.add_include("pybind11/stl.h")
+        self.add_include("pybind11/pybind11.h")
+        self.add_include("pybind11/numpy.h")
+
+
+@pccm.pybind.bind_class_module_local
+class InlineClass(Class):
+
+    def __init__(self):
+        super().__init__()
+        self.add_include("vector", "unordered_map", "unordered_set", "tuple",
+                         "string", "iostream", "fstream")
+        self.add_dependency(PyBind11)
+
+
+class _ModuleMeta:
+
+    def __init__(self,
+                 func: Any,
+                 captures: List[CaptureStmt],
+                 capture_ctypes: List[BaseType],
+                 inner_code: str,
+                 kernel_code: str,
+                 raw_code: str,
+                 compiled_conversion_func=None) -> None:
+        self.func = func
+        self.captures = captures
+        self.capture_ctypes = capture_ctypes
+        self.inner_code = inner_code
+        self.kernel_code = kernel_code
+        self.user_raw_code = raw_code
+
+        self._compiled_conversion_func = compiled_conversion_func
+
+
+class InlineBuilder:
+    """
+    inliner.inline(...)    
+    TODO improve the performance of capture analysis
+    Args:
+        deps: dependencies of the module
+        plugins: plugins for custom types
+        root: root path of the module
+        build_root: build root path
+        build_kwargs: kwargs for build
+        param_deps: parameterized dependencies
+        reload_when_code_change: whether to reload the module when code changes
+        reload_compare_use_raw: whether to use raw code to compare when reload.
+            if false, compare will happen after all captures are applied, which
+            is slow.
+    """
+
+    def __init__(self,
+                 deps: List[Type[Class]],
+                 plugins: Optional[Dict[str, InlineBuilderPlugin]] = None,
+                 root: Optional[Path] = None,
+                 build_root: Optional[Path] = None,
+                 build_kwargs: Optional[Dict[str, Any]] = None,
+                 param_deps: Optional[List[pccm.ParameterizedClass]] = None,
+                 reload_when_code_change: bool = False,
+                 reload_compare_use_raw: bool = True,
+                 show_diff_when_reload: bool = False) -> None:
+        self.deps = deps
+        if param_deps is None:
+            param_deps = []
+        self.param_deps = param_deps
+        if plugins is None:
+            self.plugins = _DEFAULT_PLUGINS
+        else:
+            self.plugins = plugins
+        if build_kwargs is None:
+            build_kwargs = {}
+        self.build_kwargs = build_kwargs
+        self.modules: Dict[Tuple[str, str, int], _ModuleMeta] = {}
+        # self.cached_captures: Dict[Tuple[str, str, int],
+        #                            List[CaptureStmt]] = {}
+        # self.cached_capture_ctypes: Dict[Tuple[str, str, int],
+        #                                  List[BaseType]] = {}
+        self._reload_compare_use_raw = reload_compare_use_raw
+
+        self.lock = threading.Lock()
+
+        self.dep_ids = [get_qualname_of_type(t) for t in self.deps]
+        self.dep_ids.sort()
+        self.used_names: Set[Tuple[str, str]] = set()
+        self.root = root
+        self.build_root = build_root
+        self._reload_when_code_change = reload_when_code_change
+        self.show_diff_when_reload = show_diff_when_reload
+
+    def _find_exist_module_name(self, code: str, code_hash: str, root: Path):
+        cur_dep_ids = self.dep_ids
+        for path in root.glob(f"_{code_hash}_*.json"):
+            with path.open("r") as f:
+                data = json.load(f)
+            meta = ModuleMetaData(data["code"], data["deps"])
+            if meta.code == code and meta.deps == cur_dep_ids:
+                return path.stem
+        return None
+
+    def get_save_root(self,
+                      path: Path,
+                      root: Optional[Path] = None,
+                      build_root: Optional[Path] = None):
+        if root is not None:
+            relative_parts = path.resolve().parent.relative_to(root)
+            import_parts = list(relative_parts.parts)
+        else:
+            import_parts = loader.try_capture_import_parts(path)
+        if import_parts is None:
+            raise NotImplementedError("you must use inline "
+                                      "in a standard python project with "
+                                      "pip installed.")
+        if build_root is not None:
+            res = build_root / "/".join(import_parts)
+        else:
+            res = PCCM_INLINE_LIBRARY_PATH / "/".join(import_parts)
+        return res
+
+    def handle_container_code(self, code_str: str, code: FunctionCode,
+                              arg: Optional[Any]):
+        code.raw(code_str)
+
+    def create_inner_decl(self, code_str: str, container_fcode: FunctionCode,
+                          inner_fcode: FunctionCode,
+                          arg: Optional[Any]) -> Optional[FunctionDecl]:
+
+        return None
+
+    def _get_inline_func_name_for_debug(self, name: str):
+        return PCCM_INLINE_FUNCTION_NAME_FORMAT.format(
+            re.sub('[^0-9a-zA-Z]', '_', name))
+
+    def _get_debug_name(self, name: str):
+        return re.sub('[^0-9a-zA-Z]', '_', name)
+
+    def build(self,
+              pccm_cls: pccm.Class,
+              mod_root: Path,
+              name: str,
+              timeout: float,
+              user_arg: Optional[Any] = None):
+        mod_root.mkdir(mode=0o755, parents=True, exist_ok=True)
+        out_lib_path = mod_root / name
+        build_dir = mod_root / name
+        # out_lib_meta_path = mod_root / f"{prev_mod_name}.json"
+        file_lock = mod_root / f"{name}.lock"
+        # -1 is invalid for portalocker
+        with portalocker.Lock(str(file_lock), timeout=timeout) as fh:
+            mod = build_pybind([pccm_cls],
+                               out_lib_path,
+                               build_dir=build_dir,
+                               **self.build_kwargs)
+
+        return getattr(
+            getattr(getattr(mod, PCCM_INLINE_NAMESPACE),
+                    PCCM_INLINE_CLASS_NAME),
+            self._get_inline_func_name_for_debug(name))
+
+    def run_func(self,
+                 name: str,
+                 func,
+                 *args,
+                 user_args: Optional[Any] = None):
+        return func(*args)
+
+    def get_base_class(self):
+        return InlineClass()
+
+    def inline(self,
+               name: str,
+               code: Union[str, FunctionCode, PreCaptureFunctionCode],
+               impl_file_suffix=".cc",
+               additional_vars: Optional[Dict[str, Any]] = None,
+               *,
+               _frame_cnt: int = 1,
+               user_arg: Optional[Any] = None,
+               timeout: float = 999999.0,
+               disable_cache: bool = False,
+               generate_non_nested_code: bool = False):
+        """use $var to capture python objects, use $(var.shape[0]) to capture anonymous expr.
+        use different to handle different arg types.
+        ~20-100us run overhead. 
+        only support: 
+        1. int/float/str and nested containers of int/float/str.
+        2. custom type via plugins
+
+        Args:
+            generate_non_nested_code: if True, we assume your inputs don't contains any nested 
+                STL container (e.g. inline cuda kernels), so we can compile conversion code
+                to make conversion faster.
+        """
+        if isinstance(code, FunctionCode):
+            code_str = code.inspect_body()
+        else:
+            code_str = code
+        pre_capture_map: Dict[str, Any] = {}
+        if isinstance(code, PreCaptureFunctionCode):
+            pre_capture_map = code._pre_capture_map
+        if additional_vars is None:
+            additional_vars = {}
+        cur_frame = inspect.currentframe()
+        if _frame_cnt == 2:
+            # common path optimization
+            local_vars = cur_frame.f_back.f_back.f_locals.copy()
+        else:
+            assert cur_frame is not None
+            frame = cur_frame
+            while _frame_cnt > 0:
+                frame = cur_frame.f_back
+                assert frame is not None
+                cur_frame = frame
+                _frame_cnt -= 1
+            del frame
+            local_vars = cur_frame.f_locals.copy()
+
+        local_vars.update(additional_vars)
+        code_path = cur_frame.f_code.co_filename
+        lineno = cur_frame.f_lineno
+        key = (code_path, name)
+        unique_key = (code_path, name, lineno)
+        if self._reload_when_code_change:
+            unique_key = (code_path, name, -1)
+        del cur_frame
+        with self.lock:
+            if not disable_cache and not self._reload_when_code_change:
+                exist = unique_key in self.modules
+                if key in self.used_names and not exist:
+                    raise ValueError("you use duplicate name in same file.",
+                                     unique_key)
+            else:
+                exist = False
+                if self._reload_when_code_change and self._reload_compare_use_raw:
+                    if unique_key in self.modules:
+                        data = self.modules[unique_key]
+                        exist = data.user_raw_code == code_str
+                        if not exist and self.show_diff_when_reload:
+                            print("---{name} reloaded---".format(name=name))
+                            print(
+                                name, "\n".join(
+                                    difflib.unified_diff(
+                                        data.user_raw_code.split("\n"),
+                                        code_str.split("\n"))))
+            if not exist:
+                # 1. extract captured vars
+                all_captures, all_identifiers = _get_captures_in_code(code_str)
+                # 2. find captures in prev frame
+                container_fcode = FunctionCode()
+                inner_fcode = FunctionCode()
+                # 3. inference c++ types
+                args = []
+                name_pool = UniqueNamePool()
+                replaces: List[Replace] = []
+                capture_bts: List[BaseType] = []
+
+                non_nested_stmts: List[str] = []
+                non_nested_import_stmts: List[str] = []
+                for cap_idx, cap in enumerate(all_captures):
+                    if cap.name in pre_capture_map:
+                        obj = pre_capture_map[cap.name]
+                    else:
+                        if not cap.is_expr:
+                            if cap.name not in local_vars:
+                                raise ValueError(
+                                    f"can't find your capture {cap.name} in prev frame."
+                                )
+                            obj = local_vars[cap.name]
+                            # arg_name = cap.name
+                        else:
+                            for cap_name in cap.expr_names:
+                                if cap_name not in local_vars:
+                                    raise ValueError(
+                                        f"can't find your capture {cap_name} in prev frame."
+                                    )
+                            # eval expr in prev frame
+                            obj = eval(cap.name, local_vars)
+                    # apply non-anonymous vars (expr are anonymous vars)
+                    try:
+                        cpp_type, mapped_cpp_type = nested_type_analysis(
+                            obj, self.plugins, user_arg=user_arg)
+                    except:
+                        print(
+                            f"ERROR: variable {cap.name} type analysis failed."
+                        )
+                        raise
+                    prev_obj = obj
+                    if generate_non_nested_code:
+                        non_nested_stmt, import_stmts = _non_nested_compile(
+                            f"{PCCM_INLINE_ARG_PREFIX}_{cap_idx}",
+                            "local_vars", cpp_type, obj, cap, self.plugins,
+                            user_arg)
+                        non_nested_stmts.append(non_nested_stmt)
+                        non_nested_import_stmts.extend(import_stmts)
+                    obj = _nested_apply_plugin_transform(
+                        cpp_type, obj, self.plugins, user_arg)
+                    if cap.is_expr:
+                        cap.replaced_name = name_pool(
+                            _expr_str_to_identifier(cap.replaced_name))
+                    arg_name = cap.replaced_name
+                    mapped_cpp_type_str = str(mapped_cpp_type)
+                    inner_cpp_type = str(mapped_cpp_type)
+                    is_need_prepared = False
+
+                    if not cap.is_expr:
+                        if not cpp_type.is_std_type():
+                            # custom type, must apply plugin
+                            qualname = cpp_type.qualname
+                            # here we only apply handle_captured_type on non-container custom type.
+                            if qualname in self.plugins:
+                                plugin = self.plugins[qualname]
+                                is_need_prepared = plugin.is_need_prepared(
+                                    obj, user_arg)
+                                res = plugin.handle_captured_type(
+                                    cap.name, container_fcode, obj, user_arg)
+                                if res is not None:
+                                    new_arg_name, inner_cpp_type = res
+                                    arg_name = new_arg_name
+                                if is_need_prepared:
+                                    # TODO random string maybe better?
+                                    new_arg_name = PCCM_INLINE_ARG_PREFIX + arg_name
+                                    plugin.prepare_argument(
+                                        container_fcode, new_arg_name,
+                                        arg_name, mapped_cpp_type_str,
+                                        prev_obj, user_arg)
+                                    arg_name = new_arg_name
+                    del prev_obj
+                    capture_bts.append(cpp_type)
+                    args.append(obj)
+                    cap.arg_name = arg_name
+
+                    container_fcode.arg(arg_name,
+                                        mapped_cpp_type_str,
+                                        array=mapped_cpp_type.count,
+                                        userdata=obj)
+                    inner_fcode.arg(cap.replaced_name,
+                                    inner_cpp_type,
+                                    userdata=obj)
+                    for rr in cap.replace_range_pairs:
+                        replace = Replace(cap.replaced_name, *rr)
+                        replaces.append(replace)
+                cnt_addi = len(non_nested_stmts)
+                for k, v in additional_vars.items():
+                    cpp_type, mapped_cpp_type = nested_type_analysis(
+                        v, self.plugins, user_arg=user_arg)
+                    if generate_non_nested_code:
+                        non_nested_stmt, import_stmts = _non_nested_compile(
+                            f"{PCCM_INLINE_ARG_PREFIX}_{cnt_addi}",
+                            "local_vars", cpp_type, v,
+                            CaptureStmt(k, False, (0, 0),
+                                        []), self.plugins, user_arg)
+                        non_nested_stmts.append(non_nested_stmt)
+                        non_nested_import_stmts.extend(import_stmts)
+                    v = _nested_apply_plugin_transform(
+                        cpp_type, v, self.plugins, user_arg)
+                    container_fcode.arg(k,
+                                        str(mapped_cpp_type),
+                                        array=mapped_cpp_type.count,
+                                        userdata=v)
+                    args.append(v)
+                    cnt_addi += 1
+                func_obj = None
+                if generate_non_nested_code:
+                    func_code = _get_non_nested_conversion_func_code(
+                        non_nested_stmts,
+                        _unique_list_keep_order(non_nested_import_stmts),
+                        PCCM_INLINE_FUNCTION_NAME)
+                    # print(func_code)
+                    func_code_obj = compile(func_code, "<string>", "exec")
+                    globals_container = {}
+                    exec(func_code_obj, globals_container)
+                    func_obj = globals_container[PCCM_INLINE_FUNCTION_NAME]
+
+                inner_code_str = execute_modifiers(code_str, replaces)
+
+                assert inner_code_str is not None
+                if self._reload_when_code_change and not self._reload_compare_use_raw:
+                    exist = unique_key in self.modules
+                    if exist:
+                        prev_inner_code = self.modules[unique_key].inner_code
+                        if prev_inner_code == inner_code_str:
+                            module_meta = self.modules[unique_key]
+                            func = module_meta.func
+                            all_captures = module_meta.captures
+                            all_base_types = module_meta.capture_ctypes
+                            args = []
+                            for cap, bt in zip(all_captures, all_base_types):
+                                if cap.name in pre_capture_map:
+                                    obj = pre_capture_map[cap.name]
+                                else:
+                                    if not cap.is_expr:
+                                        if cap.name not in local_vars:
+                                            raise ValueError(
+                                                f"can't find your capture {cap.name} in prev frame."
+                                            )
+                                        obj = local_vars[cap.name]
+                                    else:
+                                        for cap_name in cap.expr_names:
+                                            if cap_name not in local_vars:
+                                                raise ValueError(
+                                                    f"can't find your capture {cap_name} in prev frame."
+                                                )
+                                        # eval expr in prev frame
+                                        obj = eval(cap.name, local_vars)
+                                obj = _nested_apply_plugin_transform(
+                                    bt, obj, self.plugins, user_arg)
+                                args.append(obj)
+                            for v in additional_vars.values():
+                                args.append(v)
+                            return self.run_func(name,
+                                                 func,
+                                                 *args,
+                                                 user_args=user_arg)
+                if isinstance(code, FunctionCode):
+                    container_fcode.ret(code.return_type)
+                meta = self.handle_container_code(inner_code_str,
+                                                  container_fcode, user_arg)
+                inner_decl = self.create_inner_decl(inner_code_str,
+                                                    container_fcode,
+                                                    inner_fcode, user_arg)
+                all_arg_names = set([arg.name for arg in container_fcode.arguments])
+                if len(container_fcode.arguments) != len(all_arg_names):
+                    raise ValueError(f"you have duplicate arg names. {all_arg_names}, additional keys: {additional_vars.keys()}")
+                # validate additional vars
+                # now we have complete code. we need to determine a history build dir and use it to build library if need.
+                # here we must reserve build dir because we need to rebuild when dependency change.
+                if meta is None:
+                    meta = StaticMemberFunctionMeta(
+                        impl_file_suffix=impl_file_suffix)
+                    meta.mw_metas.append(Pybind11MethodMeta())
+                decl = FunctionDecl(meta, container_fcode)
+                decl.meta.name = self._get_inline_func_name_for_debug(name)
+                # container_fcode_str = decl.inspect_impl()
+                # container_fcode_hash = hashlib.sha256(code_str.encode('utf-8')).hexdigest()
+
+                pccm_class = self.get_base_class()
+                pccm_class.class_name = PCCM_INLINE_CLASS_NAME
+                pccm_class.add_func_decl(decl)
+
+                for dep in decl.code._impl_only_deps:
+                    pccm_class.add_impl_only_dependency_by_name(
+                        decl.meta.name, dep.get_class_type())
+                if isinstance(code, FunctionCode):
+                    for dep in code._impl_only_deps:
+                        pccm_class.add_impl_only_dependency_by_name(
+                            decl.meta.name, dep.get_class_type())
+                    for dep in code._impl_only_pdeps:
+                        dep_pcls, dep_subns = dep.get_param_class_and_ns()
+                        pccm_class.add_impl_only_param_class_by_name(
+                            decl.meta.name, dep_subns, dep_pcls, dep.alias)
+
+                if inner_decl is not None:
+                    inner_decl.meta.name = PCCM_INLINE_INNER_FUNCTION_NAME
+                    pccm_class.add_func_decl(inner_decl)
+                    for dep in inner_decl.code._impl_only_deps:
+                        pccm_class.add_impl_only_dependency_by_name(
+                            inner_decl.meta.name, dep.get_class_type())
+                    if isinstance(code, FunctionCode):
+                        for dep in code._impl_only_deps:
+                            pccm_class.add_impl_only_dependency_by_name(
+                                inner_decl.meta.name, dep.get_class_type())
+
+                pccm_class.add_dependency(*self.deps)
+                for pdep in self.param_deps:
+                    pdep_ns = pdep.namespace
+                    pdep_cls_name = pdep.get_user_provided_class_name()
+                    assert pdep_ns is not None, "you must provide a namespace for param dep"
+                    assert pdep_cls_name is not None, "you must provide a class_name for param dep"
+                    # use user-defined class name as alias
+                    pccm_class.add_param_class(pdep_cls_name, pdep,
+                                               pdep_cls_name)
+                pccm_class.namespace = PCCM_INLINE_NAMESPACE
+                mod_root = self.get_save_root(Path(code_path), self.root,
+                                              self.build_root)
+                func = self.build(pccm_class, mod_root, name, timeout,
+                                  user_arg)
+                if not disable_cache:
+                    code_for_inspect = "\n".join(
+                        pccm.core.generate_code(
+                            container_fcode.get_impl(
+                                self._get_inline_func_name_for_debug(name),
+                                meta), 0, 2))
+                    module_meta = _ModuleMeta(func, all_captures, capture_bts,
+                                              inner_code_str, code_for_inspect,
+                                              code_str, func_obj)
+                    self.modules[unique_key] = module_meta
+                    # self.cached_captures[unique_key] = all_captures
+                    # self.cached_capture_ctypes[unique_key] = capture_bts
+                    self.used_names.add(key)
+                    # breakpoint()
+                if module_meta._compiled_conversion_func is not None:
+                    args = module_meta._compiled_conversion_func(local_vars)
+                    return self.run_func(name, func, *args, user_args=user_arg)
+                else:
+                    return self.run_func(name, func, *args, user_args=user_arg)
+        # module already loaded. just run it after transform.
+        module_meta = self.modules[unique_key]
+        func = module_meta.func
+        t_total = 0
+        if module_meta._compiled_conversion_func is not None:
+            t_tr = time.time_ns()
+            args = module_meta._compiled_conversion_func(local_vars)
+            t_total = time.time_ns() - t_tr
+        else:
+            all_captures = module_meta.captures
+            all_base_types = module_meta.capture_ctypes
+            args = []
+            for cap, bt in zip(all_captures, all_base_types):
+                if cap.name in pre_capture_map:
+                    obj = pre_capture_map[cap.name]
+                else:
+                    if not cap.is_expr:
+                        if cap.name not in local_vars:
+                            raise ValueError(
+                                f"can't find your capture {cap.name} in prev frame."
+                            )
+                        obj = local_vars[cap.name]
+                    else:
+                        for cap_name in cap.expr_names:
+                            if cap_name not in local_vars:
+                                raise ValueError(
+                                    f"can't find your capture {cap_name} in prev frame."
+                                )
+                        # eval expr in prev frame
+                        obj = eval(cap.name, local_vars)
+                t_tr = time.time_ns()
+                obj = _nested_apply_plugin_transform(bt, obj, self.plugins,
+                                                     user_arg)
+                t_total += time.time_ns() - t_tr
+                args.append(obj)
+            for v in additional_vars.values():
+                args.append(v)
+        return self.run_func(name, func, *args, user_args=user_arg)
+
+    def search_codes_by_name(self, name: str):
+        res: List[str] = []
+        for k, v in self.modules.items():
+            if name == k[1]:
+                res.append(v.kernel_code)
+        return res
+
+def main():
+    print(_expr_str_to_identifier("a.shape[0] + 5"))
+    import ast
+
+    import numpy as np
+    tree = ast.parse("a.shape[0] + b + c")
+    # print(ast.dump(tree))
+    aa = np.array([1], dtype=np.float32)
+    a = [aa, aa]
+    # print(nested_type_analysis(aa.shape))
+    b = InlineBuilder([])
+    for i in range(10):
+
+        code = FunctionCode().raw(f"""
+        """)
+        t = time.time()
+        b.inline(
+            "just_a_name", f"""
+        // pybind::array
+        float* ptr = reinterpret_cast<float*>($a[0].mutable_data());
+        float* ptr2 = reinterpret_cast<float*>($a[1].mutable_data());
+
+        ptr[0] += 1;
+        ptr2[0] += 1;
+        """)
+        tt = time.time() - t
+        print(tt)
+        print(aa[0])
+
+
+if __name__ == "__main__":
+    main()

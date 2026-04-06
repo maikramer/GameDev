@@ -1,0 +1,33 @@
+Metadata-Version: 2.1
+Name: pccm
+Version: 0.4.16
+Summary: Python C++ Code Manager.
+Home-page: https://github.com/FindDefinition/PCCM
+Author: Yan Yan
+Author-email: yanyan.sub@outlook.com
+License: MIT
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: Implementation :: CPython
+Classifier: Programming Language :: Python :: Implementation :: PyPy
+Requires-Python: >=3.6
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: ccimport>=0.3.1
+Requires-Dist: pybind11>=2.6.0
+Requires-Dist: fire
+Requires-Dist: lark>=1.0.0
+Requires-Dist: portalocker>=2.3.2
+
+
+# PCCM
+Python C++ Code Manager
+
+[![Build Status](https://github.com/FindDefinition/PCCM/workflows/build/badge.svg)](https://github.com/FindDefinition/PCCM/actions?query=workflow%3Abuild)
+
+Only pccm 0.1.x support python 3.5, pccm >= 0.2.0 require python >= 3.6.
+
+## Docs
+
+see [introduction ppt](docs/PCCM_intro.pptx) or [pdf](docs/PCCM_intro.pdf)
