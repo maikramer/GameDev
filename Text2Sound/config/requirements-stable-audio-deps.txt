@@ -25,7 +25,7 @@ PyWavelets>=1.6.0
 safetensors
 # 0.1.99 não tem wheel cp313 (build falha)
 sentencepiece>=0.2.0
-torchmetrics==0.11.4
+torchmetrics==1.9.0
 tqdm
 transformers
 v-diffusion-pytorch==0.0.2
