@@ -5,3 +5,7 @@ crystal_blue,"glowing blue crystal floating above ground, magical gem collectibl
 stone_pillar,"ancient stone pillar with moss, RPG landmark, lowpoly style",environment,true,false,false,false,
 tree_lowpoly,lowpoly stylized tree with round green canopy on brown trunk,environment,true,false,false,false,
 collect_sfx,"magical crystal collect chime, short sparkle sound effect",prop,false,true,false,false,
+bgm_field,"Calm RPG exploration background music, orchestral strings and soft synth pads, bright fantasy adventure, peaceful green fields, loopable mood, light percussion, no heavy drums, cute lowpoly game",prop,false,true,false,false,
+sfx_jump,"short playful cartoon jump whoosh single impact game sfx",prop,false,true,false,false,
+sfx_save,"soft positive UI confirm chime gentle bell game menu save success",prop,false,true,false,false,
+sfx_load,"brief magical UI shimmer sparkle light fantasy game load restore",prop,false,true,false,false,
