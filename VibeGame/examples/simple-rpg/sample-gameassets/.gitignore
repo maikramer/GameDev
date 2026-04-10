@@ -1,1 +1,3 @@
 *.jsonl
+manifest_full.csv
+.gameassets_batch.lock
