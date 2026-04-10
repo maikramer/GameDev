@@ -20,6 +20,9 @@ text3d:
   preset: fast
   low_vram: false
   texture: true
+  # Origem no pé (Y=0 no chão, XZ centrado). Evita GLB com pivô ao centro no motor.
+  export_origin: feet
+  paint_preserve_origin: true
 rigging3d:
   output_suffix: _rigged
 audio_subdir: audio
