@@ -1,6 +1,117 @@
 {
-  "active_plan": "/media/maikeu/b1e73891-ddde-49a0-9382-903accb68b49/GitClones/GameDev/.sisyphus/plans/water-underwater-shader-interaction.md",
-  "started_at": "2026-04-06T00:00:00Z",
-  "session_ids": [],
-  "plan_name": "water-underwater-shader-interaction"
+  "active_plan": "/media/maikeu/b1e73891-ddde-49a0-9382-903accb68b49/GitClones/GameDev/.sisyphus/plans/vibegame-perf-quality.md",
+  "started_at": "2026-04-10T20:17:35Z",
+  "session_ids": [
+    "ses_287201db8ffe37dSWbOoej5a2r",
+    "ses_286a7d60fffebLDipp9SeEcASB",
+    "ses_286a78e28ffeqqg3759p3QmPhY",
+    "ses_28696099dffeaa3G2Cjga13D41",
+    "ses_286955e41ffec19cUvUqudzdE3",
+    "ses_286955e24ffeKjmafIea0YMyP2",
+    "ses_286955d8affenoMnzaKyw5yh9H"
+  ],
+  "plan_name": "vibegame-perf-quality",
+  "worktree_path": null,
+  "session_origins": {
+    "ses_287201db8ffe37dSWbOoej5a2r": "direct",
+    "ses_286a7d60fffebLDipp9SeEcASB": "appended",
+    "ses_286a78e28ffeqqg3759p3QmPhY": "appended",
+    "ses_28696099dffeaa3G2Cjga13D41": "appended",
+    "ses_286955e41ffec19cUvUqudzdE3": "appended",
+    "ses_286955e24ffeKjmafIea0YMyP2": "appended",
+    "ses_286955d8affenoMnzaKyw5yh9H": "appended"
+  },
+  "task_sessions": {
+    "todo:1": {
+      "task_key": "todo:1",
+      "task_label": "1",
+      "task_title": "Renderer Configuration — DPR Clamp + Remove MSAA + Anisotropy Fix",
+      "session_id": "ses_286f32740ffekRUuSha1OyzMWg",
+      "agent": "Sisyphus-Junior",
+      "category": "quick",
+      "updated_at": "2026-04-10T20:21:19.089Z"
+    },
+    "todo:2": {
+      "task_key": "todo:2",
+      "task_label": "2",
+      "task_title": "Eliminate Per-Frame Allocations — player/utils.ts",
+      "session_id": "ses_286f10680ffeR2X4MeuxWRGuhB",
+      "agent": "Sisyphus-Junior",
+      "category": "quick",
+      "updated_at": "2026-04-10T20:23:26.360Z"
+    },
+    "todo:5": {
+      "task_key": "todo:5",
+      "task_label": "5",
+      "task_title": "Free-List for Instance Slot Allocation",
+      "session_id": "ses_286eaaf70ffeGSR8ys1NaYBAkf",
+      "agent": "Sisyphus-Junior",
+      "category": "quick",
+      "updated_at": "2026-04-10T20:30:46.878Z"
+    },
+    "todo:9": {
+      "task_key": "todo:9",
+      "task_label": "9",
+      "task_title": "CSM (Cascaded Shadow Maps) Integration",
+      "session_id": "ses_286e3b235ffenuEG58NJ3oMh2D",
+      "agent": "Sisyphus-Junior",
+      "category": "unspecified-high",
+      "updated_at": "2026-04-10T20:46:00.018Z"
+    },
+    "todo:10": {
+      "task_key": "todo:10",
+      "task_label": "10",
+      "task_title": "SSR (Screen-Space Reflections) Effect Registration",
+      "session_id": "ses_286d6cb12ffeZVbP0k0vNhpFTE",
+      "agent": "Sisyphus-Junior",
+      "category": "unspecified-high",
+      "updated_at": "2026-04-10T21:08:10.744Z"
+    },
+    "todo:12": {
+      "task_key": "todo:12",
+      "task_label": "12",
+      "task_title": "Replace Water Planar Reflection with SSR",
+      "session_id": "ses_286c1a504ffeKigXkPbvbixzWI",
+      "agent": "Sisyphus-Junior",
+      "category": "unspecified-high",
+      "updated_at": "2026-04-10T21:16:40.603Z"
+    },
+    "todo:13": {
+      "task_key": "todo:13",
+      "task_label": "13",
+      "task_title": "PointLight + SpotLight ECS Components",
+      "session_id": "ses_286b98ac9ffeVZ2Ejr0mequ3eR",
+      "agent": "Sisyphus-Junior",
+      "category": "unspecified-high",
+      "updated_at": "2026-04-10T21:28:13.060Z"
+    },
+    "todo:15": {
+      "task_key": "todo:15",
+      "task_label": "15",
+      "task_title": "PointLight/SpotLight XML Recipes",
+      "session_id": "ses_286a4ca01ffeynpWBYyhqh2EO4",
+      "agent": "Sisyphus-Junior",
+      "category": "quick",
+      "updated_at": "2026-04-10T21:47:51.690Z"
+    },
+    "todo:19": {
+      "task_key": "todo:19",
+      "task_label": "19",
+      "task_title": "KTX2 in texture-recipe-system + Anisotropy Coordination",
+      "session_id": "ses_2869a1fb9ffe6QrOfvO76oHYKU",
+      "agent": "Sisyphus-Junior",
+      "category": "quick",
+      "updated_at": "2026-04-10T21:59:44.710Z"
+    },
+    "final-wave:f1": {
+      "task_key": "final-wave:f1",
+      "task_label": "F1",
+      "task_title": "**Plan Compliance Audit** — `oracle`",
+      "session_id": "ses_286955d8affenoMnzaKyw5yh9H",
+      "agent": "Sisyphus-Junior",
+      "category": "deep",
+      "updated_at": "2026-04-10T22:08:14.625Z"
+    }
+  },
+  "agent": "atlas"
 }
