@@ -1,116 +1,129 @@
 {
-  "active_plan": "/media/maikeu/b1e73891-ddde-49a0-9382-903accb68b49/GitClones/GameDev/.sisyphus/plans/vibegame-perf-quality.md",
-  "started_at": "2026-04-10T20:17:35Z",
+  "active_plan": "/media/maikeu/b1e73891-ddde-49a0-9382-903accb68b49/GitClones/GameDev/.sisyphus/plans/terrain-gen.md",
+  "started_at": "2026-04-12T02:13:38Z",
   "session_ids": [
-    "ses_287201db8ffe37dSWbOoej5a2r",
-    "ses_286a7d60fffebLDipp9SeEcASB",
-    "ses_286a78e28ffeqqg3759p3QmPhY",
-    "ses_28696099dffeaa3G2Cjga13D41",
-    "ses_286955e41ffec19cUvUqudzdE3",
-    "ses_286955e24ffeKjmafIea0YMyP2",
-    "ses_286955d8affenoMnzaKyw5yh9H"
+    "ses_280b99d65ffeUkvOvD1s6gkDSr",
+    "ses_27ff093e0ffe893rNzGRDybbEm",
+    "ses_27ff01115ffejBMMT3MTCSdVBv",
+    "ses_27ff0105affeKeWGndUemIP7pu",
+    "ses_27fef9d48ffeiRG7OizyuxKKvS"
   ],
-  "plan_name": "vibegame-perf-quality",
+  "plan_name": "terrain-gen",
   "worktree_path": null,
   "session_origins": {
-    "ses_287201db8ffe37dSWbOoej5a2r": "direct",
-    "ses_286a7d60fffebLDipp9SeEcASB": "appended",
-    "ses_286a78e28ffeqqg3759p3QmPhY": "appended",
-    "ses_28696099dffeaa3G2Cjga13D41": "appended",
-    "ses_286955e41ffec19cUvUqudzdE3": "appended",
-    "ses_286955e24ffeKjmafIea0YMyP2": "appended",
-    "ses_286955d8affenoMnzaKyw5yh9H": "appended"
+    "ses_280b99d65ffeUkvOvD1s6gkDSr": "direct",
+    "ses_27ff093e0ffe893rNzGRDybbEm": "appended",
+    "ses_27ff01115ffejBMMT3MTCSdVBv": "appended",
+    "ses_27ff0105affeKeWGndUemIP7pu": "appended",
+    "ses_27fef9d48ffeiRG7OizyuxKKvS": "appended"
   },
   "task_sessions": {
     "todo:1": {
       "task_key": "todo:1",
       "task_label": "1",
-      "task_title": "Renderer Configuration — DPR Clamp + Remove MSAA + Anisotropy Fix",
-      "session_id": "ses_286f32740ffekRUuSha1OyzMWg",
+      "task_title": "TerrainGen package scaffold + monorepo registration",
+      "session_id": "ses_280865c59ffeJGN544Fb5vlKcB",
       "agent": "Sisyphus-Junior",
       "category": "quick",
-      "updated_at": "2026-04-10T20:21:19.089Z"
+      "updated_at": "2026-04-12T02:20:25.406Z"
     },
     "todo:2": {
       "task_key": "todo:2",
       "task_label": "2",
-      "task_title": "Eliminate Per-Frame Allocations — player/utils.ts",
-      "session_id": "ses_286f10680ffeR2X4MeuxWRGuhB",
+      "task_title": "Diamond-square heightmap generation (landscape port)",
+      "session_id": "ses_2807e6e57ffeiAjeODlcoUBeIA",
       "agent": "Sisyphus-Junior",
       "category": "quick",
-      "updated_at": "2026-04-10T20:23:26.360Z"
+      "updated_at": "2026-04-12T02:28:46.199Z"
     },
-    "todo:5": {
-      "task_key": "todo:5",
-      "task_label": "5",
-      "task_title": "Free-List for Instance Slot Allocation",
-      "session_id": "ses_286eaaf70ffeGSR8ys1NaYBAkf",
-      "agent": "Sisyphus-Junior",
-      "category": "quick",
-      "updated_at": "2026-04-10T20:30:46.878Z"
-    },
-    "todo:9": {
-      "task_key": "todo:9",
-      "task_label": "9",
-      "task_title": "CSM (Cascaded Shadow Maps) Integration",
-      "session_id": "ses_286e3b235ffenuEG58NJ3oMh2D",
+    "todo:4": {
+      "task_key": "todo:4",
+      "task_label": "4",
+      "task_title": "Particle-based hydraulic erosion",
+      "session_id": "ses_28074ecffffeq0sSCgjGaNwxF5",
       "agent": "Sisyphus-Junior",
       "category": "unspecified-high",
-      "updated_at": "2026-04-10T20:46:00.018Z"
+      "updated_at": "2026-04-12T02:45:11.860Z"
+    },
+    "todo:7": {
+      "task_key": "todo:7",
+      "task_label": "7",
+      "task_title": "Pipeline orchestration",
+      "session_id": "ses_28055889effel2qB51y4bbpWda",
+      "agent": "Sisyphus-Junior",
+      "category": "unspecified-high",
+      "updated_at": "2026-04-12T03:17:44.851Z"
+    },
+    "todo:8": {
+      "task_key": "todo:8",
+      "task_label": "8",
+      "task_title": "Heightmap PNG export",
+      "session_id": "ses_2804a44a9ffeUFOLwljQt1NDIi",
+      "agent": "Sisyphus-Junior",
+      "category": "unspecified-high",
+      "updated_at": "2026-04-12T03:28:52.060Z"
     },
     "todo:10": {
       "task_key": "todo:10",
       "task_label": "10",
-      "task_title": "SSR (Screen-Space Reflections) Effect Registration",
-      "session_id": "ses_286d6cb12ffeZVbP0k0vNhpFTE",
+      "task_title": "CLI generate command",
+      "session_id": "ses_280412ab3ffedfP0pd7KeMAUl6",
       "agent": "Sisyphus-Junior",
       "category": "unspecified-high",
-      "updated_at": "2026-04-10T21:08:10.744Z"
+      "updated_at": "2026-04-12T03:47:14.339Z"
     },
-    "todo:12": {
-      "task_key": "todo:12",
-      "task_label": "12",
-      "task_title": "Replace Water Planar Reflection with SSR",
-      "session_id": "ses_286c1a504ffeKigXkPbvbixzWI",
+    "todo:11": {
+      "task_key": "todo:11",
+      "task_label": "11",
+      "task_title": "Dream pipeline terrain stage",
+      "session_id": "ses_28030dd62ffeNodoFCIkCZG48N",
       "agent": "Sisyphus-Junior",
-      "category": "unspecified-high",
-      "updated_at": "2026-04-10T21:16:40.603Z"
+      "category": "deep",
+      "updated_at": "2026-04-12T04:00:52.759Z"
     },
     "todo:13": {
       "task_key": "todo:13",
       "task_label": "13",
-      "task_title": "PointLight + SpotLight ECS Components",
-      "session_id": "ses_286b98ac9ffeVZ2Ejr0mequ3eR",
+      "task_title": "Multi-plane lake renderer",
+      "session_id": "ses_280251a46ffeAxVonlnmpigHyk",
       "agent": "Sisyphus-Junior",
-      "category": "unspecified-high",
-      "updated_at": "2026-04-10T21:28:13.060Z"
+      "category": "visual-engineering",
+      "updated_at": "2026-04-12T04:07:54.438Z"
     },
     "todo:15": {
       "task_key": "todo:15",
       "task_label": "15",
-      "task_title": "PointLight/SpotLight XML Recipes",
-      "session_id": "ses_286a4ca01ffeynpWBYyhqh2EO4",
+      "task_title": "Dream pipeline: emitter + runner terrain integration",
+      "session_id": "ses_2801c8098ffeMQvkn7k6FK5z82",
+      "agent": "Sisyphus-Junior",
+      "category": "deep",
+      "updated_at": "2026-04-12T04:19:21.340Z"
+    },
+    "todo:16": {
+      "task_key": "todo:16",
+      "task_label": "16",
+      "task_title": "Dream pipeline: CLI flags + TERRAINGEN_BIN integration",
+      "session_id": "ses_28014681dffeTQY4VkX5F7f1NV",
       "agent": "Sisyphus-Junior",
       "category": "quick",
-      "updated_at": "2026-04-10T21:47:51.690Z"
+      "updated_at": "2026-04-12T04:25:05.436Z"
     },
     "todo:19": {
       "task_key": "todo:19",
       "task_label": "19",
-      "task_title": "KTX2 in texture-recipe-system + Anisotropy Coordination",
-      "session_id": "ses_2869a1fb9ffe6QrOfvO76oHYKU",
+      "task_title": "End-to-end integration demo",
+      "session_id": "ses_2800dfe1effe5G1Ww3i4yLuwrb",
       "agent": "Sisyphus-Junior",
-      "category": "quick",
-      "updated_at": "2026-04-10T21:59:44.710Z"
+      "category": "deep",
+      "updated_at": "2026-04-12T04:57:40.770Z"
     },
     "final-wave:f1": {
       "task_key": "final-wave:f1",
       "task_label": "F1",
       "task_title": "**Plan Compliance Audit** — `oracle`",
-      "session_id": "ses_286955d8affenoMnzaKyw5yh9H",
-      "agent": "Sisyphus-Junior",
-      "category": "deep",
-      "updated_at": "2026-04-10T22:08:14.625Z"
+      "session_id": "ses_27ff093e0ffe893rNzGRDybbEm",
+      "agent": "oracle",
+      "updated_at": "2026-04-12T05:14:47.898Z"
     }
   },
   "agent": "atlas"
