@@ -11,7 +11,7 @@ authors = [{ name = "Text2Sound Project" }]
 requires-python = ">=3.10"
 license = "MIT"
 dependencies = [
-    "torch>=2.1.0",
+    "torch>=2.11.0",
     "torchaudio>=0.16.0",
     "einops>=0.7.0",
     "soundfile>=0.12.0",
