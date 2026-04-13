@@ -32,5 +32,5 @@ v-diffusion-pytorch==0.0.2
 vector-quantize-pytorch==1.14.41
 # 0.15.4 puxa pathtools (setup usa imp, removido no Py3.13)
 wandb>=0.16.0
-webdataset==0.2.100
+webdataset==1.0.2
 x-transformers<1.27.0
