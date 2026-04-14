@@ -2,7 +2,7 @@
 # Regenera música + SFX extra do simple-rpg (Text2Sound, perfil music — Open 1.0).
 # Uso: na raiz do monorepo, com Text2Sound/.venv activo e HF_TOKEN se necessário.
 set -euo pipefail
-ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$ROOT/public/assets/audio"
 T2S_ROOT="$(cd "$ROOT/../../../Text2Sound" && pwd)"
 # shellcheck source=/dev/null

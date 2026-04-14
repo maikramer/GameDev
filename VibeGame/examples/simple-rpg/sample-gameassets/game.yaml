@@ -2,7 +2,8 @@ title: Simple RPG Demo
 genre: 3D exploration RPG
 tone: bright lowpoly adventure on a green field
 style_preset: lowpoly
-output_dir: .
+# Batch escreve em ../public/assets/{images,meshes,audio}; esta pasta fica só com YAML/CSV/scripts.
+output_dir: ../public/assets
 path_layout: split
 images_subdir: images
 meshes_subdir: meshes

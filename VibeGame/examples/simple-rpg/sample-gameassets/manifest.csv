@@ -1,5 +1,5 @@
 id,idea,kind,generate_3d,generate_audio,generate_rig,generate_parts,image_source
-hero,"small chibi RPG hero character, full body, neutral pose, bright colors, lowpoly style",character,true,false,true,false,
+hero,"small RPG hero character, full body, normal humanoid proportions with long legs and arms, standing upright facing camera with arms relaxed at sides, bright colors, lowpoly style",character,true,false,true,false,
 wooden_crate,"wooden crate with iron bands, game prop, lowpoly style",prop,true,false,false,false,
 crystal_blue,"glowing blue crystal floating above ground, magical gem collectible, lowpoly style",prop,true,false,false,false,
 stone_pillar,"ancient stone pillar with moss, RPG landmark, lowpoly style",environment,true,false,false,false,

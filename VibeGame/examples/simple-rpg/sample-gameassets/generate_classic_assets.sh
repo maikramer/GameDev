@@ -40,7 +40,7 @@ fi
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 gameassets batch "${BATCH_FLAGS[@]}"
 
-MESHW="meshes/stone_well.glb"
+MESHW="../public/assets/meshes/stone_well.glb"
 if [[ ! -f "$MESHW" && "${SKIP_STONE_RETRY:-0}" != "1" && -f "$STONE_ONLY" ]]; then
   echo "==> Retentar só stone_well (manifest $STONE_ONLY)"
   gameassets batch --profile game.yaml --manifest "$STONE_ONLY" --with-3d --skip-audio --skip-text2d --skip-batch-lock
