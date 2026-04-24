@@ -30,7 +30,7 @@ animator3d:
   preset: humanoid
 audio_subdir: audio
 text2sound:
-  duration: 10
+  duration: 3
   steps: 100
   cfg_scale: 4.5
   audio_format: wav
