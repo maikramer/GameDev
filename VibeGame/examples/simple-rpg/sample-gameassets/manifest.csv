@@ -1,11 +1,26 @@
-id,idea,kind,generate_3d,generate_audio,generate_rig,generate_parts,image_source
-hero,"small RPG hero character, full body, normal humanoid proportions with long legs and arms, standing upright facing camera with arms relaxed at sides, bright colors, lowpoly style",character,true,false,true,false,
-wooden_crate,"wooden crate with iron bands, game prop, lowpoly style",prop,true,false,false,false,
-crystal_blue,"glowing blue crystal floating above ground, magical gem collectible, lowpoly style",prop,true,false,false,false,
-stone_pillar,"ancient stone pillar with moss, RPG landmark, lowpoly style",environment,true,false,false,false,
-tree_lowpoly,lowpoly stylized tree with round green canopy on brown trunk,environment,true,false,false,false,
-collect_sfx,"magical crystal collect chime, short sparkle sound effect",prop,false,true,false,false,
-bgm_field,"Calm RPG exploration background music, orchestral strings and soft synth pads, bright fantasy adventure, peaceful green fields, loopable mood, light percussion, no heavy drums, cute lowpoly game",prop,false,true,false,false,
-sfx_jump,"short playful cartoon jump whoosh single impact game sfx",prop,false,true,false,false,
-sfx_save,"soft positive UI confirm chime gentle bell game menu save success",prop,false,true,false,false,
-sfx_load,"brief magical UI shimmer sparkle light fantasy game load restore",prop,false,true,false,false,
+id,idea,kind,generate_3d,generate_audio,generate_rig,generate_parts,image_source,category
+hero,"cute cartoon RPG hero knight in bright blue armor with yellow cape, round helmet visor, friendly determined expression, small adventurer proportions, standing upright with arms at sides",character,true,false,true,false,,humanoid
+npc_merchant,"friendly cartoon merchant NPC wearing brown apron over green tunic, round belly, warm smile, short chubby proportions, fantasy shopkeeper",character,true,false,true,false,,humanoid
+goblin,"small green cartoon goblin with big pointy ears, mischievous grin, wearing ragged purple vest, hunched posture, fantasy enemy creature",character,true,false,true,false,,creature
+slime,"cute round blue cartoon slime monster with big expressive eyes, happy bubbly shape, translucent jelly body, small sparkle highlights",character,true,false,true,false,,creature
+sword_hero,"cartoon fantasy broadsword with golden crossguard and blue gem pommel, bright steel blade, hero weapon, clean simple design",prop,true,false,false,false,,weapon
+shield_wooden,"round cartoon wooden shield with iron rim and painted star emblem, fantasy buckler, warm wood tones",prop,true,false,false,false,,weapon
+treasure_chest,"cartoon fantasy treasure chest with golden metal bands and big brass lock, arched lid, warm brown wood, RPG loot container",prop,true,false,false,false,,chest
+potion_health,"cute round cartoon health potion bottle with red glowing liquid, cork stopper, heart symbol on glass, fantasy healing item",prop,true,false,false,false,,food
+potion_mana,"cute round cartoon mana potion bottle with blue glowing liquid, cork stopper, star symbol on glass, fantasy magic item",prop,true,false,false,false,,food
+crystal_blue,"glowing blue cartoon crystal cluster floating above small rock base, magical gem collectible, bright luminescent facets, fantasy loot",prop,true,false,false,false,,mineral
+tree_oak,"cartoon oak tree with big round puffy green canopy on thick brown trunk, stylized fantasy forest tree, bright cheerful foliage",environment,true,false,false,false,,tree
+tree_pine,"tall cartoon pine tree with layered triangle foliage in rich green, narrow brown trunk, stylized Christmas tree shape, fantasy forest",environment,true,false,false,false,,tree
+rock_mossy,"round cartoon mossy boulder with bright green moss patches and small mushrooms growing on top, fantasy terrain rock",prop,true,false,false,false,,rock
+mushroom_red,"big cartoon red mushroom with white polka dots on cap, thick white stalk, fantasy forest mushroom, whimsical look",prop,true,false,false,false,,vegetation
+stone_pillar,"ancient cartoon stone pillar with cracked surface and glowing rune carvings, overgrown with small vines, fantasy landmark monument",environment,true,false,false,false,,building
+bgm_field,"calm cheerful cartoon RPG exploration background music, bouncy orchestral strings and playful flute melody, bright fantasy adventure, happy green fields, loopable, light percussion, cute whimsical game",prop,false,true,false,false,
+sfx_collect,"magical crystal collect sparkle chime, bright ascending notes, short cheerful jingle, cartoon game pickup",prop,false,true,false,false,
+sfx_jump,"short bouncy cartoon jump boing whoosh, playful spring sound, game character leap",prop,false,true,false,false,
+sfx_save,"soft positive save confirm chime, gentle bell ding success, warm UI feedback",prop,false,true,false,false,
+sfx_load,"brief magical shimmer sparkle, fantasy game load restore, soft ascending tones",prop,false,true,false,false,
+sfx_potion,"bubbly cartoon potion drinking glug, magical liquid swallowing, cheerful healing sound",prop,false,true,false,false,
+sfx_chest_open,"old wooden chest creaking open followed by magical treasure reveal shimmer, fantasy loot discovery",prop,false,true,false,false,
+sfx_sword_swing,"quick cartoon sword swoosh swing, bright metallic whoosh, playful combat slash",prop,false,true,false,false,
+sfx_coin,"bright golden coin pickup jingle, cheerful monetary reward, short shiny ding",prop,false,true,false,false,
+sfx_step,"soft cartoon grass footstep, light outdoor terrain walk, single gentle crunch",prop,false,true,false,false,

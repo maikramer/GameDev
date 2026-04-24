@@ -1,8 +1,7 @@
 title: Simple RPG Demo
-genre: 3D exploration RPG
-tone: bright lowpoly adventure on a green field
-style_preset: lowpoly
-# Batch escreve em ../public/assets/{images,meshes,audio}; esta pasta fica só com YAML/CSV/scripts.
+genre: cartoon fantasy RPG
+tone: bright cheerful adventure, vibrant colors, playful cartoon world
+style_preset: cartoon_fantasy
 output_dir: ../public/assets
 path_layout: split
 images_subdir: images
@@ -11,21 +10,24 @@ image_ext: png
 seed_base: 42
 negative_keywords:
   - gore
-  - dark
   - realistic
+  - photorealistic
+  - dark gritty
+  - scary
 text2d:
   low_vram: true
   width: 768
   height: 768
 text3d:
-  preset: fast
+  preset: balanced
   low_vram: false
   texture: true
-  # Origem no pé (Y=0 no chão, XZ centrado). Evita GLB com pivô ao centro no motor.
   export_origin: feet
   paint_preserve_origin: true
 rigging3d:
   output_suffix: _rigged
+animator3d:
+  preset: humanoid
 audio_subdir: audio
 text2sound:
   duration: 10
