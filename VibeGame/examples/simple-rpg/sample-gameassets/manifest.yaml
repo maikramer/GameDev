@@ -1,0 +1,192 @@
+# manifest.yaml — Simple RPG Demo assets
+# pipeline: [3d, audio, rig, animate, parts]
+
+assets:
+  # --- Characters ---
+
+  - id: hero
+    idea: "cute cartoon RPG hero knight in bright blue armor with yellow cape, round helmet visor, friendly determined expression, small adventurer proportions, standing upright with arms at sides"
+    kind: character
+    category: humanoid
+    pipeline: [3d, rig, animate]
+
+  - id: npc_merchant
+    idea: "friendly cartoon merchant NPC wearing brown apron over green tunic, round belly, warm smile, short chubby proportions, fantasy shopkeeper"
+    kind: character
+    category: humanoid
+    pipeline: [3d, rig, animate]
+
+  - id: goblin
+    idea: "small green cartoon goblin with big pointy ears, mischievous grin, wearing ragged purple vest, hunched posture, fantasy enemy creature"
+    kind: character
+    category: creature
+    pipeline: [3d, rig, animate]
+
+  - id: slime
+    idea: "cute round blue cartoon slime monster with big expressive eyes, happy bubbly shape, translucent jelly body, small sparkle highlights"
+    kind: character
+    category: creature
+    pipeline: [3d, rig, animate]
+
+  # --- Weapons & Equipment ---
+
+  - id: sword_hero
+    idea: "cartoon fantasy broadsword with golden crossguard and blue gem pommel, bright steel blade, hero weapon, clean simple design"
+    kind: prop
+    category: weapon
+    pipeline: [3d]
+
+  - id: shield_wooden
+    idea: "round cartoon wooden shield with iron rim and painted star emblem, fantasy buckler, warm wood tones"
+    kind: prop
+    category: weapon
+    pipeline: [3d]
+
+  # --- Props ---
+
+  - id: treasure_chest
+    idea: "cartoon fantasy treasure chest with golden metal bands and big brass lock, arched lid, warm brown wood, RPG loot container"
+    kind: prop
+    category: chest
+    pipeline: [3d]
+
+  - id: potion_health
+    idea: "cute round cartoon health potion bottle with red glowing liquid, cork stopper, heart symbol on glass, fantasy healing item"
+    kind: prop
+    category: food
+    pipeline: [3d]
+
+  - id: potion_mana
+    idea: "cute round cartoon mana potion bottle with blue glowing liquid, cork stopper, star symbol on glass, fantasy magic item"
+    kind: prop
+    category: food
+    pipeline: [3d]
+
+  - id: crystal_blue
+    idea: "glowing blue cartoon crystal cluster floating above small rock base, magical gem collectible, bright luminescent facets, fantasy loot"
+    kind: prop
+    category: mineral
+    pipeline: [3d]
+
+  - id: rock_mossy
+    idea: "round cartoon mossy boulder with bright green moss patches and small mushrooms growing on top, fantasy terrain rock"
+    kind: prop
+    category: rock
+    pipeline: [3d]
+
+  - id: mushroom_red
+    idea: "big cartoon red mushroom with white polka dots on cap, thick white stalk, fantasy forest mushroom, whimsical look"
+    kind: prop
+    category: vegetation
+    pipeline: [3d]
+
+  # --- Environment ---
+
+  - id: tree_oak
+    idea: "cartoon oak tree with big round puffy green canopy on thick brown trunk, stylized fantasy forest tree, bright cheerful foliage"
+    kind: environment
+    category: tree
+    pipeline: [3d]
+
+  - id: tree_pine
+    idea: "tall cartoon pine tree with layered triangle foliage in rich green, narrow brown trunk, stylized Christmas tree shape, fantasy forest"
+    kind: environment
+    category: tree
+    pipeline: [3d]
+
+  - id: stone_pillar
+    idea: "ancient cartoon stone pillar with cracked surface and glowing rune carvings, overgrown with small vines, fantasy landmark monument"
+    kind: environment
+    category: building
+    pipeline: [3d]
+
+  # --- Audio ---
+
+  - id: bgm_field
+    idea: "calm cheerful cartoon RPG exploration background music, bouncy orchestral strings and playful flute melody, bright fantasy adventure, happy green fields, loopable, light percussion, cute whimsical game"
+    kind: prop
+    pipeline: [audio]
+    audio:
+      duration: 40
+      profile: music
+
+  - id: sfx_collect
+    idea: "magical crystal collect sparkle chime, bright ascending notes, short cheerful jingle, cartoon game pickup"
+    kind: prop
+    pipeline: [audio]
+    audio:
+      duration: 2
+      profile: effects
+      trim: true
+
+  - id: sfx_jump
+    idea: "short bouncy cartoon jump boing whoosh, playful spring sound, game character leap"
+    kind: prop
+    pipeline: [audio]
+    audio:
+      duration: 2
+      profile: effects
+      trim: true
+
+  - id: sfx_save
+    idea: "soft positive save confirm chime, gentle bell ding success, warm UI feedback"
+    kind: prop
+    pipeline: [audio]
+    audio:
+      duration: 2
+      profile: effects
+      trim: true
+
+  - id: sfx_load
+    idea: "brief magical shimmer sparkle, fantasy game load restore, soft ascending tones"
+    kind: prop
+    pipeline: [audio]
+    audio:
+      duration: 2
+      profile: effects
+      trim: true
+
+  - id: sfx_potion
+    idea: "bubbly cartoon potion drinking glug, magical liquid swallowing, cheerful healing sound"
+    kind: prop
+    pipeline: [audio]
+    audio:
+      duration: 2
+      profile: effects
+      trim: true
+
+  - id: sfx_chest_open
+    idea: "old wooden chest creaking open followed by magical treasure reveal shimmer, fantasy loot discovery"
+    kind: prop
+    pipeline: [audio]
+    audio:
+      duration: 3
+      profile: effects
+      trim: true
+
+  - id: sfx_sword_swing
+    idea: "quick cartoon sword swoosh swing, bright metallic whoosh, playful combat slash"
+    kind: prop
+    pipeline: [audio]
+    audio:
+      duration: 2
+      profile: effects
+      trim: true
+
+  - id: sfx_coin
+    idea: "bright golden coin pickup jingle, cheerful monetary reward, short shiny ding"
+    kind: prop
+    pipeline: [audio]
+    audio:
+      duration: 2
+      profile: effects
+      trim: true
+
+  - id: sfx_step
+    idea: "soft cartoon grass footstep, light outdoor terrain walk, single gentle crunch"
+    kind: prop
+    pipeline: [audio]
+    audio:
+      duration: 1
+      profile: effects
+      trim: true
