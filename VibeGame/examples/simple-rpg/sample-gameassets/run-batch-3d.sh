@@ -1,0 +1,12 @@
+#!/bin/bash
+set -e
+source /home/maikeu/GitClones/GameDev/GameAssets/.venv/bin/activate
+gameassets batch \
+  --profile game.yaml \
+  --manifest manifest.csv \
+  --presets-local presets-local.yaml \
+  --skip-text2d \
+  --skip-audio \
+  --skip-gpu-preflight \
+  --log batch-log-3d.jsonl \
+  "$@"
