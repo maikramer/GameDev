@@ -1,0 +1,10 @@
+assets:
+- category: creature
+  id: goblin
+  idea: small green cartoon goblin with big pointy ears, mischievous grin, wearing
+    ragged purple vest, hunched posture, fantasy enemy creature
+  kind: character
+  pipeline:
+  - 3d
+  - rig
+  - animate
