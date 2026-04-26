@@ -1,0 +1,27 @@
+title: Fast test
+genre: cartoon fantasy RPG
+tone: bright cheerful adventure
+style_preset: cartoon_fantasy
+output_dir: ../public/assets
+path_layout: split
+images_subdir: images
+meshes_subdir: meshes
+image_ext: png
+seed_base: 42
+negative_keywords:
+  - gore
+  - realistic
+text2d:
+  low_vram: true
+  width: 512
+  height: 512
+text3d:
+  preset: fast
+  low_vram: false
+  export_origin: feet
+paint3d:
+  preserve_origin: true
+  max_views: 2
+  view_resolution: 512
+  render_size: 512
+  texture_size: 512

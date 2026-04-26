@@ -5,7 +5,6 @@ gameassets batch \
   --profile game.yaml \
   --manifest manifest \
   --presets-local presets-local.yaml \
-  --skip-text2d \
   --skip-audio \
   --skip-gpu-preflight \
   --log batch-log-3d.jsonl \

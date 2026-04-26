@@ -21,9 +21,9 @@ text2d:
 text3d:
   preset: balanced
   low_vram: false
-  texture: true
   export_origin: feet
-  paint_preserve_origin: true
+paint3d:
+  preserve_origin: true
 rigging3d:
   output_suffix: _rigged
 animator3d:
