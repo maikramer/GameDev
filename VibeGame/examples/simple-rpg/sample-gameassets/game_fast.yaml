@@ -8,6 +8,7 @@ images_subdir: images
 meshes_subdir: meshes
 image_ext: png
 seed_base: 42
+generation: fast
 negative_keywords:
   - gore
   - realistic
@@ -17,7 +18,6 @@ text2d:
   height: 512
 text3d:
   preset: fast
-  low_vram: false
   export_origin: feet
 paint3d:
   preserve_origin: true
@@ -25,3 +25,11 @@ paint3d:
   view_resolution: 512
   render_size: 512
   texture_size: 512
+rigging3d:
+  output_suffix: _rigged
+animator3d:
+  preset: humanoid
+audio_subdir: audio
+text2sound:
+  quality: fast
+  audio_format: wav

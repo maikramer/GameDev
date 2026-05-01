@@ -1,13 +1,14 @@
 title: Simple RPG Demo
 genre: cartoon fantasy RPG
 tone: bright cheerful adventure, vibrant colors, playful cartoon world
-style_preset: cartoon_fantasy
+style_preset: painterly
 output_dir: ../public/assets
 path_layout: split
 images_subdir: images
 meshes_subdir: meshes
 image_ext: png
 seed_base: 42
+generation: medium
 negative_keywords:
   - gore
   - realistic
@@ -19,8 +20,6 @@ text2d:
   width: 768
   height: 768
 text3d:
-  preset: balanced
-  low_vram: false
   export_origin: feet
 paint3d:
   preserve_origin: true
@@ -30,7 +29,5 @@ animator3d:
   preset: humanoid
 audio_subdir: audio
 text2sound:
-  duration: 3
-  steps: 100
-  cfg_scale: 4.5
+  quality: medium
   audio_format: wav

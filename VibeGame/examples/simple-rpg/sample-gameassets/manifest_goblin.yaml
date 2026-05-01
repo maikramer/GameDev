@@ -6,5 +6,9 @@ assets:
   kind: character
   pipeline:
   - 3d
+  - paint
   - rig
   - animate
+  - lod
+  - collision
+  lod_levels: 2
