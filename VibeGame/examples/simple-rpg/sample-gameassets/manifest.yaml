@@ -1,5 +1,5 @@
 # manifest.yaml — Simple RPG Demo assets
-# pipeline: [3d, audio, rig, animate, parts, lod, collision]
+# pipeline: [3d, paint, audio, rig, animate, parts, lod, collision]
 
 assets:
   # --- Characters ---
@@ -8,28 +8,28 @@ assets:
     idea: "cute cartoon RPG hero knight in bright blue armor with yellow cape, round helmet visor, friendly determined expression, small adventurer proportions, standing upright with arms at sides"
     kind: character
     category: humanoid
-    pipeline: [3d, rig, animate, lod, collision]
+    pipeline: [3d, paint, rig, animate, lod, collision]
     lod_levels: 1
 
   - id: npc_merchant
     idea: "friendly cartoon merchant NPC wearing brown apron over green tunic, round belly, warm smile, short chubby proportions, fantasy shopkeeper"
     kind: character
     category: humanoid
-    pipeline: [3d, rig, animate, lod, collision]
+    pipeline: [3d, paint, rig, animate, lod, collision]
     lod_levels: 1
 
   - id: goblin
     idea: "small green cartoon goblin with big pointy ears, mischievous grin, wearing ragged purple vest, hunched posture, fantasy enemy creature"
     kind: character
     category: creature
-    pipeline: [3d, rig, animate, lod, collision]
+    pipeline: [3d, paint, rig, animate, lod, collision]
     lod_levels: 2
 
   - id: slime
     idea: "cute round blue cartoon slime monster with big expressive eyes, happy bubbly shape, translucent jelly body, small sparkle highlights"
     kind: character
     category: creature
-    pipeline: [3d, rig, animate, lod, collision]
+    pipeline: [3d, paint, rig, animate, lod, collision]
     lod_levels: 2
 
   # --- Weapons & Equipment ---
@@ -38,13 +38,13 @@ assets:
     idea: "cartoon fantasy broadsword with golden crossguard and blue gem pommel, bright steel blade, hero weapon, clean simple design"
     kind: prop
     category: weapon
-    pipeline: [3d, lod, collision]
+    pipeline: [3d, paint, lod, collision]
 
   - id: shield_wooden
     idea: "round cartoon wooden shield with iron rim and painted star emblem, fantasy buckler, warm wood tones"
     kind: prop
     category: weapon
-    pipeline: [3d, lod, collision]
+    pipeline: [3d, paint, lod, collision]
 
   # --- Props ---
 
@@ -52,37 +52,37 @@ assets:
     idea: "cartoon fantasy treasure chest with golden metal bands and big brass lock, arched lid, warm brown wood, RPG loot container"
     kind: prop
     category: chest
-    pipeline: [3d, lod, collision]
+    pipeline: [3d, paint, lod, collision]
 
   - id: potion_health
     idea: "cute round cartoon health potion bottle with red glowing liquid, cork stopper, heart symbol on glass, fantasy healing item"
     kind: prop
     category: item
-    pipeline: [3d, lod, collision]
+    pipeline: [3d, paint, lod, collision]
 
   - id: potion_mana
     idea: "cute round cartoon mana potion bottle with blue glowing liquid, cork stopper, star symbol on glass, fantasy magic item"
     kind: prop
     category: item
-    pipeline: [3d, lod, collision]
+    pipeline: [3d, paint, lod, collision]
 
   - id: crystal_blue
     idea: "glowing blue cartoon crystal cluster floating above small rock base, magical gem collectible, bright luminescent facets, fantasy loot"
     kind: prop
     category: item
-    pipeline: [3d, lod, collision]
+    pipeline: [3d, paint, lod, collision]
 
   - id: rock_mossy
     idea: "round cartoon mossy boulder with bright green moss patches and small mushrooms growing on top, fantasy terrain rock"
     kind: prop
     category: terrain
-    pipeline: [3d, lod, collision]
+    pipeline: [3d, paint, lod, collision]
 
   - id: mushroom_red
     idea: "big cartoon red mushroom with white polka dots on cap, thick white stalk, fantasy forest mushroom, whimsical look"
     kind: prop
     category: vegetation
-    pipeline: [3d, lod, collision]
+    pipeline: [3d, paint, lod, collision]
 
   # --- Environment ---
 
@@ -90,19 +90,19 @@ assets:
     idea: "cartoon oak tree with big round puffy green canopy on thick brown trunk, stylized fantasy forest tree, bright cheerful foliage"
     kind: environment
     category: vegetation
-    pipeline: [3d, lod, collision]
+    pipeline: [3d, paint, lod, collision]
 
   - id: tree_pine
     idea: "tall cartoon pine tree with layered triangle foliage in rich green, narrow brown trunk, stylized Christmas tree shape, fantasy forest"
     kind: environment
     category: vegetation
-    pipeline: [3d, lod, collision]
+    pipeline: [3d, paint, lod, collision]
 
   - id: stone_pillar
     idea: "ancient cartoon stone pillar with cracked surface and glowing rune carvings, overgrown with small vines, fantasy landmark monument"
     kind: environment
     category: building
-    pipeline: [3d, lod, collision]
+    pipeline: [3d, paint, lod, collision]
 
   # --- Audio ---
 
