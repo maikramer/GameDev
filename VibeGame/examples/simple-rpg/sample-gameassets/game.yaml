@@ -10,16 +10,12 @@ image_ext: png
 seed_base: 42
 generation: medium
 
-# Round 2 — usar o novo master pipeline (DAG completo: topology-fix →
-# bake-master → LOD → collision → rigging → transfer-weights → animate →
-# validate). Outputs em meshes/ ficam todos finalizados (KTX2+meshopt+tangents);
-# intermediários (shape/painted/clean/rigged_hi) movidos para meshes/_intermediate/.
-master_pipeline: true
+# Round 2 — master pipeline (default ON desde Round 2).
+# DAG: topology-fix → bake-master → LOD → collision → rigging →
+# transfer-weights → animate → promote (lod0=animated/rigged/painted) → validate.
+# Para forçar legacy: master_pipeline: false (ou --legacy-pipeline no batch).
 master_validate: true
-# bake_normals resolvido por categoria (humanoid/creature/armor/weapon/chest/tool
-# ON; resto OFF). Use master_bake_normals: true para forçar globalmente, ou
-# master_bake_normals_categories: [...] para customizar a lista.
-master_bake_normals: false
+master_bake_normals: false  # smart-defaults por categoria (humanoid/creature/...)
 negative_keywords:
   - gore
   - realistic
