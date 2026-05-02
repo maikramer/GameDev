@@ -1,5 +1,12 @@
 # manifest.yaml — Simple RPG Demo assets
 # pipeline: [3d, paint, audio, rig, animate, parts, lod, collision]
+#
+# Round 2: este manifest roda pelo master pipeline (game.yaml: master_pipeline: true).
+# DAG: shape → topology-fix (clean) → paint → bake-master (lod0 KTX2+meshopt+tangents)
+#      → lod (lod1/lod2 finalizados) → collision → rigging-hi → transfer-weights
+#      → animate-LODs → validate (rules/lod{0,1,2}.yaml + rigged.yaml + animated.yaml).
+# Categorias com bake-normals ON por defeito: humanoid, creature, armor, weapon, chest, tool.
+# Outputs finais em meshes/; intermediários (shape/painted/clean/rigged_hi) em meshes/_intermediate/.
 
 assets:
   # --- Characters ---
