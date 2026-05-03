@@ -111,6 +111,12 @@ assets:
     category: building
     pipeline: [3d, paint, lod, collision]
 
+  - id: wooden_crate
+    idea: "cartoon wooden crate with iron bands, weathered oak planks, sturdy box prop, simple lowpoly game asset"
+    kind: prop
+    category: prop
+    pipeline: [3d, paint, lod, collision]
+
   # --- Audio ---
 
   - id: bgm_field
@@ -196,17 +202,3 @@ assets:
     generation: medium
     audio:
       audio_preset: footsteps-grass
-
-  # --- Missing Scene Assets (referenced in index.html) ---
-
-  - id: wooden_crate
-    idea: "cartoon wooden crate with iron bands, weathered oak planks, sturdy box prop, simple lowpoly game asset"
-    kind: prop
-    category: prop
-    pipeline: [3d, paint, lod, collision]
-
-  - id: tree_lowpoly
-    idea: "cartoon low poly pine tree shaped like triangular cones on thin brown trunk, simple minimalist stylized game tree"
-    kind: environment
-    category: vegetation
-    pipeline: [3d, paint, lod, collision]
