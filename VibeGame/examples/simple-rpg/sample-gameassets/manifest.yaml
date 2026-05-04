@@ -12,28 +12,28 @@ assets:
   # --- Characters ---
 
   - id: hero
-    idea: "cute cartoon RPG hero knight in bright blue armor with yellow cape, round helmet visor, friendly determined expression, small adventurer proportions, standing upright with arms at sides"
+    idea: 'cute cartoon RPG hero knight in bright blue armor with yellow cape, round helmet visor, friendly determined expression, small adventurer proportions, standing upright with arms at sides'
     kind: character
     category: humanoid
     pipeline: [3d, paint, rig, animate, lod, collision]
     lod_levels: 1
 
   - id: npc_merchant
-    idea: "friendly cartoon merchant NPC wearing brown apron over green tunic, round belly, warm smile, short chubby proportions, fantasy shopkeeper"
+    idea: 'friendly cartoon merchant NPC wearing brown apron over green tunic, round belly, warm smile, short chubby proportions, fantasy shopkeeper'
     kind: character
     category: humanoid
     pipeline: [3d, paint, rig, animate, lod, collision]
     lod_levels: 1
 
   - id: goblin
-    idea: "small green cartoon goblin with big pointy ears, mischievous grin, wearing ragged purple vest, hunched posture, fantasy enemy creature"
+    idea: 'small green cartoon goblin with big pointy ears, mischievous grin, wearing ragged purple vest, hunched posture, fantasy enemy creature'
     kind: character
     category: creature
     pipeline: [3d, paint, rig, animate, lod, collision]
     lod_levels: 2
 
   - id: slime
-    idea: "cute round blue cartoon slime monster with big expressive eyes, happy bubbly shape, translucent jelly body, small sparkle highlights"
+    idea: 'cute round blue cartoon slime monster with big expressive eyes, happy bubbly shape, translucent jelly body, small sparkle highlights'
     kind: character
     category: creature
     pipeline: [3d, paint, rig, animate, lod, collision]
@@ -42,13 +42,13 @@ assets:
   # --- Weapons & Equipment ---
 
   - id: sword_hero
-    idea: "cartoon fantasy broadsword with golden crossguard and blue gem pommel, bright steel blade, hero weapon, clean simple design"
+    idea: 'cartoon fantasy broadsword with golden crossguard and blue gem pommel, bright steel blade, hero weapon, clean simple design'
     kind: prop
     category: weapon
     pipeline: [3d, paint, lod, collision]
 
   - id: shield_wooden
-    idea: "round cartoon wooden shield with iron rim and painted star emblem, fantasy buckler, warm wood tones"
+    idea: 'round cartoon wooden shield with iron rim and painted star emblem, fantasy buckler, warm wood tones'
     kind: prop
     category: weapon
     pipeline: [3d, paint, lod, collision]
@@ -56,37 +56,37 @@ assets:
   # --- Props ---
 
   - id: treasure_chest
-    idea: "cartoon fantasy treasure chest with golden metal bands and big brass lock, arched lid, warm brown wood, RPG loot container"
+    idea: 'cartoon fantasy treasure chest with golden metal bands and big brass lock, arched lid, warm brown wood, RPG loot container'
     kind: prop
     category: chest
     pipeline: [3d, paint, lod, collision]
 
   - id: potion_health
-    idea: "cute round cartoon health potion bottle with red glowing liquid, cork stopper, heart symbol on glass, fantasy healing item"
+    idea: 'cute round cartoon health potion bottle with red glowing liquid, cork stopper, heart symbol on glass, fantasy healing item'
     kind: prop
     category: item
     pipeline: [3d, paint, lod, collision]
 
   - id: potion_mana
-    idea: "cute round cartoon mana potion bottle with blue glowing liquid, cork stopper, star symbol on glass, fantasy magic item"
+    idea: 'cute round cartoon mana potion bottle with blue glowing liquid, cork stopper, star symbol on glass, fantasy magic item'
     kind: prop
     category: item
     pipeline: [3d, paint, lod, collision]
 
   - id: crystal_blue
-    idea: "glowing blue cartoon crystal cluster floating above small rock base, magical gem collectible, bright luminescent facets, fantasy loot"
+    idea: 'glowing blue cartoon crystal cluster floating above small rock base, magical gem collectible, bright luminescent facets, fantasy loot'
     kind: prop
     category: item
     pipeline: [3d, paint, lod, collision]
 
   - id: rock_mossy
-    idea: "round cartoon mossy boulder with bright green moss patches and small mushrooms growing on top, fantasy terrain rock"
+    idea: 'round cartoon mossy boulder with bright green moss patches and small mushrooms growing on top, fantasy terrain rock'
     kind: prop
     category: terrain
     pipeline: [3d, paint, lod, collision]
 
   - id: mushroom_red
-    idea: "big cartoon red mushroom with white polka dots on cap, thick white stalk, fantasy forest mushroom, whimsical look"
+    idea: 'big cartoon red mushroom with white polka dots on cap, thick white stalk, fantasy forest mushroom, whimsical look'
     kind: prop
     category: vegetation
     pipeline: [3d, paint, lod, collision]
@@ -94,25 +94,25 @@ assets:
   # --- Environment ---
 
   - id: tree_oak
-    idea: "cartoon oak tree with big round puffy green canopy on thick brown trunk, stylized fantasy forest tree, bright cheerful foliage"
+    idea: 'cartoon oak tree with big round puffy green canopy on thick brown trunk, stylized fantasy forest tree, bright cheerful foliage'
     kind: environment
     category: vegetation
     pipeline: [3d, paint, lod, collision]
 
   - id: tree_pine
-    idea: "tall cartoon pine tree with layered triangle foliage in rich green, narrow brown trunk, stylized Christmas tree shape, fantasy forest"
+    idea: 'tall cartoon pine tree with layered triangle foliage in rich green, narrow brown trunk, stylized Christmas tree shape, fantasy forest'
     kind: environment
     category: vegetation
     pipeline: [3d, paint, lod, collision]
 
   - id: stone_pillar
-    idea: "ancient cartoon stone pillar with cracked surface and glowing rune carvings, overgrown with small vines, fantasy landmark monument"
+    idea: 'ancient cartoon stone pillar with cracked surface and glowing rune carvings, overgrown with small vines, fantasy landmark monument'
     kind: environment
     category: building
     pipeline: [3d, paint, lod, collision]
 
   - id: wooden_crate
-    idea: "cartoon wooden crate with iron bands, weathered oak planks, sturdy box prop, simple lowpoly game asset"
+    idea: 'cartoon wooden crate with iron bands, weathered oak planks, sturdy box prop, simple lowpoly game asset'
     kind: prop
     category: prop
     pipeline: [3d, paint, lod, collision]
@@ -120,7 +120,7 @@ assets:
   # --- Audio ---
 
   - id: bgm_field
-    idea: "calm cheerful cartoon RPG exploration background music, bouncy orchestral strings and playful flute melody, bright fantasy adventure, happy green fields, loopable, light percussion, cute whimsical game"
+    idea: 'calm cheerful cartoon RPG exploration background music, bouncy orchestral strings and playful flute melody, bright fantasy adventure, happy green fields, loopable, light percussion, cute whimsical game'
     kind: prop
     category: environment
     pipeline: [audio]
@@ -129,7 +129,7 @@ assets:
       audio_preset: exploration
 
   - id: sfx_collect
-    idea: "magical crystal collect sparkle chime, bright ascending notes, short cheerful jingle, cartoon game pickup"
+    idea: 'magical crystal collect sparkle chime, bright ascending notes, short cheerful jingle, cartoon game pickup'
     kind: prop
     category: item
     pipeline: [audio]
@@ -138,14 +138,14 @@ assets:
       audio_preset: coin-pickup
 
   - id: sfx_jump
-    idea: "short bouncy cartoon jump boing whoosh, playful spring sound, game character leap"
+    idea: 'short bouncy cartoon jump boing whoosh, playful spring sound, game character leap'
     kind: prop
     category: humanoid
     pipeline: [audio]
     generation: medium
 
   - id: sfx_save
-    idea: "soft positive save confirm chime, gentle bell ding success, warm UI feedback"
+    idea: 'soft positive save confirm chime, gentle bell ding success, warm UI feedback'
     kind: prop
     category: ui
     pipeline: [audio]
@@ -154,7 +154,7 @@ assets:
       audio_preset: ui-confirm
 
   - id: sfx_load
-    idea: "brief magical shimmer sparkle, fantasy game load restore, soft ascending tones"
+    idea: 'brief magical shimmer sparkle, fantasy game load restore, soft ascending tones'
     kind: prop
     category: effects
     pipeline: [audio]
@@ -163,21 +163,21 @@ assets:
       audio_preset: magic-spell
 
   - id: sfx_potion
-    idea: "bubbly cartoon potion drinking glug, magical liquid swallowing, cheerful healing sound"
+    idea: 'bubbly cartoon potion drinking glug, magical liquid swallowing, cheerful healing sound'
     kind: prop
     category: item
     pipeline: [audio]
     generation: medium
 
   - id: sfx_chest_open
-    idea: "old wooden chest creaking open followed by magical treasure reveal shimmer, fantasy loot discovery"
+    idea: 'old wooden chest creaking open followed by magical treasure reveal shimmer, fantasy loot discovery'
     kind: prop
     category: chest
     pipeline: [audio]
     generation: medium
 
   - id: sfx_sword_swing
-    idea: "quick cartoon sword swoosh swing, bright metallic whoosh, playful combat slash"
+    idea: 'quick cartoon sword swoosh swing, bright metallic whoosh, playful combat slash'
     kind: prop
     category: weapon
     pipeline: [audio]
@@ -186,7 +186,7 @@ assets:
       audio_preset: sword-clash
 
   - id: sfx_coin
-    idea: "bright golden coin pickup jingle, cheerful monetary reward, short shiny ding"
+    idea: 'bright golden coin pickup jingle, cheerful monetary reward, short shiny ding'
     kind: prop
     category: item
     pipeline: [audio]
@@ -195,7 +195,7 @@ assets:
       audio_preset: coin-pickup
 
   - id: sfx_step
-    idea: "soft cartoon grass footstep, light outdoor terrain walk, single gentle crunch"
+    idea: 'soft cartoon grass footstep, light outdoor terrain walk, single gentle crunch'
     kind: prop
     category: vegetation
     pipeline: [audio]

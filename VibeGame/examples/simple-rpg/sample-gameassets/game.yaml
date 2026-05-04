@@ -15,7 +15,7 @@ generation: medium
 # transfer-weights → animate → promote (lod0=animated/rigged/painted) → validate.
 # Para forçar legacy: master_pipeline: false (ou --legacy-pipeline no batch).
 master_validate: true
-master_bake_normals: false  # smart-defaults por categoria (humanoid/creature/...)
+master_bake_normals: false # smart-defaults por categoria (humanoid/creature/...)
 negative_keywords:
   - gore
   - realistic
