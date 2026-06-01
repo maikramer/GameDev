@@ -173,7 +173,7 @@
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-import": "^2.32.0",
     "eslint-plugin-prettier": "^5.5.4",
-    "glob": "^11.0.3",
+    "glob": "^13.0.6",
     "jsdom": "^26.1.0",
     "prettier": "^3.6.2",
     "rollup-plugin-visualizer": "^6.0.3",
