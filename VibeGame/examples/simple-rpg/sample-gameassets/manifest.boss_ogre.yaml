@@ -1,0 +1,10 @@
+# manifest.boss_ogre.yaml — single-asset manifest for boss_ogre generation only.
+# gameassets batch has no --only flag; this filtered manifest runs just the boss.
+assets:
+  - id: boss_ogre
+    idea: 'menacing large fantasy RPG boss monster, muscular green ogre troll with sharp teeth and small tusks, hunched powerful build, crude stone club in one hand, thick dark armor scraps, intimidating stance, cartoon stylized but bigger and scarier than a goblin, standing upright, game asset'
+    kind: character
+    category: creature
+    pipeline: [3d, paint, rig, animate, lod, collision]
+    lod_levels: 2
+    generation: fast
