@@ -1,0 +1,57 @@
+# manifest.swamp.yaml — pântano biome subset.
+# Run: gameassets batch --profile game.yaml --manifest manifest.swamp
+assets:
+  # --- Vegetation (swamp) ---
+
+  - id: dead_willow
+    idea: 'cartoon dead willow tree with drooping leafless branches, twisted dark grey trunk, moss-covered roots in murky water, spooky fantasy swamp tree'
+    kind: environment
+    category: vegetation
+    pipeline: [3d, paint, lod, collision]
+    lod_levels: 2
+
+  - id: lily_pad
+    idea: 'cartoon large green lily pad with small pink lily flower, floating on dark water surface, fantasy swamp vegetation prop'
+    kind: prop
+    category: vegetation
+    pipeline: [3d, paint, lod, collision]
+
+  - id: moss_rock
+    idea: 'cartoon swamp boulder covered in thick bright green moss with small mushrooms, dark wet stone underneath, fantasy swamp terrain rock'
+    kind: prop
+    category: terrain
+    pipeline: [3d, paint, lod, collision]
+
+  # --- Structures (swamp) ---
+
+  - id: swamp_shack
+    idea: 'cartoon dilapidated wooden swamp shack on stilts above murky water, mossy plank walls, sagging thatched roof, small lantern, fantasy swamp dwelling'
+    kind: environment
+    category: building
+    pipeline: [3d, paint, lod, collision]
+
+  # --- Creatures (swamp) ---
+
+  - id: bogling
+    idea: 'small cartoon swamp bogling creature with round green-brown body, big yellow eyes, webbed feet, dripping moss on back, mischievous fantasy amphibian monster'
+    kind: character
+    category: creature
+    pipeline: [3d, paint, rig, animate, lod, collision]
+    lod_levels: 1
+
+  - id: mosquito
+    idea: 'cartoon giant swamp mosquito with thin legs, narrow body, long needle nose, small transparent wings, fantasy swamp flying pest insect'
+    kind: character
+    category: creature
+    pipeline: [3d, paint, rig, animate, lod, collision]
+    lod_levels: 1
+
+  # --- Boss (swamp) ---
+
+  - id: bog_warden_boss
+    idea: 'large cartoon bog warden elemental boss made of swamp mud, vines, and glowing green eyes, mossy stone core, dripping water, intimidating fantasy swamp boss, game asset'
+    kind: character
+    category: creature
+    pipeline: [3d, paint, rig, animate, lod, collision]
+    lod_levels: 1
+    generation: high

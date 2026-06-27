@@ -1,0 +1,57 @@
+# manifest.desert.yaml — desert biome subset.
+# Run: gameassets batch --profile game.yaml --manifest manifest.desert
+assets:
+  # --- Vegetation (desert) ---
+
+  - id: cactus
+    idea: 'cartoon desert saguaro cactus with three green arms, ribbed texture, small spines, stylized fantasy desert plant'
+    kind: environment
+    category: vegetation
+    pipeline: [3d, paint, lod, collision]
+    lod_levels: 2
+
+  - id: dead_bush
+    idea: 'cartoon dry desert tumbleweed bush with twisted brown branches, sparse leaves, arid climate plant, fantasy desert prop'
+    kind: prop
+    category: vegetation
+    pipeline: [3d, paint, lod, collision]
+
+  # --- Structures (desert) ---
+
+  - id: ruin_pillar
+    idea: 'ancient cartoon sandstone ruin pillar with cracked carved hieroglyphs, weathered top, broken base, fantasy desert monument'
+    kind: environment
+    category: building
+    pipeline: [3d, paint, lod, collision]
+
+  - id: scorpion_nest
+    idea: 'cartoon desert scorpion nest mound of sand with dark tunnel hole, scattered bones around entrance, fantasy creature lair'
+    kind: environment
+    category: building
+    pipeline: [3d, paint, lod, collision]
+
+  # --- Creatures (desert) ---
+
+  - id: scorpion
+    idea: 'cartoon desert scorpion with segmented tan-orange tail ending in glowing red stinger, large pincers, eight legs, armored carapace, fantasy desert predator'
+    kind: character
+    category: creature
+    pipeline: [3d, paint, rig, animate, lod, collision]
+    lod_levels: 1
+
+  - id: bandit
+    idea: 'cartoon desert bandit with tan hood and face mask, leather armor scraps, curved scimitar on belt, dark eyes visible, fantasy rogue enemy, standing upright'
+    kind: character
+    category: creature
+    pipeline: [3d, paint, rig, animate, lod, collision]
+    lod_levels: 1
+
+  # --- Boss (desert) ---
+
+  - id: sand_wyrm_boss
+    idea: 'massive cartoon sand wyrm boss emerging from desert dune, segmented worm body with circular toothy maw, small eyes, armored sand-colored plates, intimidating fantasy desert boss, game asset'
+    kind: character
+    category: creature
+    pipeline: [3d, paint, rig, animate, lod, collision]
+    lod_levels: 1
+    generation: high

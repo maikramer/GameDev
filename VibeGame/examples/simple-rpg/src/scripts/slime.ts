@@ -19,6 +19,7 @@ const behaviours = createCreatureBehaviours({
   lootGoldMax: 30,
   strafe: true,
   lowHpKiteFrac: 0.35,
+  enemyType: 'slime',
   onDeathLoot: (state, gold, x, y, z) => addGold(gold, x, y, z),
 });
 

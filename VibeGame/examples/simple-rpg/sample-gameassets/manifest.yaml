@@ -202,3 +202,231 @@ assets:
     generation: medium
     audio:
       audio_preset: footsteps-grass
+
+  # --- Dark Forest biome (Round 3) ---
+
+  - id: pine_dark
+    idea: 'tall cartoon dark pine tree with dense layered triangle foliage in deep forest green, narrow brown trunk, slightly gloomy stylized shape, dark fantasy forest tree'
+    kind: environment
+    category: vegetation
+    pipeline: [3d, paint, lod, collision]
+    lod_levels: 2
+
+  - id: dead_tree
+    idea: 'bare cartoon dead tree with twisted leafless branches, pale grey bark, gnarled spooky shape, dark fantasy forest silhouette'
+    kind: environment
+    category: vegetation
+    pipeline: [3d, paint, lod, collision]
+    lod_levels: 2
+
+  - id: mushroom_glow
+    idea: 'cartoon glowing blue mushroom cluster on mossy log, bioluminescent fantasy fungi, soft cyan light, dark forest floor prop'
+    kind: prop
+    category: vegetation
+    pipeline: [3d, paint, lod, collision]
+
+  - id: witch_hut
+    idea: 'crooked cartoon witch hut with angled leaning walls, thatched roof, small glowing window, wooden door, dark fantasy forest dwelling'
+    kind: environment
+    category: building
+    pipeline: [3d, paint, lod, collision]
+
+  - id: wolf
+    idea: 'cartoon dark forest wolf with grey-black fur, yellow glowing eyes, snarling fangs, lean muscular body, fantasy predator creature, quadruped'
+    kind: character
+    category: creature
+    pipeline: [3d, paint, rig, animate, lod, collision]
+    lod_levels: 1
+
+  - id: shade
+    idea: 'cartoon shadow shade creature, floating dark ghostly wraith with glowing purple eyes, tattered cloak, ethereal smoky body, fantasy undead spirit'
+    kind: character
+    category: creature
+    pipeline: [3d, paint, rig, animate, lod, collision]
+    lod_levels: 1
+
+  - id: witch_boss
+    idea: 'menacing cartoon witch boss with long hooked nose, pointed black hat, tattered dark purple robe, glowing green hands, sinister grin, dark fantasy forest witch, standing upright, game asset'
+    kind: character
+    category: creature
+    pipeline: [3d, paint, rig, animate, lod, collision]
+    lod_levels: 1
+    generation: high
+
+  # --- Desert biome (Round 3) ---
+
+  - id: cactus
+    idea: 'cartoon desert saguaro cactus with three green arms, ribbed texture, small spines, stylized fantasy desert plant'
+    kind: environment
+    category: vegetation
+    pipeline: [3d, paint, lod, collision]
+    lod_levels: 2
+
+  - id: dead_bush
+    idea: 'cartoon dry desert tumbleweed bush with twisted brown branches, sparse leaves, arid climate plant, fantasy desert prop'
+    kind: prop
+    category: vegetation
+    pipeline: [3d, paint, lod, collision]
+
+  - id: ruin_pillar
+    idea: 'ancient cartoon sandstone ruin pillar with cracked carved hieroglyphs, weathered top, broken base, fantasy desert monument'
+    kind: environment
+    category: building
+    pipeline: [3d, paint, lod, collision]
+
+  - id: scorpion_nest
+    idea: 'cartoon desert scorpion nest mound of sand with dark tunnel hole, scattered bones around entrance, fantasy creature lair'
+    kind: environment
+    category: building
+    pipeline: [3d, paint, lod, collision]
+
+  - id: scorpion
+    idea: 'cartoon desert scorpion with segmented tan-orange tail ending in glowing red stinger, large pincers, eight legs, armored carapace, fantasy desert predator'
+    kind: character
+    category: creature
+    pipeline: [3d, paint, rig, animate, lod, collision]
+    lod_levels: 1
+
+  - id: bandit
+    idea: 'cartoon desert bandit with tan hood and face mask, leather armor scraps, curved scimitar on belt, dark eyes visible, fantasy rogue enemy, standing upright'
+    kind: character
+    category: creature
+    pipeline: [3d, paint, rig, animate, lod, collision]
+    lod_levels: 1
+
+  - id: sand_wyrm_boss
+    idea: 'massive cartoon sand wyrm boss emerging from desert dune, segmented worm body with circular toothy maw, small eyes, armored sand-colored plates, intimidating fantasy desert boss, game asset'
+    kind: character
+    category: creature
+    pipeline: [3d, paint, rig, animate, lod, collision]
+    lod_levels: 1
+    generation: high
+
+  # --- Swamp biome (Round 3) ---
+
+  - id: dead_willow
+    idea: 'cartoon dead willow tree with drooping leafless branches, twisted dark grey trunk, moss-covered roots in murky water, spooky fantasy swamp tree'
+    kind: environment
+    category: vegetation
+    pipeline: [3d, paint, lod, collision]
+    lod_levels: 2
+
+  - id: lily_pad
+    idea: 'cartoon large green lily pad with small pink lily flower, floating on dark water surface, fantasy swamp vegetation prop'
+    kind: prop
+    category: vegetation
+    pipeline: [3d, paint, lod, collision]
+
+  - id: moss_rock
+    idea: 'cartoon swamp boulder covered in thick bright green moss with small mushrooms, dark wet stone underneath, fantasy swamp terrain rock'
+    kind: prop
+    category: terrain
+    pipeline: [3d, paint, lod, collision]
+
+  - id: swamp_shack
+    idea: 'cartoon dilapidated wooden swamp shack on stilts above murky water, mossy plank walls, sagging thatched roof, small lantern, fantasy swamp dwelling'
+    kind: environment
+    category: building
+    pipeline: [3d, paint, lod, collision]
+
+  - id: bogling
+    idea: 'small cartoon swamp bogling creature with round green-brown body, big yellow eyes, webbed feet, dripping moss on back, mischievous fantasy amphibian monster'
+    kind: character
+    category: creature
+    pipeline: [3d, paint, rig, animate, lod, collision]
+    lod_levels: 1
+
+  - id: mosquito
+    idea: 'cartoon giant swamp mosquito with thin legs, narrow body, long needle nose, small transparent wings, fantasy swamp flying pest insect'
+    kind: character
+    category: creature
+    pipeline: [3d, paint, rig, animate, lod, collision]
+    lod_levels: 1
+
+  - id: bog_warden_boss
+    idea: 'large cartoon bog warden elemental boss made of swamp mud, vines, and glowing green eyes, mossy stone core, dripping water, intimidating fantasy swamp boss, game asset'
+    kind: character
+    category: creature
+    pipeline: [3d, paint, rig, animate, lod, collision]
+    lod_levels: 1
+    generation: high
+
+  # --- Biome audio (Round 3) ---
+
+  - id: bgm_dark_forest
+    idea: 'mysterious dark forest background music, haunting woodwinds and low strings, eerie magical ambient, fantasy exploration, loopable, slightly tense cartoon game'
+    kind: prop
+    category: environment
+    pipeline: [audio]
+    generation: medium
+    audio:
+      audio_preset: exploration
+
+  - id: bgm_desert
+    idea: 'vast desert winds background music, sparse dulcimer and warm drone, lonely arid atmosphere, fantasy exploration, loopable, cartoon game'
+    kind: prop
+    category: environment
+    pipeline: [audio]
+    generation: medium
+    audio:
+      audio_preset: exploration
+
+  - id: bgm_swamp
+    idea: 'murky swamp background music, low bass drone with dripping water percussion, eerie bullfrog croaks, dense fantasy atmosphere, loopable, cartoon game'
+    kind: prop
+    category: environment
+    pipeline: [audio]
+    generation: medium
+    audio:
+      audio_preset: exploration
+
+  - id: sfx_wolf_howl
+    idea: 'single cartoon wolf howl, mournful distant canine call, fantasy forest creature sound'
+    kind: prop
+    category: creature
+    pipeline: [audio]
+    generation: medium
+
+  - id: sfx_scorpion_hiss
+    idea: 'aggressive cartoon scorpion hiss, sharp insect threat sound, desert creature signal'
+    kind: prop
+    category: creature
+    pipeline: [audio]
+    generation: medium
+
+  - id: sfx_bogling_jump
+    idea: 'wet cartoon bogling jump splash, sticky amphibian leap sound, swamp creature movement'
+    kind: prop
+    category: creature
+    pipeline: [audio]
+    generation: medium
+
+  - id: sfx_quest_complete
+    idea: 'cheerful fantasy quest complete fanfare, triumphant short brass and strings chord, RPG accomplishment sound'
+    kind: prop
+    category: ui
+    pipeline: [audio]
+    generation: medium
+    audio:
+      audio_preset: ui-confirm
+
+  - id: sfx_npc_speak_low
+    idea: 'low pitched cartoon character voice murmur, generic NPC dialogue sound, fantasy villager hum'
+    kind: prop
+    category: ui
+    pipeline: [audio]
+    generation: medium
+
+  - id: sfx_npc_speak_mid
+    idea: 'mid pitched cartoon character voice murmur, generic NPC dialogue sound, fantasy traveler hum'
+    kind: prop
+    category: ui
+    pipeline: [audio]
+    generation: medium
+
+  - id: sfx_npc_speak_high
+    idea: 'high pitched cartoon character voice murmur, generic NPC dialogue sound, fantasy child or small creature hum'
+    kind: prop
+    category: ui
+    pipeline: [audio]
+    generation: medium
