@@ -89,18 +89,19 @@ async fn run() -> Result<()> {
     let input_path = Path::new(&input);
     let is_batch = input_path.is_dir() || contains_glob_metachar(&input);
 
-    let pipeline = Pipeline::new()
-        .await
-        .map_err(|e: anyhow::Error| MaterializeError::Gpu(e.to_string()))?;
-
-    if args.verbose {
-        println!("GPU: {}", pipeline.adapter_info);
-    }
-
     if is_batch {
+        // Batch needs the pipeline up-front; GPU init happens here.
+        let pipeline = Pipeline::new()
+            .await
+            .map_err(|e: anyhow::Error| MaterializeError::Gpu(e.to_string()))?;
+        if args.verbose {
+            println!("GPU: {}", pipeline.adapter_info);
+        }
         run_batch_mode(&args, &pipeline).await
     } else {
-        run_single_mode(&args, &pipeline, &input).await
+        // Single-file mode: validate input exists BEFORE GPU init so a missing
+        // file produces a NotFound exit code (2) even on CI runners without a GPU.
+        run_single_mode(&args, &input).await
     }
 }
 
@@ -116,9 +117,19 @@ fn run_info(input: &str) -> Result<()> {
     Ok(())
 }
 
-async fn run_single_mode(args: &Cli, pipeline: &Pipeline, input: &str) -> Result<()> {
+async fn run_single_mode(args: &Cli, input: &str) -> Result<()> {
+    // Load + validate input first so a missing file yields exit code 2 even on
+    // machines without a GPU (CI runners).
     let image = io::load_image(input).map_err(MaterializeError::from)?;
     let (width, height) = (image.width(), image.height());
+
+    let pipeline = Pipeline::new()
+        .await
+        .map_err(|e: anyhow::Error| MaterializeError::Gpu(e.to_string()))?;
+
+    if args.verbose {
+        println!("GPU: {}", pipeline.adapter_info);
+    }
 
     let (resolved_preset, base_params) = resolve_base_params(args, &image);
     let params = apply_overrides_and_auto_scale(args, &image, resolved_preset, base_params);
