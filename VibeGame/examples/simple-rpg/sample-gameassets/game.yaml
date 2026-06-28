@@ -94,7 +94,7 @@ biome_audio:
 # Correr com: text2d generate "<prompt>" -o ../public/assets/ui/<id>.png
 portraits:
   output_dir: ../public/assets/ui
-  style: "cartoon fantasy RPG character portrait, painterly, square 512x512, front-facing, clean background"
+  style: 'cartoon fantasy RPG character portrait, painterly, square 512x512, front-facing, clean background'
   ids:
     - portrait_hunter
     - portrait_witch_npc
