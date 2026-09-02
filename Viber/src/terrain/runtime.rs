@@ -426,38 +426,25 @@ fn spawn_water(
         cull_mode: None,
         ..StandardMaterial::default()
     });
-    let n_lakes = features.lakes.len();
-
-    for (i, lake) in features.lakes.iter().enumerate() {
-        let Some(body) = result.water.get(i) else {
-            continue;
+    // Emparelha corpo ↔ spec por IDENTIDADE (water_specs), não por posição:
+    // um lago/rio degenerado cujo carve falhou não entra em `result.water`
+    // e desalinharia todos os seguintes (espelho de água do vizinho,
+    // rio próprio nunca renderizado).
+    for (body, &(is_lake, spec_i)) in result.water.iter().zip(&result.water_specs) {
+        let (name, mesh) = if is_lake {
+            let lake = &features.lakes[spec_i];
+            ("lake", lake_water_mesh(lake, body.water_y))
+        } else {
+            let river = &features.rivers[spec_i];
+            ("river", river_water_mesh(river, body))
         };
-        let mesh = lake_water_mesh(lake, body.water_y);
         if mesh.indices.is_empty() {
             continue;
         }
         let handle = meshes.add(to_bevy_mesh(&mesh));
         world
             .spawn((
-                Name::new(format!("lake {i}")),
-                Transform::default(),
-                Visibility::Inherited,
-                ChildOf(parent),
-            ))
-            .insert((Mesh3d(handle), MeshMaterial3d(water_material.clone())));
-    }
-    for (i, river) in features.rivers.iter().enumerate() {
-        let Some(body) = result.water.get(n_lakes + i) else {
-            continue;
-        };
-        let mesh = river_water_mesh(river, body);
-        if mesh.indices.is_empty() {
-            continue;
-        }
-        let handle = meshes.add(to_bevy_mesh(&mesh));
-        world
-            .spawn((
-                Name::new(format!("river {i}")),
+                Name::new(format!("{name} {spec_i}")),
                 Transform::default(),
                 Visibility::Inherited,
                 ChildOf(parent),

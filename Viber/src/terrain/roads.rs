@@ -173,7 +173,7 @@ pub struct WaySpec {
 }
 
 /// `<Segment a b [via] [width] [profile]>` — one road between two ways.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct SegmentSpec {
     pub a: String,
     pub b: String,
@@ -357,14 +357,31 @@ impl RoadNetworkSpec {
                     if resolved_profile(s2) != profile || resolved_width(s2) != width {
                         break;
                     }
-                    let Some(at) = way_at_checked(&self.ways, &s2.b) else {
+                    // Orientação: o próximo segmento pode SAIR do way
+                    // (s2.a == last, caso natural) ou CHEGAR a ele
+                    // (s2.b == last, autoria head-to-head — antes o ramo
+                    // era consumido ao contrário e a estrada perdida).
+                    if s2.a == last {
+                        let Some(at) = way_at_checked(&self.ways, &s2.b) else {
+                            break;
+                        };
+                        used[j] = true;
+                        points.extend_from_slice(&s2.via);
+                        points.push(at);
+                        last_id = s2.b.clone();
+                        head = j;
+                    } else if s2.b == last {
+                        let Some(at) = way_at_checked(&self.ways, &s2.a) else {
+                            break;
+                        };
+                        used[j] = true;
+                        points.extend(s2.via.iter().rev().copied());
+                        points.push(at);
+                        last_id = s2.a.clone();
+                        head = j;
+                    } else {
                         break;
-                    };
-                    used[j] = true;
-                    points.extend_from_slice(&s2.via);
-                    points.push(at);
-                    last_id = s2.b.clone();
-                    head = j;
+                    }
                 }
                 let mut tail = i;
                 loop {
@@ -380,16 +397,35 @@ impl RoadNetworkSpec {
                     if resolved_profile(s2) != profile || resolved_width(s2) != width {
                         break;
                     }
-                    let Some(at) = way_at_checked(&self.ways, &s2.a) else {
+                    if s2.b == first {
+                        // Natural: s2.a → via → first. Prepend [way_a, via…]
+                        // — as via inserem-se em 1 (não 1+k) para preservar
+                        // a ordem autoral (1+k invertia ≥2 vias).
+                        let Some(at) = way_at_checked(&self.ways, &s2.a) else {
+                            break;
+                        };
+                        used[j] = true;
+                        points.insert(0, at);
+                        for v in s2.via.iter().rev() {
+                            points.insert(1, *v);
+                        }
+                        first_id = s2.a.clone();
+                        tail = j;
+                    } else if s2.a == first {
+                        // Reverso: s2.b → via.rev → first.
+                        let Some(at) = way_at_checked(&self.ways, &s2.b) else {
+                            break;
+                        };
+                        used[j] = true;
+                        points.insert(0, at);
+                        for v in s2.via.iter() {
+                            points.insert(1, *v);
+                        }
+                        first_id = s2.b.clone();
+                        tail = j;
+                    } else {
                         break;
-                    };
-                    used[j] = true;
-                    points.insert(0, at);
-                    for (k, v) in s2.via.iter().rev().enumerate() {
-                        points.insert(1 + k, *v);
                     }
-                    first_id = s2.a.clone();
-                    tail = j;
                 }
             }
 
@@ -837,7 +873,8 @@ fn refine_organic(path: &RoadPath) -> (Vec<Vec2>, Vec<f32>) {
 }
 
 /// Builds the road ribbon draped on the carved terrain (world-space
-/// positions, edge alpha feather, `v` = arc length / texture scale).
+/// positions, edge alpha feather, UVs em metros/scale — world-space, a
+/// textura fica fixa no mundo).
 /// Bridge roads render as a flat deck at `deck_y`.
 /// Loop de polish (2026-09-01): caminho refinado orgânico (subdivisão +
 /// suavização de cantos + noise lateral/wobble determinísticos) e saias
@@ -858,16 +895,12 @@ pub fn road_ribbon_mesh(grid: &BrushGrid, path: &RoadPath, spec: &RoadSpec) -> C
         1.0
     };
     let feather_eff = feather.max(0.001);
-    let mut arc = 0.0;
     // Seis vértices por estação: [skirtL, edgeL, coreL, coreR, edgeR,
     // skirtR]. O deck (edge/core) mantém o feather do VibeGame; as saias
     // descem RIBBON_SKIRT_DEPTH a partir das bordas com alpha 1 — vistas de
     // lado cobrem o corte do leito nas encostas; vistas de cima são
     // degeneradas (mesma lateral, menor altura).
     for (i, st) in stations.iter().enumerate() {
-        if i > 0 {
-            arc += st.distance(stations[i - 1]);
-        }
         let seg_normal = |d: Vec2| Vec2::new(-d.y, d.x);
         let in_n = if i > 0 {
             seg_normal((*st - stations[i - 1]).normalize_or_zero())
@@ -1199,6 +1232,87 @@ mod tests {
     }
 
     #[test]
+    fn test_network_merges_head_to_head_segments() {
+        // Autoria head-to-head: os DOIS segmentos apontam PARA o way b
+        // (a→b e d→b, ambos terminando no canto). Antes a fusão assumia
+        // tail-to-head, consumia o segmento reverso, duplicava o ponto b
+        // e PERDIA a perna d—b sem aviso nenhum.
+        let net = RoadNetworkSpec {
+            default_width: 4.0,
+            ways: vec![
+                WaySpec { id: "a".into(), at: Vec2::new(0.0, 20.0), width: None },
+                WaySpec { id: "b".into(), at: Vec2::new(20.0, 20.0), width: None },
+                WaySpec { id: "d".into(), at: Vec2::new(20.0, 0.0), width: None },
+            ],
+            segments: vec![
+                SegmentSpec {
+                    a: "a".into(),
+                    b: "b".into(),
+                    ..SegmentSpec::default()
+                },
+                SegmentSpec {
+                    a: "d".into(),
+                    b: "b".into(),
+                    ..SegmentSpec::default()
+                },
+            ],
+            ..RoadNetworkSpec::default()
+        };
+        let roads = net.expand();
+        assert_eq!(roads.len(), 1, "head-to-head chain collapses into one path");
+        assert_eq!(
+            roads[0].path,
+            vec![
+                Vec2::new(0.0, 20.0),
+                Vec2::new(20.0, 20.0),
+                Vec2::new(20.0, 0.0)
+            ]
+        );
+    }
+
+    #[test]
+    fn test_network_merge_keeps_via_order_across_degree2_way() {
+        // ≥2 pontos de via no segmento da cauda: a fusão preserva a ordem
+        // autoral das vias (a ordem invertida curvava o rio/estrada ao
+        // contrário através do canto).
+        let net = RoadNetworkSpec {
+            default_width: 4.0,
+            ways: vec![
+                WaySpec { id: "a".into(), at: Vec2::new(0.0, 0.0), width: None },
+                WaySpec { id: "b".into(), at: Vec2::new(0.0, 30.0), width: None },
+                WaySpec { id: "c".into(), at: Vec2::new(30.0, 30.0), width: None },
+            ],
+            segments: vec![
+                SegmentSpec {
+                    a: "c".into(),
+                    b: "b".into(),
+                    via: vec![Vec2::new(20.0, 30.0), Vec2::new(10.0, 30.0)],
+                    width: None,
+                    profile: None,
+                },
+                SegmentSpec {
+                    a: "b".into(),
+                    b: "a".into(),
+                    ..SegmentSpec::default()
+                },
+            ],
+            ..RoadNetworkSpec::default()
+        };
+        let roads = net.expand();
+        assert_eq!(roads.len(), 1);
+        assert_eq!(
+            roads[0].path,
+            vec![
+                Vec2::new(30.0, 30.0),
+                Vec2::new(20.0, 30.0),
+                Vec2::new(10.0, 30.0),
+                Vec2::new(0.0, 30.0),
+                Vec2::new(0.0, 0.0),
+            ]
+        );
+    }
+
+    #[test]
     fn test_network_extends_ends_at_shared_junction() {
         // T: B tem grau 3 — cada ribbon estende para lá do B (VibeGame
         // extendPathEnds) para não deixar cunha de chão nu no canto externo.
@@ -1516,10 +1630,12 @@ mod tests {
         let (c, a1, a0) = (v(0), v(mesh.indices[1]), v(mesh.indices[2]));
         let n = (a1 - c).cross(a0 - c);
         assert!(n.y > 0.0, "fan winding must face up: {n}");
-        // Alpha: centro/opaco 1, anel externo 0.
+        // Alpha: layout intercalado (opaco, feather) por segmento — centro e
+        // vértices opacos a 1, vértices feather a 0.
         assert!((mesh.colors[0][3] - 1.0).abs() < 1e-5);
         assert!((mesh.colors[1][3] - 1.0).abs() < 1e-5);
-        assert_eq!(mesh.colors[3][3], 0.0);
+        assert_eq!(mesh.colors[2][3], 0.0, "primeiro vértice feather");
+        assert_eq!(mesh.colors[66][3], 0.0, "último vértice feather");
     }
 
     #[test]
