@@ -534,8 +534,10 @@ mod tests {
             "out.color = vec4<f32>(s.rgb, 1.0);", // splat crua como cor final
             "T5:",
         ];
-        for copy in ["assets/shaders/terrain_chunk.wgsl", "worlds/shaders/terrain_chunk.wgsl"]
-        {
+        for copy in [
+            "assets/shaders/terrain_chunk.wgsl",
+            "worlds/shaders/terrain_chunk.wgsl",
+        ] {
             let Ok(source) = std::fs::read_to_string(copy) else {
                 // A cópia ainda não existe (nunca houve um run que a
                 // escrevesse) — nada a guardar.

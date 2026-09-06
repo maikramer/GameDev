@@ -494,8 +494,7 @@ pub fn compute_placements(
                 let mut min_h = terrain.height;
                 let mut max_h = terrain.height;
                 for i in 0..SPAWN_RING_SAMPLES {
-                    let a = (i as f32 + 0.5) / SPAWN_RING_SAMPLES as f32
-                        * std::f32::consts::TAU;
+                    let a = (i as f32 + 0.5) / SPAWN_RING_SAMPLES as f32 * std::f32::consts::TAU;
                     let point = bevy::math::Vec2::new(
                         pos.x + a.cos() * ring_radius,
                         pos.y + a.sin() * ring_radius,
@@ -546,8 +545,7 @@ pub fn compute_placements(
             // da ordem do XML, contra o contrato "o teste usa footprint ×
             // scale-max (conservador); o registo usa a escala real".
             if footprint > 0.0 {
-                occupancy
-                    .register(pos.x, pos.y, footprint * scale_u * axis.x.max(axis.z));
+                occupancy.register(pos.x, pos.y, footprint * scale_u * axis.x.max(axis.z));
             }
             // Y de assentamento: plantas aquáticas À SUPERFÍCIE da água
             // (VibeGame "in-water: só superfície do lago, Y = waterY"), nunca
@@ -917,11 +915,9 @@ pub fn instantiate_spawn_groups(
                     <= near_radius
             }),
             road: runtime.on_road(x, z),
-            cliff: cliffs
-                .as_deref()
-                .is_some_and(|mask| {
-                    mask.is_cliff_within(bevy::math::Vec2::new(x, z), cliff_clearance)
-                }),
+            cliff: cliffs.as_deref().is_some_and(|mask| {
+                mask.is_cliff_within(bevy::math::Vec2::new(x, z), cliff_clearance)
+            }),
             // Laje fina por cima de vazio (banda de arco, brow de overhang
             // raso): o gate rejeita — raízes não nascem em pedra suspensa.
             // Em mundo flat é sempre false, sem custo.
@@ -1453,7 +1449,10 @@ mod tests {
         let mut occ = SpawnOccupancy::new();
         occ.register(0.0, 0.0, 100_000.0);
         assert!(!occ.is_free(0.0, 0.0, 0.0), "inside the giant exclusion");
-        assert!(!occ.is_free(50_000.0, 0.0, 1.0), "50 km out is still inside");
+        assert!(
+            !occ.is_free(50_000.0, 0.0, 1.0),
+            "50 km out is still inside"
+        );
         // Raio + folga do disco: além disso (100000 + 1 + 0.6), livre.
         assert!(occ.is_free(100_002.0, 0.0, 1.0));
     }
@@ -1645,7 +1644,10 @@ mod tests {
         };
         let (out, stats) = compute_placements(&s, &mut SpawnOccupancy::new(), &mut cliffy);
         assert!(out.is_empty(), "cliff terrain is a no-spawn zone");
-        assert_eq!(stats.rejected_cliff, stats.attempts, "every attempt hits the cliff gate");
+        assert_eq!(
+            stats.rejected_cliff, stats.attempts,
+            "every attempt hits the cliff gate"
+        );
         s.avoid_cliff = false;
         let (out, stats) = compute_placements(&s, &mut SpawnOccupancy::new(), &mut cliffy);
         assert_eq!(out.len(), 10, "opt-out restores placement");
@@ -1698,7 +1700,10 @@ mod tests {
         };
         let (out, stats) = compute_placements(&s, &mut SpawnOccupancy::new(), &mut mixed);
         assert!(out.is_empty(), "the ring owns the gate, not the foot");
-        assert!(stats.rejected_slope_ring > 0, "rejection reason is the ring");
+        assert!(
+            stats.rejected_slope_ring > 0,
+            "rejection reason is the ring"
+        );
         // Com o limite frouxo, centro e anel passam — prova de que o centro
         // nunca foi o bloqueio.
         s.max_slope_deg = 89.0;

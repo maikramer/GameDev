@@ -77,7 +77,9 @@ fn bench_chunk_build_cost_per_lod() {
         let step = 1usize << lod;
         let p = params(step);
         // aquecer
-        let warm = build_chunk_mesh(&field, &p, None).expect("build").expect("mesh");
+        let warm = build_chunk_mesh(&field, &p, None)
+            .expect("build")
+            .expect("mesh");
         let runs = 20;
         let start = Instant::now();
         for _ in 0..runs {

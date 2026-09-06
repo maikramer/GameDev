@@ -2,7 +2,7 @@
 use std::{collections::HashSet, path::Path};
 
 use viber::{
-    ui::bind::{split_class_bind, UiData},
+    ui::bind::{UiData, split_class_bind},
     xml::{self, XmlNode},
 };
 
@@ -25,22 +25,22 @@ fn shipped_hud_has_unique_ids_and_valid_bindings() {
             if let Some(id) = node.attr("id") {
                 assert!(ids.insert(id.to_owned()), "duplicate id {id}");
             }
-                if file == "world/hud.xml" {
-                    if let Some(binding) = node.attr("bind") {
-                        // Class-binds (`expr:classe`) resolvem só a parte do
-                        // nome — a classe é aplicada, não lida do UiData.
-                        let name = match split_class_bind(binding) {
-                            Some((name, class)) => {
-                                assert!(!class.is_empty(), "class-bind {binding} sem classe");
-                                name
-                            }
-                            None => binding,
-                        };
-                        assert!(
-                            UiData::default().get(name).is_some(),
-                            "unknown binding {binding}"
-                        );
-                    }
+            if file == "world/hud.xml" {
+                if let Some(binding) = node.attr("bind") {
+                    // Class-binds (`expr:classe`) resolvem só a parte do
+                    // nome — a classe é aplicada, não lida do UiData.
+                    let name = match split_class_bind(binding) {
+                        Some((name, class)) => {
+                            assert!(!class.is_empty(), "class-bind {binding} sem classe");
+                            name
+                        }
+                        None => binding,
+                    };
+                    assert!(
+                        UiData::default().get(name).is_some(),
+                        "unknown binding {binding}"
+                    );
+                }
                 if node.tag == "UiIcon" {
                     let src = node.attr("src").expect("icon source");
                     assert!(

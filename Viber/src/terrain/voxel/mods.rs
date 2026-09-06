@@ -523,7 +523,10 @@ mod tests {
         let a = arch();
         let b = a.bounds();
         assert!(b.contains(Vec3::new(100.0, 6.0, 100.0)));
-        assert!(b.contains(Vec3::new(100.0 + 5.2, 9.0, 100.0)), "leg in bounds");
+        assert!(
+            b.contains(Vec3::new(100.0 + 5.2, 9.0, 100.0)),
+            "leg in bounds"
+        );
         assert!(b.contains(Vec3::new(100.0, 13.5, 100.0)), "cap in bounds");
         assert!(
             !b.contains(Vec3::new(100.0, 30.0, 100.0)),

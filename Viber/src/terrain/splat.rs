@@ -549,17 +549,17 @@ pub fn weights_at(
     let n_dirt_region = value_noise(x / NOISE_DIRT_REGION, z / NOISE_DIRT_REGION, p.seed, 5);
     let n_forest_region = value_noise(x / NOISE_FOREST_REGION, z / NOISE_FOREST_REGION, p.seed, 6);
 
+    // ── Shore: sand on lake/river floors, fading out across the shore band.
+    // (Antes do bloco da neve: a supressão de neve submersa precisa das
+    // mesmas máscaras de profundidade que o leito.)
+    let (sand_mask, mud_band, shallow, bed_floor) = shore_weights(x, z, y, ctx);
+
     // ── Hard override layers first: cliffs and the snow line take budget
     //    away from everything below them (rock beats snow on a cliff, the
     //    same precedence the old vertex tint used).
     //
     // As arestas seguem o bioma: nos picos a rocha nasce mais cedo e a neve
     // muito mais baixo; no deserto a neve é empurrada para fora do mapa.
-    // ── Shore: sand on lake/river floors, fading out across the shore band.
-    // (Antes do bloco da neve: a supressão de neve submersa precisa das
-    // mesmas máscaras de profundidade que o leito.)
-    let (sand_mask, mud_band, shallow, bed_floor) = shore_weights(x, z, y, ctx);
-
     let rock0 = (0.30 + climate.rock_bias).clamp(0.05, 0.9);
     let stone = smoothstep(rock0, rock0 + 0.22, slope);
     let snow_h = (p.snow_height + climate.snow_bias).clamp(0.0, 1.5);
@@ -932,7 +932,11 @@ fn pack_chunk_splat(
     // peso) — num chunk de gorge com lago ao pé os dois coexistem em vez
     // de um apagar o outro.
     if force_bed && !top.contains(&SLOT_RIVERBED) {
-        let pos = if force_rock && top[3] == SLOT_MOUNTAIN_STONE { 2 } else { 3 };
+        let pos = if force_rock && top[3] == SLOT_MOUNTAIN_STONE {
+            2
+        } else {
+            3
+        };
         top[pos] = SLOT_RIVERBED;
     }
 
@@ -1272,7 +1276,7 @@ mod tests {
     #[test]
     fn test_talus_apron_paints_gravel() {
         use crate::terrain::brush::BrushGrid;
-        use crate::terrain::cliffs::{carve_cliff, CliffSide, CliffSpec};
+        use crate::terrain::cliffs::{CliffSide, CliffSpec, carve_cliff};
         // Natural step + talus apron on the drop side.
         let mut grid =
             BrushGrid::new(vec![0u16; 128 * 128], 128, 128, 128.0, 50.0, 1.0).expect("grid");

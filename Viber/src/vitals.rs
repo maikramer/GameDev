@@ -28,6 +28,7 @@
 use bevy::prelude::*;
 
 use crate::player::Player;
+use crate::profiler::{Group, timed};
 
 /// Default HP pool (also the HUD fallback when no `Health` exists yet).
 pub const DEFAULT_HEALTH: f32 = 100.0;
@@ -239,15 +240,17 @@ pub fn level_up_fx(
             clip: crate::ambient::SfxClip::LevelUp,
             position: None,
         });
-        toasts.write(crate::luau::ScriptToast(format!("NÍVEL {}", event.new_level)));
+        toasts.write(crate::luau::ScriptToast(format!(
+            "NÍVEL {}",
+            event.new_level
+        )));
         if let Some(fx) = postfx.as_deref_mut() {
             fx.kick_exposure(LEVELUP_KICK_EV);
         }
         // as_deref_mut por iteração: os assets têm de sobreviver a vários
         // eventos no mesmo frame (Option<ResMut> não é Copy). Já são
         // `&mut Assets<_>` — passam direto ao spawn_burst.
-        let (Some(meshes), Some(materials)) =
-            (meshes.as_deref_mut(), materials.as_deref_mut())
+        let (Some(meshes), Some(materials)) = (meshes.as_deref_mut(), materials.as_deref_mut())
         else {
             continue; // apps mínimas sem AssetPlugin: bursts não aplicam
         };
@@ -296,7 +299,10 @@ impl Plugin for VitalsPlugin {
         app.add_message::<LevelUpEvent>()
             .add_message::<crate::ambient::SfxEvent>()
             .add_message::<crate::luau::ScriptToast>()
-            .add_systems(bevy::app::Update, (level_up_detector, level_up_fx));
+            .add_systems(
+                bevy::app::Update,
+                (timed(Group::World, level_up_detector), level_up_fx),
+            );
     }
 }
 
@@ -475,10 +481,7 @@ mod tests {
     #[derive(Resource, Default)]
     struct SeenLevelUps(Vec<u32>);
 
-    fn record_level_ups(
-        mut reader: MessageReader<LevelUpEvent>,
-        mut seen: ResMut<SeenLevelUps>,
-    ) {
+    fn record_level_ups(mut reader: MessageReader<LevelUpEvent>, mut seen: ResMut<SeenLevelUps>) {
         for event in reader.read() {
             seen.0.push(event.new_level);
         }

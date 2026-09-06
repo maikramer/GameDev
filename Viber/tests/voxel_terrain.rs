@@ -265,10 +265,10 @@ fn test_two_runs_of_the_same_world_are_byte_identical() {
         max_height: spec.max_height,
         uses_layer_material: true,
     };
-    let mesh_a = build_voxel_mesh(&|p| field_a.density(&grid_a, p), &params)
-        .expect("chunk meshes (a)");
-    let mesh_b = build_voxel_mesh(&|p| field_b.density(&grid_b, p), &params)
-        .expect("chunk meshes (b)");
+    let mesh_a =
+        build_voxel_mesh(&|p| field_a.density(&grid_a, p), &params).expect("chunk meshes (a)");
+    let mesh_b =
+        build_voxel_mesh(&|p| field_b.density(&grid_b, p), &params).expect("chunk meshes (b)");
     let bits_a: Vec<u32> = mesh_a
         .positions
         .iter()
@@ -280,7 +280,10 @@ fn test_two_runs_of_the_same_world_are_byte_identical() {
         .flat_map(|p| p.iter().map(|c| c.to_bits()))
         .collect();
     assert_eq!(bits_a, bits_b, "vertex bits diverged between runs");
-    assert_eq!(mesh_a.indices, mesh_b.indices, "indices diverged between runs");
+    assert_eq!(
+        mesh_a.indices, mesh_b.indices,
+        "indices diverged between runs"
+    );
 }
 
 #[test]
@@ -297,8 +300,7 @@ fn test_the_tunnel_mesh_has_no_degenerate_triangles() {
         max_height: spec.max_height,
         uses_layer_material: true,
     };
-    let data = build_voxel_mesh(&|p| field.density(&grid, p), &params)
-        .expect("chunk meshes");
+    let data = build_voxel_mesh(&|p| field.density(&grid, p), &params).expect("chunk meshes");
     assert!(data.indices.len() >= 3);
     // Area^2 of every triangle must clear a 1 mm² floor: surface nets emits
     // quads between distinct lattice points, so a zero-area triangle means a
@@ -354,8 +356,7 @@ fn test_a_fully_interior_tunnel_chunk_is_watertight() {
                     max_height: spec.max_height,
                     uses_layer_material: true,
                 };
-                let Some(data) = build_voxel_mesh(&|p| field.density(&grid, p), &params)
-                else {
+                let Some(data) = build_voxel_mesh(&|p| field.density(&grid, p), &params) else {
                     continue;
                 };
                 // Tunnel chunks only: the bare terrain sheet has no roof,

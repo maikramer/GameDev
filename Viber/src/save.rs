@@ -322,16 +322,17 @@ fn options_system(
         // Sem herói (ausente/Disabled) não há estado real para gravar — cair
         // nos defaults ((100,100),(0,100), origem) SOBRESCREVIA um save bom.
         // Trata como falha: toast + SFX de erro, sem tocar no disco.
-        let hero_state = heroes.single_mut().ok().map(
-            |(hp, xp, t, _player, level, _xp_level)| {
+        let hero_state = heroes
+            .single_mut()
+            .ok()
+            .map(|(hp, xp, t, _player, level, _xp_level)| {
                 (
                     (hp.current, hp.max),
                     (xp.current, xp.next),
                     [t.translation.x, t.translation.y, t.translation.z],
                     level.as_ref().map(|l| l.level).unwrap_or(0),
                 )
-            },
-        );
+            });
         if let Some((health, xp, position, level)) = hero_state {
             let game = capture(
                 &vault,
@@ -358,9 +359,7 @@ fn options_system(
                 });
             }
         } else {
-            toasts.write(ScriptToast(
-                "Falha ao gravar: sem herói para gravar".into(),
-            ));
+            toasts.write(ScriptToast("Falha ao gravar: sem herói para gravar".into()));
             sfx.write(crate::ambient::SfxEvent {
                 clip: crate::ambient::SfxClip::Error,
                 position: None,

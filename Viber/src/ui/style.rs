@@ -2430,11 +2430,7 @@ mod tests {
         // scale::ui_viewport — os testes de runtime cobrem a conversão).
         let portrait = resolve("anchor-target", (720.0, 1152.0));
         assert_eq!(portrait.top, Some(Measure::plain(Val::Px(198.0))));
-        let stock_classes = vec![
-            "action-slot".into(),
-            "consumable".into(),
-            "depleted".into(),
-        ];
+        let stock_classes = vec!["action-slot".into(), "consumable".into(), "depleted".into()];
         let stock = sheet.resolve(
             &[root, element("uipanel", &stock_classes)],
             (1920.0, 1080.0),

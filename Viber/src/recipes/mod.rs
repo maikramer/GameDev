@@ -17,11 +17,11 @@ use bevy::math::Vec2;
 
 use crate::terrain::TerrainSpec;
 use crate::terrain::cliffs::{CliffProfile, CliffSide, CliffSpec};
-use crate::terrain::voxel::ArchSpec;
-use crate::terrain::voxel::CaveSpec;
 use crate::terrain::decal::GroundDecalSpec;
 use crate::terrain::roads::{RoadNetworkSpec, RoadProfile, RoadSpec, SegmentSpec, WaySpec};
 use crate::terrain::spec::TerrainPadSpec;
+use crate::terrain::voxel::ArchSpec;
+use crate::terrain::voxel::CaveSpec;
 use crate::terrain::water::{LakeSpec, RiverSpec};
 use crate::xml::{XmlNode, values};
 
@@ -3932,7 +3932,10 @@ mod tests {
         // Vegetation partilha os mesmos defaults.
         let veg = node(
             "Vegetation",
-            &[("meshes", "/assets/meshes/vegetation/grass.glb"), ("density-per-km2", "100")],
+            &[
+                ("meshes", "/assets/meshes/vegetation/grass.glb"),
+                ("density-per-km2", "100"),
+            ],
         );
         let (spec, _) = parse_one(&veg).unwrap();
         let EntityKind::Vegetation { spec } = spec.kind else {
@@ -4155,7 +4158,10 @@ mod tests {
                     "Cliff",
                     &[("path", "0 -10 0 10"), ("height", "18"), ("angle", "60")],
                 ),
-                node("Cave", &[("path", "-20 0 20 0"), ("radius", "3"), ("depth", "10")]),
+                node(
+                    "Cave",
+                    &[("path", "-20 0 20 0"), ("radius", "3"), ("depth", "10")],
+                ),
                 node("Road", &[]),
                 node("RoadNetwork", &[]),
                 node("GltfScene", &[("url", "/assets/meshes/x.glb")]),
@@ -4416,7 +4422,7 @@ mod tests {
         assert_eq!(spec.bank_width, 6.4);
     }
 
-        /// Voxels de água: gorge/overhang, pools, cascades, spring e ilhas
+    /// Voxels de água: gorge/overhang, pools, cascades, spring e ilhas
     /// parseiam (e o vocabulário de bank estende-se sem quebrar o antigo).
     #[test]
     fn test_water_voxel_attrs_parse() {
@@ -4444,11 +4450,7 @@ mod tests {
 
         let (spec, w) = parse_one(&node(
             "Lake",
-            &[
-                ("at", "10 -10"),
-                ("radius", "18"),
-                ("bank", "overhang"),
-            ],
+            &[("at", "10 -10"), ("radius", "18"), ("bank", "overhang")],
         ))
         .unwrap();
         let EntityKind::Lake { spec } = spec.kind else {
@@ -4460,11 +4462,7 @@ mod tests {
         // Ilha como FILHO do lago, com o offset do grupo aplicado ao `at`.
         let mut lake = node(
             "Lake",
-            &[
-                ("at", "10 -10"),
-                ("radius", "18"),
-                ("depth", "2.4"),
-            ],
+            &[("at", "10 -10"), ("radius", "18"), ("depth", "2.4")],
         );
         lake.children.push(node(
             "Island",
@@ -4486,7 +4484,7 @@ mod tests {
         assert!(parse_one(&bad).is_err());
     }
 
-#[test]
+    #[test]
     fn test_river_needs_two_points() {
         assert!(parse_one(&node("River", &[("path", "4 215")])).is_err());
     }

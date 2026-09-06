@@ -13,12 +13,12 @@ use bevy::world_serialization::WorldAssetRoot;
 use super::{EntityKind, EntitySpec, MaterialSpec, ParsedWorld, Shape, TransformSpec};
 use crate::terrain::TerrainSpec;
 use crate::terrain::cliffs::CliffSpec;
-use crate::terrain::voxel::ArchSpec;
-use crate::terrain::voxel::CaveSpec;
 use crate::terrain::decal::GroundDecalSpec;
 use crate::terrain::features::TerrainFeatures;
 use crate::terrain::roads::{RoadNetworkSpec, RoadSpec, SegmentSpec, WaySpec};
 use crate::terrain::spec::TerrainPadSpec;
+use crate::terrain::voxel::ArchSpec;
+use crate::terrain::voxel::CaveSpec;
 use crate::terrain::water::{LakeSpec, RiverSpec};
 
 /// Marker for `<OrbitCamera>`: keeps its offset from a named target.

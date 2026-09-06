@@ -794,7 +794,11 @@ mod tests {
         grid.begin_stroke("step");
         for z in 0..128 {
             for x in 0..128 {
-                let h = if grid.cell_center(x, z).x < 60.0 { 24.0 } else { 2.0 };
+                let h = if grid.cell_center(x, z).x < 60.0 {
+                    24.0
+                } else {
+                    2.0
+                };
                 grid.set_cell_height(x, z, h);
             }
         }
@@ -844,7 +848,7 @@ mod tests {
     /// wall fragment reads under `VERTEX_COLORS`.
     #[test]
     fn test_cliff_channels_pack_factor_and_wall_space() {
-        use crate::terrain::cliffs::{carve_cliff, CliffProfile, CliffSide, CliffSpec};
+        use crate::terrain::cliffs::{CliffProfile, CliffSide, CliffSpec, carve_cliff};
         // Natural step: plateau at x<0 (20 m), valley at x>=0 (2 m).
         let mut grid =
             BrushGrid::new(vec![0u16; 128 * 128], 128, 128, 128.0, 50.0, 1.0).expect("grid");
@@ -869,9 +873,13 @@ mod tests {
         };
         let line = carve_cliff(&mut grid, &spec, 0).expect("carve");
         let mask = crate::terrain::cliffs::CliffMask::build_with(&grid, 50.0, 120.0, 4.0, 8.0);
-        let mesh = build_chunk_mesh(&grid, &base_params(Vec3::new(-64.0, 0.0, -64.0), 128.0, 1), Some(&mask))
-            .expect("build")
-            .expect("data");
+        let mesh = build_chunk_mesh(
+            &grid,
+            &base_params(Vec3::new(-64.0, 0.0, -64.0), 128.0, 1),
+            Some(&mask),
+        )
+        .expect("build")
+        .expect("data");
 
         let (mut brow, mut toe, mut off_mask) = (None, None, None);
         for (pos, color) in mesh.positions.iter().zip(&mesh.colors) {
@@ -1173,7 +1181,10 @@ mod tests {
         let fine_min = (0..fine_verts)
             .map(fine_border)
             .fold(f32::INFINITY, f32::min);
-        assert!(fine_min < 3.0, "a valeta falta à polilinha fina: {fine_min}");
+        assert!(
+            fine_min < 3.0,
+            "a valeta falta à polilinha fina: {fine_min}"
+        );
 
         let verts = 9usize; // 32 / 4 + 1
         let grid_count = verts * verts;

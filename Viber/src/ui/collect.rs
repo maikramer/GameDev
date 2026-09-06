@@ -396,10 +396,15 @@ pub fn collect_ui_reveals(
     // O `display-name` da região activa vem do XML (Tinta Quente: o mundo é
     // quem nomeia os sítios); sem attr, `zone_display_name` cai na tabela.
     let authored = zone.as_deref().and_then(|id| {
-        biomes.as_deref()?.list.iter().find(|r| r.id == id).and_then(|r| {
-            let name = r.display_name.trim();
-            (!name.is_empty()).then(|| name.to_string())
-        })
+        biomes
+            .as_deref()?
+            .list
+            .iter()
+            .find(|r| r.id == id)
+            .and_then(|r| {
+                let name = r.display_name.trim();
+                (!name.is_empty()).then(|| name.to_string())
+            })
     });
 
     if !memory.seeded {
@@ -678,10 +683,7 @@ mod tests {
         );
         assert_eq!(zone_display_name(None, Some("banana-tree")), "Banana Tree");
         // Um attr em branco não conta como nome — cai ao nível abaixo.
-        assert_eq!(
-            zone_display_name(Some("   "), Some("desert")),
-            "Ermo Rubro"
-        );
+        assert_eq!(zone_display_name(Some("   "), Some("desert")), "Ermo Rubro");
         // Com id desconhecido E sem attr, o id deriva o título.
         assert_eq!(zone_display_name(Some("Nome"), None), "Nome");
     }
@@ -702,7 +704,10 @@ mod tests {
                     current: 100.0,
                     max: 100.0,
                 },
-                Xp { current: 0, next: 100 },
+                Xp {
+                    current: 0,
+                    next: 100,
+                },
             ))
             .id();
         app.update();

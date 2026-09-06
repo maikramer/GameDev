@@ -437,10 +437,6 @@ fn read_header(path: &Path, n: u64) -> Option<Vec<u8>> {
 const KTX2_MAGIC: [u8; 12] = [
     0xAB, 0x4B, 0x54, 0x58, 0x20, 0x32, 0x30, 0xBB, 0x0D, 0x0A, 0x1A, 0x0A,
 ];
-/// Família ETC2/EAC crua: VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK (147 = 0x93) até
-/// VK_FORMAT_EAC_R11G11_SNORM_BLOCK (156 = 0x9C) — idem crate `ktx2` 0.5,
-/// enum `Format`. UASTC costuma declarar VK_FORMAT_R8G8B8A8_* (37) e passa.
-const KTX2_ETC2_EAC: std::ops::RangeInclusive<u32> = 147..=156;
 
 /// O `.ktx2` merece sniffing próprio: ETC1S/BasisLZ é FATAL na engine (o
 /// Bevy 0.19 não descomprime BasisLZ — regra "nunca etc1s") e entrava como
@@ -470,7 +466,11 @@ fn audit_ktx2(path: &Path, context: &str, issues: &mut Vec<AuditIssue>) {
             "Basis Universal (vkFormat 0 — ETC1S/BasisLZ) — a engine (Bevy 0.19) não descomprime BasisLZ; reexporta em UASTC (`text3d finish`)"
                 .to_string(),
         )
-    } else if KTX2_ETC2_EAC.contains(&vk_format) {
+    } else if (147..=156).contains(&vk_format) {
+        // Família ETC2/EAC crua: VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK
+        // (147 = 0x93) até VK_FORMAT_EAC_R11G11_SNORM_BLOCK (156 = 0x9C) —
+        // discriminantes conferidos na crate `ktx2` 0.5, enum `Format`.
+        // UASTC costuma declarar VK_FORMAT_R8G8B8A8_* (37) e passa.
         Some(format!(
             "ETC2/EAC cru (vkFormat {vk_format}) — desktop não amostra ETC2; reexporta em UASTC (`text3d finish`)"
         ))
@@ -498,7 +498,7 @@ fn check_webp(path: &Path, context: &str, issues: &mut Vec<AuditIssue>) {
     let Some(bytes) = read_header(path, 12) else {
         return;
     };
-    if bytes.len() < 12 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WEBP" {
+    if bytes.len() < 12 || !bytes.starts_with(b"RIFF") || !bytes[8..12].starts_with(b"WEBP") {
         issues.push(AuditIssue {
             severity: Severity::Warning,
             message: format!(

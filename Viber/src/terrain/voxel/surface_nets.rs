@@ -73,7 +73,6 @@ pub struct VoxelChunkParams {
 }
 
 impl VoxelChunkParams {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         origin: Vec3,
         voxel_size: f32,
@@ -227,7 +226,7 @@ pub fn build_voxel_mesh(
                 }
 
                 // Cell-local average -> chunk-local meters.
-                let mut local = sum / count;
+                let local = sum / count;
                 // NOTE: a sub-voxel thin sheet (a carved void passing a few
                 // centimetres under the natural terrain, e.g. terrace lips)
                 // puts both its crossings in one cell, and the averaged
@@ -370,15 +369,13 @@ pub fn build_voxel_mesh(
                             if len < 1e-9 {
                                 return f32::NEG_INFINITY;
                             }
-                            let n = (vn[i] + vn[j] + vn[k])
-                                .try_normalize()
-                                .unwrap_or(gn / len);
+                            let n = (vn[i] + vn[j] + vn[k]).try_normalize().unwrap_or(gn / len);
                             worst = worst.min(gn.dot(n) / len);
                         }
                         worst
                     };
-                    let use_alt = diag_quality(v[1], v[2], v[3], v[0])
-                        > diag_quality(v[0], v[1], v[2], v[3]);
+                    let use_alt =
+                        diag_quality(v[1], v[2], v[3], v[0]) > diag_quality(v[0], v[1], v[2], v[3]);
 
                     // d0 < 0 means solid at q and empty at q+axis, so the
                     // surface faces +axis and this cycle is outward.
