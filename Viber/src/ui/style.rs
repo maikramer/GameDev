@@ -632,6 +632,10 @@ pub struct StyleProps {
     pub font_weight: Option<f32>,
     /// `text-align` horizontal.
     pub text_align: Option<bevy::text::Justify>,
+    /// `line-height` — px (`18px`) ou múltiplo do font-size (`1.35`, `120%`).
+    pub line_height: Option<bevy::text::LineHeight>,
+    /// `align-content` — alinhamento das LINHAS num flex com `wrap` ou grelha.
+    pub align_content: Option<AlignContent>,
     /// Como o texto quebra ao ultrapassar a largura (`word`/`char`/`none`).
     pub linebreak: Option<LineBreak>,
     /// Sublinhado/riscado, com cor opcional (`Off` = desligar explicitamente
@@ -791,6 +795,8 @@ impl StyleProps {
             font_size_rem,
             font_weight,
             text_align,
+            line_height,
+            align_content,
             linebreak,
             text_underline,
             text_strikethrough,
@@ -815,6 +821,7 @@ impl StyleProps {
             font_size,
             font_weight,
             text_align,
+            line_height,
             linebreak,
             text_shadow
         );
@@ -838,6 +845,7 @@ impl StyleProps {
         node.flex_shrink = clean.flex_shrink;
         node.align_items = clean.align_items;
         node.align_self = clean.align_self;
+        node.align_content = clean.align_content;
         node.justify_content = clean.justify_content;
         node.width = clean.width;
         node.height = clean.height;
@@ -880,6 +888,7 @@ impl StyleProps {
             flex_shrink,
             align_items,
             align_self,
+            align_content,
             justify_content,
             padding,
             margin,
@@ -1330,6 +1339,26 @@ fn apply_declaration(props: &mut StyleProps, name: &str, value: &str) -> bool {
         "padding" => assign(&mut props.padding, parse_rect_in(value, name)),
         "margin" => assign(&mut props.margin, parse_rect_in(value, name)),
         "border-width" => assign(&mut props.border, parse_rect_in(value, name)),
+        // Longhands — misturam-se com o shorthand (`margin: 0; margin-left: 4`
+        // é CSS legítimo; o longhand DEPOIS do shorthand ganha).
+        "padding-top" => rect_side(&mut props.padding, "top", value, name),
+        "padding-right" => rect_side(&mut props.padding, "right", value, name),
+        "padding-bottom" => rect_side(&mut props.padding, "bottom", value, name),
+        "padding-left" => rect_side(&mut props.padding, "left", value, name),
+        "margin-top" => rect_side(&mut props.margin, "top", value, name),
+        "margin-right" => rect_side(&mut props.margin, "right", value, name),
+        "margin-bottom" => rect_side(&mut props.margin, "bottom", value, name),
+        "margin-left" => rect_side(&mut props.margin, "left", value, name),
+        "border-width-top" | "border-top-width" => rect_side(&mut props.border, "top", value, name),
+        "border-width-right" | "border-right-width" => {
+            rect_side(&mut props.border, "right", value, name)
+        }
+        "border-width-bottom" | "border-bottom-width" => {
+            rect_side(&mut props.border, "bottom", value, name)
+        }
+        "border-width-left" | "border-left-width" => {
+            rect_side(&mut props.border, "left", value, name)
+        }
         "gap" => {
             let gap = parse_measure_in(value, name);
             assign(&mut props.row_gap, gap.clone());
@@ -1426,6 +1455,38 @@ fn apply_declaration(props: &mut StyleProps, name: &str, value: &str) -> bool {
         }
         "line-break" => props.linebreak = Some(parse_linebreak(value)),
         "text-shadow" => props.text_shadow = Some(parse_text_shadow(value)),
+        "line-height" => {
+            let value = value.trim();
+            let parsed = if let Some(px) = value.strip_suffix("px") {
+                px.trim()
+                    .parse::<f32>()
+                    .ok()
+                    .map(bevy::text::LineHeight::Px)
+            } else if let Some(pct) = value.strip_suffix('%') {
+                pct.trim()
+                    .parse::<f32>()
+                    .ok()
+                    .map(|p| bevy::text::LineHeight::RelativeToFont(p / 100.0))
+            } else {
+                // Número nu = múltiplo do font-size (semântica CSS).
+                value
+                    .parse::<f32>()
+                    .ok()
+                    .map(bevy::text::LineHeight::RelativeToFont)
+            };
+            if parsed.is_none() {
+                warn!("ui style: valor `{value}` ilegível para `line-height` — declaração saltada");
+            }
+            assign(&mut props.line_height, parsed);
+        }
+        "align-content" => {
+            props.align_content = parse_align_content(value);
+            if props.align_content.is_none() {
+                warn!(
+                    "ui style: valor `{value}` ilegível para `align-content` — declaração saltada"
+                );
+            }
+        }
         "text-align" => {
             props.text_align = Some(match value {
                 "center" => bevy::text::Justify::Center,
@@ -1834,6 +1895,37 @@ fn parse_align_self(value: &str) -> Option<AlignSelf> {
     })
 }
 
+/// Um lado de um `UiRect` a partir de um longhand (`margin-left: 4vmin`).
+/// Reutiliza `parse_rect` como parser de medida única e mistura no rect
+/// existente (o shorthand anterior não é apagado).
+fn rect_side(rect: &mut Option<UiRect>, side: &str, value: &str, prop: &str) {
+    let Some(parsed) = parse_rect_in(value, prop) else {
+        return;
+    };
+    let target = rect.get_or_insert_with(UiRect::default);
+    match side {
+        "top" => target.top = parsed.top,
+        "right" => target.right = parsed.right,
+        "bottom" => target.bottom = parsed.bottom,
+        "left" => target.left = parsed.left,
+        _ => unreachable!("lado inválido: {side}"),
+    }
+}
+
+/// `align-content` — o mesmo vocabulário do `justify-content` mais `stretch`.
+fn parse_align_content(value: &str) -> Option<AlignContent> {
+    Some(match value.trim() {
+        "start" | "flex-start" => AlignContent::FlexStart,
+        "end" | "flex-end" => AlignContent::FlexEnd,
+        "center" => AlignContent::Center,
+        "stretch" => AlignContent::Stretch,
+        "space-between" => AlignContent::SpaceBetween,
+        "space-around" => AlignContent::SpaceAround,
+        "space-evenly" => AlignContent::SpaceEvenly,
+        _ => return None,
+    })
+}
+
 fn parse_justify(value: &str) -> Option<JustifyContent> {
     Some(match value {
         "start" | "flex-start" => JustifyContent::FlexStart,
@@ -1989,6 +2081,55 @@ pub fn fade(color: Color, opacity: f32) -> Color {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn test_rect_longhands_merge_with_shorthand() {
+        // Shorthand primeiro, longhand DEPOIS ganha no lado.
+        let props = parse_declarations("margin: 2 4; margin-top: 9", "t");
+        let margin = props.margin.expect("margin");
+        assert_eq!(margin.top, Val::Px(9.0));
+        assert_eq!(margin.left, Val::Px(4.0));
+
+        // Longhand sem shorthand cria o rect só com esse lado.
+        let props = parse_declarations("padding-left: 3vmin", "t");
+        let padding = props.padding.expect("padding");
+        assert_eq!(padding.left, Val::VMin(3.0));
+        assert_eq!(padding.top, Val::ZERO);
+
+        // Border-width nos dois dialectos.
+        let props = parse_declarations("border-width-bottom: 2", "t");
+        let border = props.border.expect("border");
+        assert_eq!(border.bottom, Val::Px(2.0));
+        let props = parse_declarations("border-top-width: 1", "t");
+        let border = props.border.expect("border");
+        assert_eq!(border.top, Val::Px(1.0));
+    }
+
+    #[test]
+    fn test_line_height_dialect() {
+        let px = parse_declarations("line-height: 18px", "t");
+        assert_eq!(px.line_height, Some(bevy::text::LineHeight::Px(18.0)));
+
+        let multiple = parse_declarations("line-height: 1.35", "t");
+        assert_eq!(
+            multiple.line_height,
+            Some(bevy::text::LineHeight::RelativeToFont(1.35))
+        );
+
+        let pct = parse_declarations("line-height: 120%", "t");
+        assert_eq!(
+            pct.line_height,
+            Some(bevy::text::LineHeight::RelativeToFont(1.2))
+        );
+    }
+
+    #[test]
+    fn test_align_content_dialect() {
+        let props = parse_declarations("align-content: space-between", "t");
+        assert_eq!(props.align_content, Some(AlignContent::SpaceBetween));
+        let props = parse_declarations("align-content: stretch", "t");
+        assert_eq!(props.align_content, Some(AlignContent::Stretch));
+    }
     use super::*;
 
     /// Janela de referência para os testes de cascata.
