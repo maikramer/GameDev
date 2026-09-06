@@ -127,29 +127,6 @@ impl VoxelField {
         self.classify_terrain_chunk(min_x, min_z, edge) == ChunkClass::Volumetric
     }
 
-    /// Which of a heightfield chunk's four borders face a volumetric
-    /// neighbour, in `terrain::mesh::SKIRT_EDGES` order (`0` min-Z, `1` max-Z,
-    /// `2` min-X, `3` max-X).
-    ///
-    /// The heightfield mesher uses this to seal the open strip the two meshers
-    /// leave between them — see `ChunkMeshParams::volumetric_edges`. It must
-    /// ask the *same* classifier the spawner uses, or a border gets sealed
-    /// that has an ordinary heightfield neighbour (a needless curtain) or,
-    /// worse, one that faces voxels is left open.
-    pub fn volumetric_neighbors(&self, min_x: f32, min_z: f32, edge: f32) -> [bool; 4] {
-        [
-            self.is_volumetric_chunk(min_x, min_z - edge, edge),
-            self.is_volumetric_chunk(min_x, min_z + edge, edge),
-            self.is_volumetric_chunk(min_x - edge, min_z, edge),
-            self.is_volumetric_chunk(min_x + edge, min_z, edge),
-        ]
-    }
-
-    /// Proves a box is uniformly solid or uniformly empty without sampling it.
-    ///
-    /// `Some(true)` = all rock, `Some(false)` = all air, `None` = the surface
-    /// may cross it and it has to be meshed.
-    ///
     /// This is what makes a volumetric column affordable. A 64 m terrain chunk
     /// over 200 m of relief is ~28 voxel chunks; meshing all of them blind
     /// would be ~1M density evaluations for one chunk, inline, in a frame. The

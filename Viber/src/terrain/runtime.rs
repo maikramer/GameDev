@@ -30,7 +30,6 @@ use super::features::{FeatureResult, apply_features};
 use super::heightmap::HeightMapU16;
 
 use super::layer_material::{TerrainChunkMaterial, TerrainChunkParams};
-use super::mesh::{ChunkMeshParams, build_chunk_mesh};
 use super::roads::RoadPath;
 use super::sampler::ResolvedPad;
 use super::spec::TerrainSpec;
@@ -327,57 +326,13 @@ impl TerrainRuntime {
 
     /// Height of the *rendered* surface at a world XZ position.
     ///
-    /// No caminho 100% voxel (default) a superfície desenhada É o nível zero
-    /// do SDF em toda a coluna — o surface nets segue o campo com precisão
-    /// sub-voxel e o LOD só muda o tamanho da célula — por isso o
-    /// [`VoxelField::surface_top`] bisseccionado é a resposta, sempre. O
-    /// caminho de lattice abaixo (flag `VIBER_HF_TERRAIN=1`) reproduz a
-    /// triangulação dos chunks HEIGHTFIELD, que é o que as células flat
-    /// desenham nesse modo.
-    ///
-    /// Chunk meshes heightfield draw flat triangles between vertices spaced
-    /// `lod0_step` apart, so the smoothed analytic sample between two vertices
-    /// can sit above the visible surface on ridges — spawned trees floated
-    /// with the root flare in the air. This reproduces the chunk lattice
-    /// (anchored at `-world_size/2`, spacing [`lod0_step`]) and its
-    /// triangulation (`build_chunk_mesh`: triangles a/c/b and b/c/d per
-    /// cell), keeping props flush with what is actually drawn. On a lattice
-    /// vertex the result equals [`BrushGrid::sample`]. Queries that need the
-    /// ground UNDER a ceiling (cave interior, arch opening) use
-    /// [`Self::surface_below`].
+    /// A superfície desenhada É o nível zero do SDF em toda a coluna — o
+    /// surface nets segue o campo com precisão sub-voxel e o LOD só muda o
+    /// tamanho da célula — por isso o [`VoxelField::surface_top`]
+    /// bisseccionado é a resposta, sempre. Queries que precisam do chão SOB
+    /// um teto (interior de gruta, vão de arco) usam [`Self::surface_below`].
     pub fn sample_mesh_surface(&self, x: f32, z: f32) -> f32 {
-        if !self.voxel.is_flat() || !super::hf_terrain_fallback() {
-            return self.voxel.surface_top(&*self.grid, x, z);
-        }
-        self.lattice_surface(x, z)
-    }
-
-    /// The heightfield-lattice surface: the chord interpolation of the grid
-    /// over the rendered triangulation. Only meaningful when heightfield
-    /// chunks actually draw the ground (`VIBER_HF_TERRAIN=1`).
-    fn lattice_surface(&self, x: f32, z: f32) -> f32 {
-        let step = lod0_step(&self.spec) as f32;
-        let half = self.spec.world_size * 0.5;
-        let gx = (x + half) / step;
-        let gz = (z + half) / step;
-        let x0 = gx.floor();
-        let z0 = gz.floor();
-        let fx = gx - x0;
-        let fz = gz - z0;
-        let lx0 = x0 * step - half;
-        let lz0 = z0 * step - half;
-        // Quad corners, matching build_chunk_mesh's vertex layout and
-        // triangulation: a=(x,z) b=(x+1,z) c=(x,z+1) d=(x+1,z+1);
-        // triangles (a, c, b) and (b, c, d).
-        let h_a = self.grid.sample(lx0, lz0);
-        let h_b = self.grid.sample(lx0 + step, lz0);
-        let h_c = self.grid.sample(lx0, lz0 + step);
-        let h_d = self.grid.sample(lx0 + step, lz0 + step);
-        if fx + fz <= 1.0 {
-            h_a + fx * (h_b - h_a) + fz * (h_c - h_a)
-        } else {
-            h_d + (1.0 - fx) * (h_c - h_d) + (1.0 - fz) * (h_b - h_d)
-        }
+        self.voxel.surface_top(&*self.grid, x, z)
     }
 }
 
@@ -523,7 +478,6 @@ pub fn bootstrap(world: &mut World) {
     // ground — the authored walls are not in the height grid any more, so
     // without this they would be invisible to every one of those consumers.
     let mut cliff_mask = cliff_mask;
-    cliff_mask.add_talus(&result.cliffs);
     cliff_mask.add_authored_bands(&cliff_bands);
 
     // Margens voxel (bank="gorge"/"overhang"): paredes sólidas a partir das
@@ -564,13 +518,8 @@ pub fn bootstrap(world: &mut World) {
         cliff_mask.add_authored_bands(&bank_bands);
     }
     if spec.sharpen {
-        let changed = crate::terrain::cliffs::sharpen_terrain(
-            &mut grid,
-            &spec,
-            &result.water,
-            &cliff_mask,
-            &result.cliffs,
-        );
+        let changed =
+            crate::terrain::cliffs::sharpen_terrain(&mut grid, &spec, &result.water, &cliff_mask);
         if changed > 0 {
             info!("sharpen terraced {changed} texels into cliff bands");
             // The pass rewrote the ground the bands resolved their walls
@@ -689,90 +638,36 @@ pub fn bootstrap(world: &mut World) {
     }
     let voxel = VoxelField::new(voxel_mods, spec.world_size, spec.chunk_size);
 
-    let (chunk_standard, _voxel_standard) = if super::hf_terrain_fallback() {
-        // Caminho HÍBRIDO legado (VIBER_HF_TERRAIN=1): chunks heightfield
-        // para as células flat + caixas voxel só onde há features 3D.
-        let chunk_standard = spawn_chunks(
+    // Caminho 100% VOLUMÉTRICO: toda a grelha sai do campo voxel por
+    // surface nets, com ladder de LOD por coluna. O heightfield sobrevive só
+    // como DADO (termo-base do SDF, carve de água/estradas, máscaras).
+    let voxel_standard = {
+        let handle = terrain_standard_material(
             world,
-            &mut meshes,
             &mut materials,
             asset_server.as_ref(),
-            root,
             &spec,
-            &grid,
-            camera_xz,
             &mut watched,
-            layer_map.as_ref(),
-            if spec.layers.is_empty() {
-                None
-            } else {
-                Some(&cliff_mask)
-            },
-            &voxel,
         );
-        // Chunks `spawn_chunks` skipped as volumetric are covered here instead.
-        // Material PRÓPRIO double-sided para o caminho standard dos chunks voxel
-        // (sem layers ou VIBER_CHUNK_LAYERS=0): shells que roçam o terreno
-        // deixam folhas finas sub-voxel com triângulos inward-wound — com
-        // culling leem-se como buracos na parede. O caminho de layers já resolve
-        // isto no `specialize` do TerrainChunkMaterial (cull_mode None).
-        let voxel_standard = {
-            let mut m = materials.get(&chunk_standard).cloned().unwrap_or_default();
-            m.double_sided = true;
-            materials.add(m)
-        };
-        let voxel_stats = super::voxel::spawn_voxel_chunks(
-            world,
-            &mut meshes,
-            root,
-            &spec,
-            &grid,
-            &voxel,
-            &voxel_standard,
-            layer_map.as_ref(),
-            lod0_step(&spec) as f32,
-            chunk_grid(&spec).0,
-        );
-        if voxel_stats.meshed > 0 {
-            info!(
-                "terrain: {} voxel chunks meshed ({} proven uniform, {} empty)",
-                voxel_stats.meshed, voxel_stats.skipped_uniform, voxel_stats.empty
-            );
-        }
-        (chunk_standard, voxel_standard)
-    } else {
-        // Caminho 100% VOLUMÉTRICO (default): toda a grelha sai do campo
-        // voxel por surface nets, com ladder de LOD por coluna. O heightfield
-        // sobrevive só como DADO (termo-base do SDF, carve, máscaras).
-        let voxel_standard = {
-            let handle = terrain_standard_material(
-                world,
-                &mut materials,
-                asset_server.as_ref(),
-                &spec,
-                &mut watched,
-            );
-            let mut m = materials.get(&handle).cloned().unwrap_or_default();
-            m.double_sided = true;
-            materials.add(m)
-        };
-        let stats = super::voxel::spawn_voxel_columns(
-            world,
-            &mut meshes,
-            root,
-            &spec,
-            &grid,
-            &voxel,
-            camera_xz,
-            voxel_standard.clone(),
-            layer_map.as_ref(),
-        );
-        info!(
-            "terrain: {} colunas voxel ({} caixas) — 100% volumétrico",
-            stats.chunks, stats.meshed
-        );
-        (voxel_standard.clone(), voxel_standard)
+        let mut m = materials.get(&handle).cloned().unwrap_or_default();
+        m.double_sided = true;
+        materials.add(m)
     };
+    let stats = super::voxel::spawn_voxel_columns(
+        world,
+        &mut meshes,
+        root,
+        &spec,
+        &grid,
+        &voxel,
+        camera_xz,
+        voxel_standard.clone(),
+        layer_map.as_ref(),
+    );
+    info!(
+        "terrain: {} colunas voxel ({} caixas) — 100% volumétrico",
+        stats.chunks, stats.meshed
+    );
     spawn_water(
         world,
         &mut meshes,
@@ -804,7 +699,7 @@ pub fn bootstrap(world: &mut World) {
     world.insert_resource(cliff_mask);
     world.insert_resource(TerrainChunkMaterials {
         layer: layer_map,
-        standard: Some(chunk_standard),
+        standard: Some(voxel_standard),
     });
     world.insert_resource(TerrainRuntime {
         spec,
@@ -828,19 +723,6 @@ fn lod0_step(spec: &TerrainSpec) -> usize {
     }
 }
 
-/// Skirt depth (meters) a heightfield border needs where the neighbour is a
-/// **volumetric** chunk — see `ChunkMeshParams::volumetric_edges`.
-///
-/// `voxel_cells` is the voxel cell size, which is the LOD-0 step
-/// (`spawn_voxel_chunks` is called with `lod0_step` as its wanted cell). Four
-/// cells covers the worst case: surface nets can place its border vertex a
-/// full cell off the plane, and the SDF's own zero level can sit another cell
-/// below the heightfield sample. The wall is invisible when nothing shows
-/// through it, so erring deep costs nothing; erring shallow leaves the strip
-/// of sky the QA point at `(0, 46, -80)` shows.
-pub(super) fn volumetric_seal(voxel_cells: f32) -> f32 {
-    (voxel_cells.max(0.0) * 4.0).max(2.0)
-}
 
 /// Chunk grid geometry shared by the chunk materials and the mesh spawner:
 /// `(edge meters, rows per world side)`.
@@ -881,145 +763,6 @@ fn terrain_standard_material(
             material: terrain_material.clone(),
             texture,
         });
-    }
-    terrain_material
-}
-
-/// Spawns the terrain's chunk meshes.
-///
-/// Each chunk is built at the LOD its distance from `camera_xz` implies — the
-/// same selection [`super::plugin`] applies every frame — and chunks past
-/// `render_distance` are left for the plugin to spawn on approach. Building
-/// the whole field at LOD 0 is not viable: `simple-rpg` is a 4000 m world with
-/// the default 64 m chunk, i.e. 3969 chunks, and at LOD 0 that is ~18 M
-/// vertices of resident mesh — the host ran out of memory before the window
-/// ever opened. Picking LODs up front keeps distant chunks at a few hundred
-/// vertices each.
-#[allow(clippy::too_many_arguments)]
-fn spawn_chunks(
-    world: &mut World,
-    meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
-    asset_server: Option<&AssetServer>,
-    parent: Entity,
-    spec: &TerrainSpec,
-    grid: &BrushGrid,
-    camera_xz: Option<Vec2>,
-    watched: &mut Vec<WatchedTexture>,
-    layer_map: Option<&ChunkLayerMap>,
-    cliff: Option<&super::cliffs::CliffMask>,
-    voxel: &VoxelField,
-) -> Handle<StandardMaterial> {
-    let step = lod0_step(spec);
-    let segments = (spec.chunk_size / step as f32).round() as usize;
-    if segments == 0 {
-        warn!("terrain chunk size is smaller than one grid step — no chunks");
-        return materials.add(StandardMaterial::default());
-    }
-    let edge = segments as f32 * step as f32;
-    let rows = (spec.world_size / edge).ceil().max(1.0) as u32;
-    let epsilon = grid.texel();
-
-    let terrain_material = terrain_standard_material(world, materials, asset_server, spec, watched);
-    // Com as camadas ativas o banding morre nas vertex colors (o splat
-    // substitui o tint); no caminho legado ele continua inteiro.
-    let chunk_tint = spec.chunk_tint();
-
-    let half = spec.world_size * 0.5;
-    let max_lod = super::plugin::max_lod_for(spec, edge);
-    let margin = super::plugin::hysteresis_margin(spec);
-    for cz in 0..rows {
-        for cx in 0..rows {
-            let origin = Vec3::new(-half + cx as f32 * edge, 0.0, -half + cz as f32 * edge);
-            let center = Vec2::new(origin.x + edge * 0.5, origin.z + edge * 0.5);
-            let distance = camera_xz.map(|cam| cam.distance(center));
-            if let Some(distance) = distance {
-                // The plugin spawns these at LOD 0 once the camera approaches.
-                if distance > spec.effective_render_distance() {
-                    continue;
-                }
-            }
-            // A chunk any 3D feature reaches is not a heightfield chunk at
-            // all: `spawn_voxel_chunks` covers it with surface nets. Skipping
-            // it here is what keeps the two meshers from drawing the same
-            // ground twice and z-fighting over it.
-            if voxel.is_volumetric_chunk(origin.x, origin.z, edge) {
-                continue;
-            }
-            // Without a camera every chunk is "near"; that only happens in
-            // headless setups with no view, where LOD 0 is the safe answer.
-            let lod = distance
-                .map(|d| super::plugin::select_lod(d, spec.lod_distance(), 0, max_lod, margin))
-                .unwrap_or(0);
-            let mut built_lod = lod;
-            let params = ChunkMeshParams {
-                origin,
-                size: edge,
-                lod_step: step << lod,
-                lod0_step: step,
-                skirt_depth: spec.skirt_depth_meters(),
-                normal_epsilon: epsilon,
-                texture_tile_size: spec.texture_tile_size,
-                levels: spec.levels,
-                world_size: spec.world_size,
-                tint: chunk_tint.clone(),
-                cliff_angle: spec.cliff_angle,
-                volumetric_edges: voxel.volumetric_neighbors(origin.x, origin.z, edge),
-                volumetric_seal: volumetric_seal(step as f32),
-            };
-            // A LOD step that does not divide the chunk edge yields no mesh;
-            // fall back to LOD 0, which always does.
-            let data = match build_chunk_mesh(grid, &params, cliff) {
-                Ok(Some(data)) => data,
-                Ok(None) | Err(_) if lod > 0 => {
-                    built_lod = 0;
-                    let params = ChunkMeshParams {
-                        lod_step: step,
-                        ..params
-                    };
-                    match build_chunk_mesh(grid, &params, cliff) {
-                        Ok(Some(data)) => data,
-                        _ => continue,
-                    }
-                }
-                Ok(None) => continue,
-                Err(error) => {
-                    warn!("chunk ({cx},{cz}) failed to build: {error:#}");
-                    continue;
-                }
-            };
-            let handle = meshes.add(to_bevy_mesh(&data));
-            // Layer material of THIS chunk when the world opted in; the
-            // legacy single-texture material covers chunks without one.
-            let chunk_material = match layer_map.and_then(|map| map.get(cx, cz)) {
-                Some(material) => ChunkMaterialHandle::Layer(material.clone()),
-                None => ChunkMaterialHandle::Standard(terrain_material.clone()),
-            };
-            let mut chunk = world.spawn((
-                Name::new(format!("chunk {cz}-{cx}")),
-                // Mesh positions are chunk-center relative on XZ.
-                Transform::from_translation(Vec3::new(
-                    origin.x + edge * 0.5,
-                    0.0,
-                    origin.z + edge * 0.5,
-                )),
-                Visibility::Inherited,
-                ChildOf(parent),
-                super::plugin::TerrainChunk {
-                    coords: UVec2::new(cx, cz),
-                    lod: built_lod,
-                    built_lod,
-                },
-            ));
-            match chunk_material {
-                ChunkMaterialHandle::Layer(material) => {
-                    chunk.insert((Mesh3d(handle), MeshMaterial3d(material)));
-                }
-                ChunkMaterialHandle::Standard(material) => {
-                    chunk.insert((Mesh3d(handle), MeshMaterial3d(material)));
-                }
-            }
-        }
     }
     terrain_material
 }
@@ -1557,54 +1300,7 @@ mod tests {
         assert_eq!(lod0_step(&spec), 1, "50/2.5 is not an exact meter step");
     }
 
-    #[test]
-    fn test_lattice_surface_matches_rendered_chords() {
-        // Peak flank h(x) = 40 − (x−7.5)²/8 on a 1 m/texel grid (16 texels
-        // over 15 m): the invariant that matters is the RENDERED surface —
-        // heightfield chunk meshes draw flat triangles between vertices, so
-        // between two vertices the lattice query must equal the linear chord
-        // of the vertex heights. On the vertices both agree exactly. (Só é
-        // caminho vivo com VIBER_HF_TERRAIN=1; no default voxel
-        // `sample_mesh_surface` devolve o topo do campo.)
-        let max_h = 65.535;
-        let height = |x: usize| 40.0 - (x as f32 - 7.5).powi(2) / 8.0;
-        let raw: Vec<u16> = (0..16usize)
-            .flat_map(|z| (0..16usize).map(move |x| (x, z)))
-            .map(|(x, _)| (height(x) / max_h * 65535.0).round() as u16)
-            .collect();
-        let grid = BrushGrid::new(raw, 16, 16, 15.0, max_h, 1.0).expect("grid");
-        let runtime = TerrainRuntime {
-            spec: TerrainSpec {
-                world_size: 15.0,
-                resolution: 64, // chunk 64 m / 64 → lod0 step 1 m
-                ..Default::default()
-            },
-            grid: Arc::new(grid),
-            water: Vec::new(),
-            roads: Vec::new(),
-            pads: Vec::new(),
-            voxel: Arc::new(VoxelField::default()),
-        };
-        for i in 0..16 {
-            let x = i as f32 - 7.5;
-            let mesh = runtime.lattice_surface(x, 0.0);
-            let analytic = runtime.sample(x, 0.0);
-            assert!(
-                (mesh - analytic).abs() < 1e-2,
-                "lattice vertex {x}: mesh {mesh} vs analytic {analytic}"
-            );
-        }
-        // Mid-cell: exactly the chord between the two vertex heights, even
-        // where the smoothed analytic sample disagrees.
-        let mesh = runtime.lattice_surface(-7.0, 0.0);
-        let chord = (runtime.sample(-7.5, 0.0) + runtime.sample(-6.5, 0.0)) * 0.5;
-        assert!(
-            (mesh - chord).abs() < 1e-3,
-            "mid-cell {mesh} must be the vertex chord {chord}"
-        );
-    }
-
-    /// No caminho 100% voxel (default, sem VIBER_HF_TERRAIN) a superfície
+    /// No caminho 100% voxel a superfície
     /// "meshada" É o zero do SDF — numa coluna sem mods isso coincide com a
     /// amostra da grelha, que é exatamente o que os props esperam.
     #[test]

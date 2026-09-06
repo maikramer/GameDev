@@ -516,6 +516,14 @@ fn append_column_seals(
             if (pa[face] - plane).abs() > eps || (pb[face] - plane).abs() > eps {
                 continue;
             }
+            // Uma aresta quase VERTICAL na fronteira é uma parede que continua
+            // abaixo (cliff na costura) — não há fenda a selar, e pendê-la
+            // produzia triângulos degenerados (a, b e as cópias caídas
+            // colineares). Só arestas com traverso horizontal selam.
+            let span = (pb - pa).abs();
+            if span.y > span.x.max(span.z) * 2.0 {
+                continue;
+            }
             // Orient the top edge so (b − a) × (−Y) agrees with the outward
             // normal, then the two triangles below wound outward.
             let (a, b) = if (pb - pa).cross(Vec3::NEG_Y).dot(out) < 0.0 {

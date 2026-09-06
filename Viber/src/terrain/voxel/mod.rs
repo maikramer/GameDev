@@ -36,7 +36,7 @@ pub use index::{ChunkClass, ModIndex};
 pub use mods::{ArchMod, Bounds3, BoxMod, CapsuleMod, ModOp, VoxelMod};
 pub use spawn::{
     VoxelBoxSpec, VoxelChunk, VoxelLodShape, VoxelSpawnStats, build_box_mesh, column_boxes,
-    lod_shape, seal_depth, spawn_voxel_chunks, spawn_voxel_columns,
+    lod_shape, seal_depth, spawn_voxel_columns,
 };
 pub(crate) use spawn::{spawn_box_entity, spawn_column};
 pub use surface_nets::{VOXEL_CHUNK_CELLS, VoxelChunkParams, build_voxel_mesh};

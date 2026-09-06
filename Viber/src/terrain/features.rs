@@ -17,7 +17,7 @@
 use bevy::math::Vec2;
 
 use super::brush::BrushGrid;
-use super::cliffs::{CliffLine, CliffSpec};
+use super::cliffs::CliffSpec;
 use super::decal::GroundDecalSpec;
 use super::roads::{RoadGuards, RoadNetworkSpec, RoadPath, RoadProfile, RoadSpec, carve_road};
 use super::sampler::ResolvedPad;
@@ -92,8 +92,6 @@ pub struct FeatureResult {
     pub road_junctions: Vec<super::roads::RoadJunction>,
     /// Ground decals to render, in declaration order.
     pub decals: Vec<GroundDecalSpec>,
-    /// Carved cliff walls, in declaration order (query registry).
-    pub cliffs: Vec<CliffLine>,
 }
 
 /// Applies all features in the canonical order and returns the registries.
@@ -227,6 +225,7 @@ mod tests {
             decals: Vec::new(),
             caves: Vec::new(),
             arches: Vec::new(),
+            cliffs: Vec::new(),
             pads: vec![TerrainPadSpec {
                 at: Vec2::ZERO,
                 size: Vec2::splat(24.0),
@@ -244,7 +243,6 @@ mod tests {
                 width: 6.0,
                 ..RiverSpec::default()
             }],
-            cliffs: Vec::new(),
             roads: vec![RoadSpec {
                 name: Some("trail".into()),
                 path: vec![Vec2::new(-40.0, 32.0), Vec2::new(40.0, 32.0)],

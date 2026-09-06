@@ -1,6 +1,6 @@
 //! Solids contributed to the voxel field — the 3D counterpart of a carve.
 //!
-//! A heightfield carve is destructive: [`super::super::cliffs::carve_cliff`]
+//! A heightfield carve is destructive: re-carving means re-writing the grid
 //! writes a steeper gradient into the shared `u16` grid and the fact that a
 //! wall *is* a wall survives only as a statistical property of the numbers.
 //! Six downstream systems then have to re-derive it (`CliffMask`'s

@@ -297,7 +297,6 @@ impl bevy::app::Plugin for PhysicsPlugin {
                 bevy::app::Update,
                 (
                     resolve_pending_colliders,
-                    stream_terrain_colliders,
                     stream_voxel_colliders,
                 ),
             );
@@ -965,92 +964,21 @@ mod tests {
 /// Chunks within this many chunk edges of the camera keep a collider.
 ///
 /// The whole terrain cannot be collidable at once: `simple-rpg` is a 4000 m
-/// world of 64 m chunks, and a heightfield collider each (65x65 samples at the
-/// default `collision-resolution`) is tens of megabytes of solver data for
-/// ground the player cannot reach this frame. Colliders stream in and out with
-/// the camera instead.
+/// world of 64 m columns, and a collider each is tens of megabytes of solver
+/// data for ground the player cannot reach this frame. Colliders stream in
+/// and out with the camera instead.
 pub const PHYSICS_CHUNK_RADIUS: f32 = 3.0;
-
-/// Marks a terrain chunk that currently owns a heightfield collider.
-#[derive(Debug, Component)]
-pub struct TerrainCollider;
-
-/// Adds and removes terrain chunk colliders around the camera.
-#[allow(clippy::type_complexity)]
-pub fn stream_terrain_colliders(
-    mut commands: Commands,
-    runtime: Option<Res<crate::terrain::runtime::TerrainRuntime>>,
-    cameras: Query<&GlobalTransform, With<Camera3d>>,
-    chunks: Query<
-        (Entity, &Transform, Option<&TerrainCollider>),
-        With<crate::terrain::plugin::TerrainChunk>,
-    >,
-) {
-    let Some(runtime) = runtime else { return };
-    // Caminho 100% voxel (default): as colunas não têm mesh heightfield — os
-    // colliders de terreno saem TODOS das caixas `VoxelChunk`
-    // (`stream_voxel_colliders`), que passaram a cobrir a grelha inteira.
-    if !crate::terrain::hf_terrain_fallback() {
-        return;
-    }
-    let Ok(camera) = cameras.single() else { return };
-    let camera_xz = {
-        let t = camera.translation();
-        Vec2::new(t.x, t.z)
-    };
-
-    let spec = &runtime.spec;
-    // `collision-resolution="0"` DESLIGA colliders de terreno (contrato em
-    // spec.rs) — sem este guard o max(1) construía na mesma um heightfield
-    // 2×2 desfasado do terreno visível.
-    if spec.collision_resolution == 0 {
-        return;
-    }
-    let keep_within = spec.chunk_size * PHYSICS_CHUNK_RADIUS;
-    // A little hysteresis so a chunk on the boundary does not rebuild its
-    // collider every frame the camera jitters across it.
-    let drop_beyond = keep_within * 1.25;
-    let resolution = spec.collision_resolution.max(1);
-
-    for (entity, transform, has_collider) in &chunks {
-        let center = Vec2::new(transform.translation.x, transform.translation.z);
-        let distance = center.distance(camera_xz);
-        match (has_collider.is_some(), distance) {
-            (false, d) if d <= keep_within => {
-                if let Some(collider) =
-                    chunk_heightfield(&runtime.grid, center, spec.chunk_size, resolution)
-                {
-                    // try_insert: o cull do LOD pode despawnar o chunk no
-                    // mesmo frame — panico de "Entity despawned" virava
-                    // queda da engine.
-                    commands
-                        .entity(entity)
-                        .try_insert((collider, RigidBody::Fixed, TerrainCollider));
-                }
-            }
-            (true, d) if d > drop_beyond => {
-                commands
-                    .entity(entity)
-                    .try_remove::<Collider>()
-                    .try_remove::<RigidBody>()
-                    .try_remove::<TerrainCollider>();
-            }
-            _ => {}
-        }
-    }
-}
 
 /// Marks a voxel chunk that currently owns a `Voxels` collider.
 #[derive(Debug, Component)]
 pub struct VoxelCollider;
 
-/// Adds and removes colliders on the volumetric chunks around the camera.
+/// Adds and removes colliders on the voxel boxes around the camera.
 ///
-/// A volumetric chunk has no `TerrainChunk` entity — the heightfield mesher
-/// skipped it — so `stream_terrain_colliders` cannot see it. Without this the
-/// authored cliffs and cave walls would be scenery you walk straight through:
-/// the wall is no longer in the height grid, and the height grid is all the
-/// heightfield collider knows.
+/// No caminho 100% volumétrico TODA a superfície é caixa `VoxelChunk` — este
+/// streaming é a única fonte de colisão de terreno. Sem ele as paredes
+/// seriam cenário atravessável. `try_insert`/`try_remove` porque o LOD
+/// despacha caixas no mesmo frame (swap de coluna e cull).
 #[allow(clippy::type_complexity)]
 pub fn stream_voxel_colliders(
     mut commands: Commands,
@@ -1145,36 +1073,3 @@ fn chunk_voxels(
     Some(Collider::voxels(Vec3::splat(size), &filled))
 }
 
-/// Builds a Rapier heightfield for one chunk, sampled from the terrain grid.
-///
-/// Rapier lays a 3D heightfield out row-major over the XZ plane, centred on the
-/// collider's own transform — which is exactly where the chunk entity sits — so
-/// the samples are taken relative to `center` and the collider needs no offset.
-fn chunk_heightfield(
-    grid: &crate::terrain::brush::BrushGrid,
-    center: Vec2,
-    size: f32,
-    resolution: u32,
-) -> Option<Collider> {
-    if size <= 0.0 || !size.is_finite() {
-        return None;
-    }
-    let n = resolution as usize + 1;
-    let step = size / resolution as f32;
-    let half = size * 0.5;
-    let mut heights = Vec::with_capacity(n * n);
-    // Row-major: row index walks +X, column index walks +Z.
-    for row in 0..n {
-        for col in 0..n {
-            let x = center.x - half + row as f32 * step;
-            let z = center.y - half + col as f32 * step;
-            heights.push(grid.sample(x, z));
-        }
-    }
-    Some(Collider::heightfield(
-        heights,
-        n,
-        n,
-        Vec3::new(size, 1.0, size),
-    ))
-}

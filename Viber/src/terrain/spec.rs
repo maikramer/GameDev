@@ -23,10 +23,6 @@ pub const DEFAULT_LOD_DISTANCE_RATIO: f32 = 2.0;
 pub const DEFAULT_LOD_HYSTERESIS: f32 = 1.2;
 /// Camera must move this far (meters, as a fraction of `chunk_size`) before LODs are re-evaluated.
 pub const DEFAULT_LOD_RESELECT_DISTANCE: f32 = 6.0;
-/// Skirt depth as a fraction of `max_height` — hides T-junction cracks between LODs.
-pub const DEFAULT_SKIRT_WIDTH: f32 = 0.015625;
-/// Multiplier applied on top of the skirt width.
-pub const DEFAULT_SKIRT_DEPTH: f32 = 1.0;
 /// `0.0` = bilinear sampling, `1.0` = monotone Catmull-Rom (C1, no ringing).
 pub const DEFAULT_HEIGHT_SMOOTHING: f32 = 1.0;
 /// Collider heightfield resolution per chunk edge (0 disables collider generation).
@@ -94,15 +90,15 @@ pub struct TerrainSpec {
     pub lod_hysteresis: f32,
     /// Chunks farther than this from the camera (meters) are despawned. `None` = render everything.
     pub render_distance: Option<f32>,
-    /// Vertical skirt depth as a fraction of `max_height` (hides LOD cracks).
-    pub skirt_width: f32,
-    /// Multiplier on the skirt depth.
-    pub skirt_depth: f32,
     /// Height smoothing: `0.0` bilinear, `1.0` monotone Catmull-Rom.
     pub height_smoothing: f32,
-    /// Collider heightfield resolution per chunk edge; `0` disables collider generation.
+    /// Collider voxel resolution per chunk edge (collider cell =
+    /// `chunk_size / collision_resolution`, 1 m no default); `0` desliga
+    /// colliders de terreno.
     pub collision_resolution: u32,
-    /// Mesh vertices per chunk edge at LOD 0 (see [`DEFAULT_RESOLUTION`]).
+    /// Célula voxel do LOD 0: o passo LOD-0 é `chunk_size / resolution`
+    /// arredondado a metros inteiros (o ladder voxel duplica por nível —
+    /// 1→2→4 m no default). Ver [`DEFAULT_RESOLUTION`].
     pub resolution: u32,
     /// Optional tiled diffuse texture applied over the whole terrain.
     /// Legacy path — when `layers` is non-empty the layer blend material
@@ -171,8 +167,6 @@ impl Default for TerrainSpec {
             lod_distance_ratio: DEFAULT_LOD_DISTANCE_RATIO,
             lod_hysteresis: DEFAULT_LOD_HYSTERESIS,
             render_distance: None,
-            skirt_width: DEFAULT_SKIRT_WIDTH,
-            skirt_depth: DEFAULT_SKIRT_DEPTH,
             height_smoothing: DEFAULT_HEIGHT_SMOOTHING,
             collision_resolution: DEFAULT_COLLISION_RESOLUTION,
             resolution: DEFAULT_RESOLUTION,
@@ -271,11 +265,6 @@ impl TerrainSpec {
             tint.height_blend_strength = 0.0;
         }
         tint
-    }
-
-    /// Skirt depth in meters for this terrain.
-    pub fn skirt_depth_meters(&self) -> f32 {
-        self.max_height * self.skirt_width * self.skirt_depth
     }
 
     /// Radius (meters) beyond which chunks are culled.
@@ -448,12 +437,6 @@ mod tests {
     fn test_lod_distance_is_ratio_times_chunk() {
         let spec = TerrainSpec::default();
         assert!((spec.lod_distance() - 128.0).abs() < f32::EPSILON);
-    }
-
-    #[test]
-    fn test_skirt_depth_meters() {
-        let spec = TerrainSpec::default();
-        assert!((spec.skirt_depth_meters() - 50.0 * 0.015625).abs() < 1e-4);
     }
 
     #[test]

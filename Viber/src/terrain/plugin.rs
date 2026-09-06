@@ -28,17 +28,9 @@ use std::collections::HashMap;
 #[cfg(test)]
 use std::sync::Arc;
 
-use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
-use bevy::render::mesh::{Indices, PrimitiveTopology};
-
-use super::brush::BrushGrid;
-use super::mesh::{ChunkMeshData, ChunkMeshParams, build_chunk_mesh};
 use super::runtime::{ChunkMaterialHandle, TerrainChunkMaterials, TerrainRuntime};
-use super::spec::{
-    DEFAULT_LOD_HYSTERESIS, DEFAULT_LOD_RESELECT_DISTANCE, DEFAULT_MAX_MESH_BUILDS_PER_FRAME,
-    TerrainSpec,
-};
+use super::spec::{DEFAULT_LOD_HYSTERESIS, DEFAULT_LOD_RESELECT_DISTANCE, TerrainSpec};
 use crate::profiler::{Group, timed};
 
 /// Tag on every terrain chunk mesh entity managed by this plugin.
@@ -92,27 +84,13 @@ pub struct TerrainPlugin;
 
 impl bevy::app::Plugin for TerrainPlugin {
     fn build(&self, app: &mut bevy::app::App) {
-        app.init_resource::<ChunkLodState>();
-        // A migração volumétrica tem dois ladders sobre a mesma maquinaria:
-        // o heightfield legado (VIBER_HF_TERRAIN=1) e o de colunas voxel,
-        // que é o default — vê `update_voxel_columns`.
-        if super::hf_terrain_fallback() {
-            app.add_systems(
-                bevy::app::Update,
-                (
-                    timed(Group::Terrain, adopt_chunks),
-                    timed(Group::Terrain, update_hf_chunk_lods),
-                ),
-            );
-        } else {
-            app.add_systems(
-                bevy::app::Update,
-                (
-                    timed(Group::Terrain, adopt_chunks),
-                    timed(Group::Terrain, update_voxel_columns),
-                ),
-            );
-        }
+        app.init_resource::<ChunkLodState>().add_systems(
+            bevy::app::Update,
+            (
+                timed(Group::Terrain, adopt_chunks),
+                timed(Group::Terrain, update_voxel_columns),
+            ),
+        );
     }
 }
 
@@ -132,24 +110,16 @@ fn parse_chunk_name(name: &str) -> Option<UVec2> {
     Some(UVec2::new(cx, cz))
 }
 
-/// One-shot: tag the bootstrap's chunk meshes with [`TerrainChunk`], capture
+/// One-shot: tag the bootstrap's chunk entities with [`TerrainChunk`], capture
 /// the terrain root and the shared chunk material.
 ///
-/// Cobre os DOIS formatos de chunk: o heightfield legado (a entidade tem o
-/// mesh) e a coluna voxel (grupo nomeado cujas caixas têm o mesh — a coluna
-/// já nasce etiquetada pelo bootstrap, mas testes e respawn contam com a
-/// captura do material a partir das caixas).
-type ChunkCandidate = (
-    Entity,
-    &'static Name,
-    Option<&'static MeshMaterial3d<StandardMaterial>>,
-);
-
+/// A coluna voxel é um grupo nomeado cujas caixas têm o mesh — a coluna já
+/// nasce etiquetada pelo bootstrap, mas testes e respawn contam com a captura
+/// do material a partir das caixas.
 fn adopt_chunks(
     mut state: ResMut<ChunkLodState>,
     roots: Query<(Entity, &Name, &Children)>,
     tagged: Query<(), With<TerrainChunk>>,
-    chunk_candidates: Query<ChunkCandidate, With<Mesh3d>>,
     box_materials: Query<&MeshMaterial3d<StandardMaterial>, With<super::voxel::VoxelChunk>>,
     named: Query<&Name>,
     columns: Query<&Children>,
@@ -165,27 +135,6 @@ fn adopt_chunks(
         }
         state.root = Some(root);
         for child in children.iter() {
-            // Heightfield: the chunk entity itself carries the mesh.
-            if let Ok((entity, child_name, material)) = chunk_candidates.get(child) {
-                let Some(coords) = parse_chunk_name(child_name.as_str()) else {
-                    continue;
-                };
-                // Capture the shared material before the tagged check: the
-                // bootstrap tags its own chunks (it builds them at the LOD
-                // their distance implies), and respawns still need this handle.
-                if let Some(mat) = material {
-                    state.material.get_or_insert(mat.0.clone());
-                }
-                if tagged.get(entity).is_ok() {
-                    continue;
-                }
-                commands.entity(entity).insert(TerrainChunk {
-                    coords,
-                    lod: 0,
-                    built_lod: 0,
-                });
-                continue;
-            }
             // Voxel column: a named group; the material comes from any box.
             let Ok(child_name) = named.get(child) else {
                 continue;
@@ -210,274 +159,6 @@ fn adopt_chunks(
             });
         }
     }
-}
-
-/// Per-frame LOD pass over heightfield chunks (the `VIBER_HF_TERRAIN=1`
-/// escape path): reselect (gated by camera movement), rebuild within the
-/// frame budget, and render-distance culling/respawn.
-#[allow(clippy::too_many_arguments)]
-fn update_hf_chunk_lods(
-    mut state: ResMut<ChunkLodState>,
-    runtime: Option<Res<TerrainRuntime>>,
-    published: Option<Res<TerrainChunkMaterials>>,
-    cliff_mask: Option<Res<super::cliffs::CliffMask>>,
-    cameras: Query<&GlobalTransform, With<Camera3d>>,
-    mut chunks: Query<(Entity, &Transform, &mut TerrainChunk, &mut Mesh3d)>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut commands: Commands,
-) {
-    let Some(runtime) = runtime else {
-        return;
-    };
-    if !state.adopted {
-        return;
-    }
-
-    let Ok(cam) = cameras.single() else {
-        return;
-    };
-    let t = cam.translation();
-    let cam_xz = Vec2::new(t.x, t.z);
-
-    // Reselect gate (VibeGame `LOD_RESELECT_DISTANCE`): a full pass happens
-    // only when the camera moved, or when the previous pass ran out of
-    // budget with work remaining.
-    let moved = state
-        .last_cam
-        .is_none_or(|last| last.distance(cam_xz) > DEFAULT_LOD_RESELECT_DISTANCE);
-    if !moved && !state.pending {
-        return;
-    }
-    if moved {
-        state.last_cam = Some(cam_xz);
-    }
-
-    // Sync the chunk index with reality (adoptions and despawns) — inside the
-    // gate: enquanto a passagem não corre, o índice não é lido, e sincronizá-
-    // lo era um scan O(chunks) + HashMap inserts em TODOS os frames.
-    let dead: Vec<UVec2> = state
-        .chunks
-        .iter()
-        .filter(|(_, e)| chunks.get(**e).is_err())
-        .map(|(c, _)| *c)
-        .collect();
-    for coords in dead {
-        state.chunks.remove(&coords);
-    }
-    for (entity, _, chunk, _) in chunks.iter() {
-        state.chunks.insert(chunk.coords, entity);
-    }
-
-    let mut budget = DEFAULT_MAX_MESH_BUILDS_PER_FRAME;
-    state.pending = false;
-
-    let spec = &runtime.spec;
-    let edge = chunk_edge(spec);
-    let half = spec.world_size * 0.5;
-    let rows = (spec.world_size / edge).ceil().max(1.0) as u32;
-    let max_lod = max_lod_for(spec, edge);
-    let margin = hysteresis_margin(spec);
-    let render_distance = spec.effective_render_distance();
-    let grid = &runtime.grid;
-    // The baked alpha factor only feeds the layers shader; the legacy stock
-    // PBR folds vertex alpha into opacity, so it must stay untouched there.
-    let cliff_mask_opt = if spec.layers.is_empty() {
-        None
-    } else {
-        cliff_mask.as_deref()
-    };
-
-    // 1. Cull + re-evaluate tracked chunks.
-    for (entity, transform, mut chunk, mut mesh) in chunks.iter_mut() {
-        let tr = transform.translation;
-        let dist = Vec2::new(tr.x, tr.z).distance(cam_xz);
-        // O raio de render compara com a distância à AABB do chunk no plano
-        // XZ, não ao centro: chunks com metade do quadrado ainda visíveis
-        // eram despawnados mal o centro passava o raio (num chunk de 64 m, o
-        // canto mais próximo fica a 45 m do centro).
-        if chunk_aabb_distance(dist, edge) > render_distance {
-            state.chunks.remove(&chunk.coords);
-            commands.entity(entity).despawn();
-            continue;
-        }
-        chunk.lod = select_lod(dist, spec.lod_distance(), chunk.built_lod, max_lod, margin);
-        if chunk.lod == chunk.built_lod || budget == 0 {
-            if chunk.lod != chunk.built_lod {
-                state.pending = true;
-            }
-            continue;
-        }
-        match rebuild(
-            grid,
-            spec,
-            chunk.coords,
-            edge,
-            chunk.lod,
-            cliff_mask_opt,
-            &runtime.voxel,
-        ) {
-            Some(data) => {
-                *mesh = Mesh3d(meshes.add(to_bevy_mesh(&data)));
-                chunk.built_lod = chunk.lod;
-                budget -= 1;
-            }
-            // Step does not divide the edge exactly — stay at the coarser LOD.
-            None => chunk.lod = chunk.built_lod,
-        }
-    }
-    if budget == 0 {
-        state.pending = true;
-    }
-
-    // 2. Respawn missing chunks (culled earlier, or skipped by the
-    //    bootstrap) once they come within render distance.
-    let Some(root) = state.root else {
-        return;
-    };
-    // O mapa publicado pelo bootstrap ganha (material POR chunk); o capture
-    // da adoção cobre setups que spawnam chunks à mão (testes).
-    let standard_material = state.material.clone().map(ChunkMaterialHandle::Standard);
-    let layer_map = published.as_ref().and_then(|p| p.layer.clone());
-    if layer_map.is_none() && standard_material.is_none() {
-        return;
-    }
-    // Só as células da grelha cuja AABB pode caber no raio de render — o
-    // scan era `0..rows` duplo (O(rows²)) por pass; os limites (computados
-    // das bordas das células) dão a mesma selecção (o teste exato de
-    // distância à AABB mantém-se abaixo) sem percorrer o mundo inteiro.
-    // Casts saturam fora do mundo (negativo → 0, infinito → `rows - 1`), e
-    // um intervalo vazio simplesmente não itera.
-    let clamp_coord = |axis: f32| -> u32 {
-        (((axis - render_distance + half) / edge).floor().max(0.0) as u32).min(rows - 1)
-    };
-    let clamp_hi = |axis: f32| -> u32 {
-        (((axis + render_distance + half) / edge).floor().max(0.0) as u32).min(rows - 1)
-    };
-    let min_cx = clamp_coord(cam_xz.x);
-    let max_cx = clamp_hi(cam_xz.x);
-    let min_cz = clamp_coord(cam_xz.y);
-    let max_cz = clamp_hi(cam_xz.y);
-    for cz in min_cz..=max_cz {
-        for cx in min_cx..=max_cx {
-            if budget == 0 {
-                state.pending = true;
-                return;
-            }
-            let coords = UVec2::new(cx, cz);
-            if state.chunks.contains_key(&coords) {
-                continue;
-            }
-            // Chunks the voxel mesher owns must stay missing. The bootstrap
-            // skipped them on purpose; respawning one here lays a heightfield
-            // mesh straight over the voxel geometry and the pair z-fight
-            // across the whole chunk.
-            let origin_x = -half + cx as f32 * edge;
-            let origin_z = -half + cz as f32 * edge;
-            if runtime.voxel.is_volumetric_chunk(origin_x, origin_z, edge) {
-                continue;
-            }
-            let center = Vec2::new(
-                -half + cx as f32 * edge + edge * 0.5,
-                -half + cz as f32 * edge + edge * 0.5,
-            );
-            // Mesma métrica do cull: a AABB do chunk é que conta para o
-            // raio de render.
-            let dist = center.distance(cam_xz);
-            if chunk_aabb_distance(dist, edge) > render_distance {
-                continue;
-            }
-            // Respawn já no LOD que a distância pede — o mesmo caminho cru
-            // do passe de seleção, SEM histerese (um chunk novo não tem
-            // histórico para a histerese decidir). Construir sempre em LOD 0
-            // queimava o orçamento de builds/frame de que os chunks próximos
-            // precisam; a re-seleção para o LOD certo só chegava em passes
-            // seguintes (gate de 6 m).
-            let lod = raw_lod(dist, spec.lod_distance(), max_lod);
-            let Some(data) = rebuild(
-                grid,
-                spec,
-                coords,
-                edge,
-                lod,
-                cliff_mask_opt,
-                &runtime.voxel,
-            ) else {
-                continue;
-            };
-            let handle = meshes.add(to_bevy_mesh(&data));
-            // Material POR chunk (layers) quando o mundo optou; o legacy
-            // single-texture cobre mundos sem layers.
-            let Some(material) = layer_map
-                .as_ref()
-                .and_then(|map| map.get(cx, cz).cloned())
-                .map(ChunkMaterialHandle::Layer)
-                .or_else(|| standard_material.clone())
-            else {
-                // Chunk fora do mapa de materiais (mundo sem layers nem
-                // capture) — nada com que o vestir.
-                continue;
-            };
-            let mut entity = commands.spawn((
-                Name::new(chunk_name(coords)),
-                Transform::from_translation(Vec3::new(center.x, 0.0, center.y)),
-                Visibility::Inherited,
-                Mesh3d(handle),
-                ChildOf(root),
-            ));
-            match material {
-                ChunkMaterialHandle::Layer(material) => {
-                    entity.insert(MeshMaterial3d(material));
-                }
-                ChunkMaterialHandle::Standard(material) => {
-                    entity.insert(MeshMaterial3d(material));
-                }
-            }
-            let entity = entity.id();
-            commands.entity(entity).insert(TerrainChunk {
-                coords,
-                lod,
-                built_lod: lod,
-            });
-            state.chunks.insert(coords, entity);
-            budget -= 1;
-        }
-    }
-}
-
-/// Rebuilds one chunk mesh at `lod`; `None` when the LOD step does not divide
-/// the chunk edge exactly (the coarser mesh keeps rendering).
-fn rebuild(
-    grid: &BrushGrid,
-    spec: &TerrainSpec,
-    coords: UVec2,
-    edge: f32,
-    lod: u8,
-    cliff: Option<&super::cliffs::CliffMask>,
-    voxel: &super::voxel::VoxelField,
-) -> Option<ChunkMeshData> {
-    let step = lod0_step(spec) << lod;
-    let half = spec.world_size * 0.5;
-    let origin = Vec3::new(
-        -half + coords.x as f32 * edge,
-        0.0,
-        -half + coords.y as f32 * edge,
-    );
-    let params = ChunkMeshParams {
-        origin,
-        size: edge,
-        lod_step: step,
-        lod0_step: lod0_step(spec),
-        skirt_depth: spec.skirt_depth_meters(),
-        normal_epsilon: grid.texel(),
-        texture_tile_size: spec.texture_tile_size,
-        levels: spec.levels,
-        world_size: spec.world_size,
-        tint: spec.chunk_tint(),
-        cliff_angle: spec.cliff_angle,
-        volumetric_edges: voxel.volumetric_neighbors(origin.x, origin.z, edge),
-        volumetric_seal: super::runtime::volumetric_seal(lod0_step(spec) as f32),
-    };
-    build_chunk_mesh(grid, &params, cliff).ok().flatten()
 }
 
 // ── Ladder de colunas voxel (o caminho default da migração volumétrica) ─────
@@ -840,23 +521,6 @@ pub(crate) fn lod0_step(spec: &TerrainSpec) -> usize {
 }
 
 /// Converts pure [`ChunkMeshData`] buffers into a Bevy mesh (CPU-resident) —
-/// mirrors `runtime::to_bevy_mesh` so LOD swaps keep the same conventions.
-fn to_bevy_mesh(data: &ChunkMeshData) -> Mesh {
-    let mut mesh = Mesh::new(
-        PrimitiveTopology::TriangleList,
-        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
-    );
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, data.positions.clone());
-    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, data.normals.clone());
-    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, data.uvs.clone());
-    // Only surfaces that actually use vertex colours get the attribute:
-    // roads carry their edge alpha there, terrain chunks carry nothing.
-    if !data.colors.is_empty() {
-        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, data.colors.clone());
-    }
-    mesh.insert_indices(Indices::U32(data.indices.clone()));
-    mesh
-}
 
 #[cfg(test)]
 mod tests {
@@ -1149,12 +813,6 @@ mod tests {
             lods.sort_unstable();
             lods
         };
-        let count = |app: &mut bevy::app::App| {
-            let mut q = app
-                .world_mut()
-                .query::<&crate::terrain::voxel::VoxelChunk>();
-            q.iter(app.world()).count()
-        };
         assert_eq!(lod(&mut app), vec![0, 0, 0, 0], "camera at center: LOD 0");
 
         // Pin the render distance while the LOD ladder is under test: the
@@ -1283,7 +941,7 @@ mod tests {
         // e a re-seleção para o LOD 2 só chegava num passe seguinte.
         move_camera(&mut app, 78.0, 8.0);
         let mut q = app.world_mut().query::<&TerrainChunk>();
-        let mut lods: Vec<u8> = q.iter(app.world()).map(|(c)| c.built_lod).collect();
+        let mut lods: Vec<u8> = q.iter(app.world()).map(|c| c.built_lod).collect();
         lods.sort_unstable();
         assert_eq!(
             lods,

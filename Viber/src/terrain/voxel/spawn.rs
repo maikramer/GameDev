@@ -1,22 +1,18 @@
-//! Spawning the volumetric chunks — where the field becomes geometry in the
-//! world.
+//! Spawning the volumetric columns — where the field becomes geometry.
 //!
-//! A terrain chunk classified [`ChunkClass::Volumetric`] does **not** get a
-//! heightfield mesh. It is covered instead by a stack of [`VoxelChunk`]
-//! entities, each a 32³ box meshed with surface nets. The two paths never
-//! overlap, so there is no double geometry and nothing to z-fight.
-//!
-//! The stack is vertical because the shape is: a cliff on a 200 m hillside
-//! spans far more Y than one box. Most of that stack is proven uniform and
-//! never sampled ([`VoxelField::region_state`]); only the boxes the surface
-//! actually crosses are built.
+//! No caminho 100% volumétrico CADA célula da grelha de chunks é uma COLUNA
+//! voxel: a entidade `TerrainChunk` (nome `chunk cz-cx`) é o pai de uma
+//! pilha de caixas [`VoxelChunk`] meshadas com surface nets. O ladder de
+//! LOD vive no `plugin.rs` (select + histerese + budget + cull); o que este
+//! módulo fornece é a geometria pura — [`lod_shape`] (tiled de caixas por
+//! LOD), [`column_boxes`] (quais caixas existem) e [`build_box_mesh`] (uma
+//! caixa → buffers).
 
 use bevy::prelude::*;
 
 use super::super::brush::BrushGrid;
-use super::super::layer_material::TerrainChunkMaterial;
 use super::super::mesh::HeightField;
-use super::super::runtime::{ChunkLayerMap, to_bevy_mesh};
+use super::super::runtime::{ChunkLayerMap, ChunkMaterialHandle, to_bevy_mesh};
 use super::super::spec::TerrainSpec;
 use super::field::VoxelField;
 use super::mods::Bounds3;
@@ -46,165 +42,6 @@ pub struct VoxelSpawnStats {
     pub empty: usize,
     /// Terrain chunks handed to the voxel mesher.
     pub chunks: usize,
-}
-
-/// Builds and spawns every volumetric chunk of the world.
-///
-/// Iteration is driven by the **terrain chunk grid**, not by a world-aligned
-/// voxel grid, and that is load-bearing. A voxel box snapped to its own
-/// lattice spills into neighbouring terrain chunks whenever the two grids do
-/// not share an origin — and they generally do not: the terrain grid starts at
-/// `-world_size/2`, which for the 4 km world is -2000, not a multiple of the
-/// 32 m box. The spilled box meshes ground that a *flat* chunk is also drawing,
-/// and the two z-fight along the whole boundary.
-///
-/// Driving from the terrain grid makes the tiling exact: a volumetric chunk is
-/// covered by whole boxes, a flat chunk by none.
-///
-/// `voxel_size` is the WANTED cell size: boxes per edge are rounded up and the
-/// actual box extent is derived from `chunk_edge` so a row of boxes ends
-/// exactly on the border. `material` is the standard-material fallback for
-/// chunks without a per-chunk layer entry — it must be double-sided
-/// (`cull_mode: None`; surface nets leaves a few inward-wound triangles along
-/// sub-voxel thin shells), which is how the bootstrap builds it.
-#[allow(clippy::too_many_arguments)]
-pub fn spawn_voxel_chunks(
-    world: &mut World,
-    meshes: &mut Assets<Mesh>,
-    parent: Entity,
-    spec: &TerrainSpec,
-    grid: &BrushGrid,
-    field: &VoxelField,
-    material: &Handle<StandardMaterial>,
-    layer_map: Option<&ChunkLayerMap>,
-    voxel_size: f32,
-    chunk_edge: f32,
-) -> VoxelSpawnStats {
-    let mut stats = VoxelSpawnStats::default();
-    if field.is_flat() || !(chunk_edge.is_finite() && chunk_edge > 0.0) {
-        return stats;
-    }
-    let wanted = VOXEL_CHUNK_CELLS as f32 * voxel_size;
-    if !(wanted.is_finite() && wanted > 0.0) {
-        return stats;
-    }
-    // Boxes per terrain-chunk edge, rounded up so a chunk is always covered.
-    // When the wanted box does not divide the edge exactly (edge 96 at a 2 m
-    // step wants 64 m boxes → 2 boxes = 128 m), the row would overrun the
-    // chunk border and spill into the neighbour — z-fighting a flat chunk's
-    // heightfield or interpenetrating a volumetric one. Derive the box extent
-    // FROM the chunk edge instead: whole boxes per row that tile the chunk
-    // exactly. When it does divide (the default 64 m chunk at a 1 m step),
-    // the extent comes out identical.
-    let per_edge = (chunk_edge / wanted).ceil().max(1.0) as i32;
-    let extent = chunk_edge / per_edge as f32;
-    let voxel_size = extent / VOXEL_CHUNK_CELLS as f32;
-    let mods_y = field.index().bounds();
-    // `chunk_tint` is what the heightfield mesher uses: with `layers` active it
-    // zeroes the banding so the splat owns the look, and the voxel path has to
-    // make the same choice or the two disagree at every boundary.
-    let tint = spec.chunk_tint();
-    // Same per-world choice the heightfield mesher makes about R: in a
-    // `layers` world R carries wall space for the chunk shader, on the legacy
-    // path the vertex colour is the plain tint the StandardMaterial
-    // multiplies.
-    let uses_layer_material = !spec.layers.is_empty();
-
-    let half = spec.world_size * 0.5;
-    let rows = (spec.world_size / chunk_edge).ceil().max(1.0) as i32;
-
-    for cz in 0..rows {
-        for cx in 0..rows {
-            let x0 = -half + cx as f32 * chunk_edge;
-            let z0 = -half + cz as f32 * chunk_edge;
-            if !field.is_volumetric_chunk(x0, z0, chunk_edge) {
-                continue;
-            }
-            stats.chunks += 1;
-            // The per-chunk layer material of the SAME terrain chunk. With
-            // `layers` active the terrain is drawn by `TerrainChunkMaterial`
-            // and the standard handle is only a fallback — giving the voxel
-            // boxes the fallback paints them plain white next to a textured
-            // hillside, which is exactly what it looks like.
-            let chunk_material = layer_map.and_then(|m| m.get(cx as u32, cz as u32)).cloned();
-
-            // Vertical envelope for this chunk only: the ground it spans plus
-            // whatever the mods reach. Everything outside is provably sky or
-            // bedrock and never gets a box at all.
-            let (gmin, gmax) = grid
-                .range_over(x0, z0, x0 + chunk_edge, z0 + chunk_edge)
-                .unwrap_or((0.0, spec.max_height));
-            let y_lo = gmin.min(mods_y.min.y) - 1.0;
-            let y_hi = gmax.max(mods_y.max.y) + 1.0;
-            let iy0 = (y_lo / extent).floor() as i32;
-            let iy1 = (y_hi / extent).ceil() as i32;
-
-            for iz in 0..per_edge {
-                for ix in 0..per_edge {
-                    for iy in iy0..iy1 {
-                        let origin = Vec3::new(
-                            x0 + ix as f32 * extent,
-                            iy as f32 * extent,
-                            z0 + iz as f32 * extent,
-                        );
-                        let bounds = Bounds3::from_corners(origin, origin + Vec3::splat(extent));
-                        if field.region_state(grid, &bounds).is_some() {
-                            stats.skipped_uniform += 1;
-                            continue;
-                        }
-                        let params = VoxelChunkParams {
-                            origin,
-                            cells: VOXEL_CHUNK_CELLS,
-                            voxel_size,
-                            texture_tile_size: spec.texture_tile_size,
-                            tint: tint.clone(),
-                            max_height: spec.max_height,
-                            uses_layer_material,
-                            seal_faces: [false; 4],
-                            seal_depth: 0.0,
-                        };
-                        let density = |p: Vec3| field.density(grid, p);
-                        let Some(data) = build_voxel_mesh(&density, &params) else {
-                            stats.empty += 1;
-                            continue;
-                        };
-                        let coords = IVec3::new(cx * per_edge + ix, iy, cz * per_edge + iz);
-                        let handle = meshes.add(to_bevy_mesh(&data));
-                        let mut entity = world.spawn((
-                            Name::new(format!(
-                                "voxel chunk {}-{}-{}",
-                                coords.x, coords.y, coords.z
-                            )),
-                            VoxelChunk {
-                                coords,
-                                origin,
-                                extent,
-                                voxel_size,
-                            },
-                            // Surface-nets positions are origin-relative on all
-                            // three axes, unlike the heightfield mesher's
-                            // absolute Y.
-                            Transform::from_translation(origin),
-                            Visibility::Inherited,
-                            Mesh3d(handle),
-                            ChildOf(parent),
-                        ));
-                        match &chunk_material {
-                            Some(layer) => {
-                                entity
-                                    .insert(MeshMaterial3d::<TerrainChunkMaterial>(layer.clone()));
-                            }
-                            None => {
-                                entity.insert(MeshMaterial3d(material.clone()));
-                            }
-                        }
-                        stats.meshed += 1;
-                    }
-                }
-            }
-        }
-    }
-    stats
 }
 
 // ── Colunas voxel com ladder de LOD ─────────────────────────────────────────
@@ -373,10 +210,10 @@ pub(crate) fn spawn_box_entity(
     parent: Entity,
     b: &VoxelBoxSpec,
     data: super::super::mesh::ChunkMeshData,
-    material: &super::super::runtime::ChunkMaterialHandle,
+    material: &ChunkMaterialHandle,
     visible: bool,
 ) -> Entity {
-    let handle = meshes.add(super::super::runtime::to_bevy_mesh(&data));
+    let handle = meshes.add(to_bevy_mesh(&data));
     let mut entity = commands.spawn((
         Name::new(format!(
             "voxel chunk {}-{}-{}",
@@ -399,10 +236,10 @@ pub(crate) fn spawn_box_entity(
         ChildOf(parent),
     ));
     match material {
-        super::super::runtime::ChunkMaterialHandle::Layer(material) => {
+        ChunkMaterialHandle::Layer(material) => {
             entity.insert(MeshMaterial3d(material.clone()));
         }
-        super::super::runtime::ChunkMaterialHandle::Standard(material) => {
+        ChunkMaterialHandle::Standard(material) => {
             entity.insert(MeshMaterial3d(material.clone()));
         }
     }
@@ -419,7 +256,7 @@ pub(crate) fn spawn_column(
     parent: Entity,
     coords: UVec2,
     lod: u8,
-    material: &super::super::runtime::ChunkMaterialHandle,
+    material: &ChunkMaterialHandle,
     boxes: &[VoxelBoxSpec],
     grid: &BrushGrid,
     field: &VoxelField,
@@ -452,6 +289,7 @@ pub(crate) fn spawn_column(
 /// render ao LOD que a distância da câmara pede (o plugin cuida do resto —
 /// respawn à aproximação e refinamento com histerese). Sem câmara (testes
 /// headless) tudo nasce em LOD 0, como no heightfield.
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_voxel_columns(
     world: &mut World,
     meshes: &mut Assets<Mesh>,
@@ -461,7 +299,7 @@ pub fn spawn_voxel_columns(
     field: &VoxelField,
     camera_xz: Option<Vec2>,
     standard: Handle<StandardMaterial>,
-    layer_map: Option<&super::super::runtime::ChunkLayerMap>,
+    layer_map: Option<&ChunkLayerMap>,
 ) -> VoxelSpawnStats {
     let mut stats = VoxelSpawnStats::default();
     let edge = super::super::plugin::chunk_edge(spec);
@@ -494,8 +332,8 @@ pub fn spawn_voxel_columns(
             stats.chunks += 1;
             let material = layer_map
                 .and_then(|m| m.get(cx, cz).cloned())
-                .map(super::super::runtime::ChunkMaterialHandle::Layer)
-                .unwrap_or_else(|| super::super::runtime::ChunkMaterialHandle::Standard(standard.clone()));
+                .map(ChunkMaterialHandle::Layer)
+                .unwrap_or_else(|| ChunkMaterialHandle::Standard(standard.clone()));
             let (_, built) = spawn_column(
                 &mut commands,
                 meshes,
@@ -560,87 +398,26 @@ mod tests {
         VoxelField::new(vec![shelf], world_size, 64.0)
     }
 
-    struct Harness {
-        world: World,
-        material: Handle<StandardMaterial>,
-        parent: Entity,
-        meshes: Assets<Mesh>,
-    }
-
-    fn harness() -> Harness {
-        let mut world = World::new();
-        let meshes = Assets::<Mesh>::default();
-        let mut materials = Assets::<StandardMaterial>::default();
-        let material = materials.add(StandardMaterial::default());
-        let parent = world.spawn(Name::new("terrain")).id();
-        Harness {
-            world,
-            material,
-            parent,
-            meshes,
-        }
-    }
-
     #[test]
-    fn test_a_flat_world_spawns_nothing_at_all() {
-        let mut h = harness();
-        let grid = flat_grid(256.0, 10.0, 100.0);
-        let stats = spawn_voxel_chunks(
-            &mut h.world,
-            &mut h.meshes,
-            h.parent,
-            &TerrainSpec::default(),
-            &grid,
-            &VoxelField::flat(256.0, 64.0),
-            &h.material,
-            None,
-            1.0,
-            64.0,
-        );
-        assert_eq!(stats, VoxelSpawnStats::default());
-        assert_eq!(h.world.query::<&VoxelChunk>().iter(&h.world).count(), 0);
+    fn test_lod_shape_ladder_doubles_the_cell() {
+        // Chunk 64 m, célula LOD-0 de 1 m: LOD0 = 2×2 caixas de 32³ @1 m,
+        // LOD1 = 1 caixa @2 m, LOD2 = 16³ @4 m (32 células a 4 m não
+        // ladrilham 64 m — a 16 sim).
+        assert_eq!(lod_shape(1.0, 64.0, 0), VoxelLodShape { cells: 32, per_edge: 2 });
+        assert_eq!(lod_shape(1.0, 64.0, 1), VoxelLodShape { cells: 32, per_edge: 1 });
+        assert_eq!(lod_shape(1.0, 64.0, 2), VoxelLodShape { cells: 16, per_edge: 1 });
+        // Edge 16 (spec pequena dos testes): tudo numa caixa por coluna.
+        assert_eq!(lod_shape(1.0, 16.0, 0), VoxelLodShape { cells: 16, per_edge: 1 });
+        assert_eq!(lod_shape(1.0, 16.0, 2), VoxelLodShape { cells: 4, per_edge: 1 });
     }
 
+    /// O invariante que evitava o moiré: as caixas ladrilham a COLUNA
+    /// exatamente — dentro da célula da grelha e sobre o lattice derivado da
+    /// borda. Com tudo voxel, o mesmo contrato garante que colunas vizinhas
+    /// ao mesmo LOD partilham vértices por coincidência.
     #[test]
-    fn test_spawning_meshes_the_shelf() {
-        let mut h = harness();
-        let grid = flat_grid(256.0, 10.0, 100.0);
-        let spec = TerrainSpec {
-            world_size: 256.0,
-            ..TerrainSpec::default()
-        };
-        let field = shelf_field(256.0);
-        let stats = spawn_voxel_chunks(
-            &mut h.world,
-            &mut h.meshes,
-            h.parent,
-            &spec,
-            &grid,
-            &field,
-            &h.material,
-            None,
-            1.0,
-            64.0,
-        );
-        assert!(
-            stats.meshed > 0,
-            "the shelf must produce geometry: {stats:?}"
-        );
-        assert!(stats.chunks > 0, "some terrain chunk must be claimed");
-        let spawned = h.world.query::<&VoxelChunk>().iter(&h.world).count();
-        assert_eq!(spawned, stats.meshed, "one entity per meshed box");
-    }
-
-    /// The z-fighting regression, stated as an invariant.
-    ///
-    /// Every voxel box must lie inside a terrain chunk the classifier calls
-    /// volumetric. A box that spills into a flat chunk meshes ground the
-    /// heightfield mesher is also drawing, and the pair z-fight across the
-    /// whole overlap — a full-screen moiré, not a subtle seam.
-    #[test]
-    fn test_no_voxel_box_lands_in_a_chunk_the_heightfield_still_owns() {
+    fn test_boxes_tile_the_column_exactly() {
         for world_size in [256.0_f32, 300.0, 4000.0] {
-            let mut h = harness();
             let grid = flat_grid(world_size, 10.0, 100.0);
             let spec = TerrainSpec {
                 world_size,
@@ -648,148 +425,62 @@ mod tests {
             };
             let field = shelf_field(world_size);
             let edge = 64.0_f32;
-            spawn_voxel_chunks(
-                &mut h.world,
-                &mut h.meshes,
-                h.parent,
-                &spec,
-                &grid,
-                &field,
-                &h.material,
-                None,
-                1.0,
-                edge,
-            );
+            let coords = UVec2::new(2, 1);
+            let boxes = column_boxes(&spec, &grid, &field, edge, 1.0, 0, coords);
+            assert!(!boxes.is_empty(), "world {world_size}: nothing planned");
 
             let half = world_size * 0.5;
-            let boxes: Vec<(Vec3, f32)> = h
-                .world
-                .query::<&VoxelChunk>()
-                .iter(&h.world)
-                .map(|c| (c.origin, c.extent))
-                .collect();
-            assert!(!boxes.is_empty(), "world {world_size}: nothing spawned");
-
-            for (origin, extent) in boxes {
-                // Every corner of the box must sit in a volumetric chunk.
-                for (dx, dz) in [
-                    (0.0, 0.0),
-                    (extent - 0.01, 0.0),
-                    (0.0, extent - 0.01),
-                    (extent - 0.01, extent - 0.01),
-                ] {
-                    let px = origin.x + dx;
-                    let pz = origin.z + dz;
-                    let cx = ((px + half) / edge).floor();
-                    let cz = ((pz + half) / edge).floor();
-                    let x0 = -half + cx * edge;
-                    let z0 = -half + cz * edge;
-                    assert!(
-                        field.is_volumetric_chunk(x0, z0, edge),
-                        "world {world_size}: box at {origin:?} reaches ({px}, {pz}), \
-                         inside FLAT chunk ({cx}, {cz}) — that overlap z-fights"
-                    );
-                }
+            let x0 = -half + coords.x as f32 * edge;
+            let z0 = -half + coords.y as f32 * edge;
+            for b in &boxes {
+                assert!(
+                    b.origin.x >= x0 - 0.01
+                        && b.origin.x + b.extent <= x0 + edge + 0.01
+                        && b.origin.z >= z0 - 0.01
+                        && b.origin.z + b.extent <= z0 + edge + 0.01,
+                    "box {b:?} overruns its column"
+                );
+                assert!(
+                    ((b.origin.x - x0) / b.extent).fract().abs() < 1e-4,
+                    "box not on the column lattice: {b:?}"
+                );
             }
         }
     }
 
-    /// A chunk edge the wanted box does not divide must not let the box row
-    /// overrun the chunk: `ceil(96/64) = 2` boxes of 64 m span 128 m, spilling
-    /// 32 m into the neighbour — z-fight with a flat chunk, interpenetration
-    /// with a volumetric one. The row has to be re-derived from the edge
-    /// instead (48 m boxes tile 96 m exactly), and the default 64 m / 1 m
-    /// world must stay byte-identical.
+    /// Mundo sem mods: as caixas de coluna continuam a cobrir a superfície
+    /// (o heightfield é só o termo-base agora) e o mesh sai ao nível certo.
     #[test]
-    fn test_an_edge_that_does_not_divide_the_box_keeps_the_row_inside() {
-        let mut h = harness();
+    fn test_a_flat_world_boxes_cover_the_surface() {
         let grid = flat_grid(256.0, 10.0, 100.0);
-        let spec = TerrainSpec {
-            world_size: 256.0,
-            ..TerrainSpec::default()
-        };
-        let field = shelf_field(256.0);
-        spawn_voxel_chunks(
-            &mut h.world,
-            &mut h.meshes,
-            h.parent,
-            &spec,
-            &grid,
-            &field,
-            &h.material,
-            None,
-            2.0, // wanted 64 m boxes against a 96 m edge
-            96.0,
-        );
-
-        let boxes: Vec<(Vec3, f32)> = h
-            .world
-            .query::<&VoxelChunk>()
-            .iter(&h.world)
-            .map(|c| (c.origin, c.extent))
-            .collect();
-        assert!(!boxes.is_empty(), "nothing spawned");
-        let half = 128.0_f32;
-        for (origin, extent) in &boxes {
-            let cx = ((origin.x + half) / 96.0).floor() as i32;
-            let cz = ((origin.z + half) / 96.0).floor() as i32;
-            let x0 = -half + cx as f32 * 96.0;
-            let z0 = -half + cz as f32 * 96.0;
-            assert!(
-                origin.x >= x0 - 0.01
-                    && origin.x + extent <= x0 + 96.0 + 0.01
-                    && origin.z >= z0 - 0.01
-                    && origin.z + extent <= z0 + 96.0 + 0.01,
-                "box {origin:?} extent {extent} overruns its chunk ({x0}, {z0})"
-            );
-            // Rows tile the chunk exactly: origins sit on the derived lattice.
-            assert!(
-                ((origin.x - x0) / extent).fract().abs() < 1e-4,
-                "box {origin:?} is not on the {extent} m lattice of its chunk"
-            );
+        let spec = TerrainSpec::default();
+        let field = VoxelField::flat(256.0, 64.0);
+        let boxes = column_boxes(&spec, &grid, &field, 64.0, 1.0, 0, UVec2::new(1, 1));
+        assert!(!boxes.is_empty(), "flat ground must still be meshed");
+        let mut meshed = 0;
+        for b in &boxes {
+            if let Some(data) = build_box_mesh(&spec, &grid, &field, b) {
+                meshed += 1;
+                for (i, pos) in data.positions.iter().enumerate() {
+                    // Os vértices de selo pendem seal_depth abaixo da
+                    // superfície — só a pele para cima tem de acertar o nível.
+                    if data.normals[i][1] < 0.5 {
+                        continue;
+                    }
+                    assert!(
+                        (10.0 - (b.origin.y + pos[1])).abs() < 1.01,
+                        "vertex off the flat surface: {pos:?}"
+                    );
+                }
+            }
         }
+        assert!(meshed > 0, "at least one box meshes the surface");
     }
 
-    /// The default world (64 m chunks, 1 m step) must be untouched by the
-    /// extent derivation: 2 boxes of 32 m, exactly as before.
-    #[test]
-    fn test_the_default_chunk_edge_keeps_its_32m_boxes() {
-        let mut h = harness();
-        let grid = flat_grid(256.0, 10.0, 100.0);
-        let spec = TerrainSpec {
-            world_size: 256.0,
-            ..TerrainSpec::default()
-        };
-        spawn_voxel_chunks(
-            &mut h.world,
-            &mut h.meshes,
-            h.parent,
-            &spec,
-            &grid,
-            &shelf_field(256.0),
-            &h.material,
-            None,
-            1.0,
-            64.0,
-        );
-        let extents: Vec<f32> = h
-            .world
-            .query::<&VoxelChunk>()
-            .iter(&h.world)
-            .map(|c| c.extent)
-            .collect();
-        assert!(!extents.is_empty());
-        assert!(
-            extents.iter().all(|e| *e == 32.0),
-            "default extent changed: {extents:?}"
-        );
-    }
-
+    /// A prova `region_state` continua a pagar o aluguer: relevo profundo
+    /// deixa a maioria das caixas do envelope por amostrar.
     #[test]
     fn test_real_relief_lets_most_boxes_be_proven_uniform() {
-        // The proof exists for this: a wall on a hillside. Without it every box
-        // in the stack would be sampled ~39 k times to discover it is sky.
-        let mut h = harness();
         let grid = sloped_grid(256.0, 200.0);
         let spec = TerrainSpec {
             world_size: 256.0,
@@ -802,31 +493,18 @@ mod tests {
             ModOp::Union,
         ));
         let field = VoxelField::new(vec![wall], 256.0, 64.0);
-        let stats = spawn_voxel_chunks(
-            &mut h.world,
-            &mut h.meshes,
-            h.parent,
-            &spec,
-            &grid,
-            &field,
-            &h.material,
-            None,
-            1.0,
-            64.0,
-        );
+        let boxes = column_boxes(&spec, &grid, &field, 64.0, 1.0, 0, UVec2::new(1, 1));
+        assert!(!boxes.is_empty(), "the wall column must plan boxes");
+        // Sem a prova seriam 2×2×(200/32) ≈ 26 caixas por coluna.
         assert!(
-            stats.meshed > 0,
-            "the wall must produce geometry: {stats:?}"
-        );
-        assert!(
-            stats.skipped_uniform > 0,
-            "deep relief must let sky/bedrock boxes be skipped unsampled: {stats:?}"
+            boxes.len() < 12,
+            "{} boxes planned — region_state is not pruning",
+            boxes.len()
         );
     }
 
     #[test]
     fn test_a_cave_produces_a_ceiling() {
-        let mut h = harness();
         let grid = flat_grid(256.0, 60.0, 100.0);
         let spec = TerrainSpec {
             world_size: 256.0,
@@ -841,44 +519,46 @@ mod tests {
             open_ends: true,
         };
         let field = VoxelField::new(cave.build(&grid), 256.0, 64.0);
-        let stats = spawn_voxel_chunks(
-            &mut h.world,
-            &mut h.meshes,
-            h.parent,
-            &spec,
-            &grid,
-            &field,
-            &h.material,
-            None,
-            1.0,
-            64.0,
-        );
-        assert!(stats.meshed > 0, "the tunnel must mesh: {stats:?}");
-
-        // A ceiling is a surface whose normal points DOWN. No heightfield mesh
-        // has one anywhere.
-        let meshes = &h.meshes;
+        let boxes = column_boxes(&spec, &grid, &field, 64.0, 1.0, 0, UVec2::new(1, 1));
         let mut downward = 0usize;
-        let mut entities: Vec<Entity> = Vec::new();
-        {
-            let mut q = h.world.query::<(Entity, &VoxelChunk)>();
-            for (e, _) in q.iter(&h.world) {
-                entities.push(e);
-            }
-        }
-        for e in entities {
-            let handle = h.world.get::<Mesh3d>(e).expect("voxel chunk has a mesh");
-            let mesh = meshes.get(&handle.0).expect("mesh asset exists");
-            if let Some(bevy::render::mesh::VertexAttributeValues::Float32x3(normals)) =
-                mesh.attribute(Mesh::ATTRIBUTE_NORMAL)
-            {
-                downward += normals.iter().filter(|n| n[1] < -0.5).count();
+        for b in &boxes {
+            if let Some(data) = build_box_mesh(&spec, &grid, &field, b) {
+                downward += data
+                    .normals
+                    .iter()
+                    .filter(|n| n[1] < -0.5)
+                    .count();
             }
         }
         assert!(
             downward > 0,
-            "the cave meshed no downward-facing surface — there is no roof, \
-             which is the one thing a heightfield could not do either"
+            "the cave meshed no downward-facing surface — there is no roof"
         );
+    }
+
+    /// As caixas na fronteira da coluna levam o selo da face externa; as
+    /// interiores não (as costuras internas fecham por coincidência).
+    #[test]
+    fn test_seal_faces_mark_only_column_boundary_boxes() {
+        let grid = flat_grid(256.0, 10.0, 100.0);
+        let spec = TerrainSpec::default();
+        let field = shelf_field(256.0);
+        let boxes = column_boxes(&spec, &grid, &field, 64.0, 1.0, 0, UVec2::new(1, 1));
+        assert!(!boxes.is_empty());
+        let half = 128.0_f32;
+        let x0 = -half + 64.0; // coluna (1,1)
+        let z0 = -half + 64.0;
+        let per_edge = 2; // LOD0: 2×2 caixas de 32 m
+        for b in &boxes {
+            let lx = ((b.origin.x - x0) / b.extent).round() as i32;
+            let lz = ((b.origin.z - z0) / b.extent).round() as i32;
+            assert_eq!(b.seal[0], lx == 0, "−X seal só na fronteira: {b:?}");
+            assert_eq!(b.seal[1], lx == per_edge - 1, "+X seal só na fronteira: {b:?}");
+            assert_eq!(b.seal[2], lz == 0, "−Z seal só na fronteira: {b:?}");
+            assert_eq!(b.seal[3], lz == per_edge - 1, "+Z seal só na fronteira: {b:?}");
+        }
+        // O canto mínimo leva −X e −Z; o oposto leva +X e +Z.
+        assert!(boxes.iter().any(|b| b.seal[0] && b.seal[2]));
+        assert!(boxes.iter().any(|b| b.seal[1] && b.seal[3]));
     }
 }

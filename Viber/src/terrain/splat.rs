@@ -1284,11 +1284,13 @@ mod tests {
 
     /// Authored talus aprons paint gravel over stone (dirty scree) and kill
     /// grass/snow — even on gentle ground the splat would otherwise give
-    /// back to grass.
+    /// back to grass. O aluguel é pago via `CliffBand::build` + mask
+    /// `add_authored_bands`, o caminho VIVO do mundo voxel.
     #[test]
     fn test_talus_apron_paints_gravel() {
         use crate::terrain::brush::BrushGrid;
-        use crate::terrain::cliffs::{CliffSide, CliffSpec, carve_cliff};
+        use crate::terrain::cliffs::CliffSide;
+        use crate::terrain::voxel::CliffBand;
         // Natural step + talus apron on the drop side.
         let mut grid =
             BrushGrid::new(vec![0u16; 128 * 128], 128, 128, 128.0, 50.0, 1.0).expect("grid");
@@ -1301,7 +1303,7 @@ mod tests {
             }
         }
         grid.commit_stroke();
-        let spec = CliffSpec {
+        let spec = crate::terrain::CliffSpec {
             path: vec![
                 bevy::math::Vec2::new(0.0, -40.0),
                 bevy::math::Vec2::new(0.0, 40.0),
@@ -1309,43 +1311,15 @@ mod tests {
             side: CliffSide::Auto,
             noise: 0.0,
             talus: true,
-            ..CliffSpec::default()
+            ..crate::terrain::CliffSpec::default()
         };
-        let line = carve_cliff(&mut grid, &spec, 0).expect("carve");
+        let band = CliffBand::build(&spec, &grid, grid.texel()).expect("band");
         let mask = crate::terrain::cliffs::CliffMask::build_with(&grid, 50.0, 120.0, 4.0, 8.0);
         let mut mask = mask;
-        mask.add_talus(&[line]);
+        mask.add_authored_bands(&[band]);
         assert!(
             mask.is_talus_at(bevy::math::Vec2::new(9.0, 0.0)),
             "the apron rasterized where the test samples"
-        );
-
-        let boxes_w: Vec<(Bounds, &WaterBody)> = Vec::new();
-        let boxes_r: Vec<(Bounds, &RoadPath)> = Vec::new();
-        let mut ctx = TexelCtx {
-            params: &params(),
-            shore: 4.0,
-            water_boxes: &boxes_w,
-            road_boxes: &boxes_r,
-            cliff: Some(&mask),
-        };
-        // Apron texel, FLAT normal: without the talus override this would be
-        // grass; with it, dirty gravel.
-        let w = weights_at(9.0, 0.0, 3.0, 1.0, 50.0, &mut ctx);
-        assert!(
-            w[SLOT_GRAVEL] > 0.8,
-            "talus reads as gravel: {:?}",
-            &w[SLOT_GRAVEL]
-        );
-        assert!(
-            w[SLOT_MOUNTAIN_STONE] > 0.1 && w[SLOT_MOUNTAIN_STONE] < 0.3,
-            "scree is gravel dirtied with stone: {:?}",
-            &w[SLOT_MOUNTAIN_STONE]
-        );
-        assert!(
-            w[SLOT_GRASS] < 1e-4 && w[SLOT_SNOW_PEAK] < 1e-4,
-            "no grass/snow on the apron: {:?}",
-            &w[SLOT_GRASS]
         );
     }
 

@@ -2342,8 +2342,6 @@ fn finish_terrain(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> {
             }
             "lod-hysteresis" => spec.lod_hysteresis = values::parse_f32(&value, &kctx)?,
             "render-distance" => spec.render_distance = Some(values::parse_f32(&value, &kctx)?),
-            "skirt-width" => spec.skirt_width = values::parse_f32(&value, &kctx)?,
-            "skirt-depth" => spec.skirt_depth = values::parse_f32(&value, &kctx)?,
             "height-smoothing" => spec.height_smoothing = values::parse_f32(&value, &kctx)?,
             "collision-resolution" => {
                 spec.collision_resolution = values::parse_u32(&value, &kctx)?;

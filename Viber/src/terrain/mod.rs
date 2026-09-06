@@ -52,13 +52,11 @@ pub mod water_fx;
 pub mod water_material;
 
 pub use brush::{BrushGrid, BrushMode};
-pub use cliffs::{
-    CliffLine, CliffMask, CliffProfile, CliffSide, CliffSpec, carve_cliff, sharpen_terrain,
-};
+pub use cliffs::{CliffMask, CliffProfile, CliffSide, CliffSpec, sharpen_terrain};
 pub use decal::{GroundDecalSpec, ground_decal_mesh};
 pub use heightmap::HeightMapU16;
 pub use layer_material::TerrainChunkMaterial;
-pub use mesh::{ChunkMeshData, HeightField, TerrainColliderData};
+pub use mesh::{ChunkMeshData, HeightField};
 pub use paths::{chaikin_smooth, resample};
 pub use plugin::TerrainPlugin;
 pub use roads::{RoadNetworkSpec, RoadPath, RoadProfile, RoadSpec, SegmentSpec, WaySpec};
@@ -73,13 +71,3 @@ pub use water::{LakeSpec, RiverSpec, WaterBody, WaterKind};
 pub use water_fx::WaterFxPlugin;
 pub use water_material::{WaterExtension, WaterMaterial, WaterSurfaceConfig};
 
-/// Escape hatch da migração volumétrica: `VIBER_HF_TERRAIN=1` restaura o
-/// caminho heightfield 2.5D completo (mesh de grelha, colliders de heightfield
-/// e o ladder dedicado) enquanto o caminho 100% voxel assenta — A/B de
-/// paridade visual e de performance. Default (unset/0): TODA a superfície sai
-/// do campo voxel por surface nets; o heightfield sobrevive só como dado
-/// (termo-base do SDF, carve de água/estradas, CliffMask).
-pub fn hf_terrain_fallback() -> bool {
-    static CACHE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *CACHE.get_or_init(|| std::env::var("VIBER_HF_TERRAIN").is_ok_and(|v| v == "1"))
-}
