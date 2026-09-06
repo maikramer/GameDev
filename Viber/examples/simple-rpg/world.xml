@@ -42,7 +42,13 @@
            lado) com o dobro de vértices por lado. collision-resolution
            acompanha (32→64) para a heightfield física seguir a malha.
            ============================================================ -->
-    <Terrain pos="-51 0 51" world-size="4000" max-height="200" levels="5" resolution="128" collision-resolution="64" lod-hysteresis="1.3" lod-distance-ratio="1.7" height-smoothing="1" height-smoothing-spread="1.25" heightmap="/assets/terrain/terrain.ahgt" skirt-width="0.015625" roughness="0.95" metalness="0" normal-strength="1.15" base-color="#c9c5ba" texture="/assets/textures/vale_grass.png" texture-tile-size="5" ao-strength="0.85" height-blend-strength="0.22" snow-height="0.92" slope-threshold="0.93" slope-softness="0.05" color-low="#35502a" color-mid="#75a04f" color-high="#e8f0ff" color-rock="#726b60" noise-sand-strength="0.45" noise-sand-scale="0.012" noise-sand-threshold="0.56" noise-sand-height-min="0.42" noise-sand-height-max="0.74" />
+    <!-- `layers`: blend de 12 texturas de solo do pool por splat map
+         (substitui o height tint; snow-height reutilizado para snow_peak).
+         Areia/desert_sand nos fundos e margens de lagos/rios, dirt_trail +
+         dirt_road sob as fitas de estrada, mountain_stone nos penhascos. -->
+    <Terrain render-distance="950" world-size="4000" max-height="200" levels="5" resolution="128" collision-resolution="64" lod-hysteresis="1.3" lod-distance-ratio="1.7" height-smoothing="1" heightmap="/assets/terrain/terrain.ahgt" skirt-width="0.015625" base-color="#c9c5ba" layers="grass vale_grass dirt dirt_trail forest_floor gravel mountain_stone sand desert_sand snow_peak swamp_mud dirt_road" shore-width="6" snow-height="0.92"
+           cliff-angle="50" sharpen="true" sharpen-angle="35" sharpen-seed="7"
+           cliff-streaks="0.55" cliff-moss="0.4" />
     <NavMesh />
   </Group>
   <!-- FIM world-base -->
@@ -66,10 +72,14 @@
   <Include src="/world/landmarks/swamp.xml" />
   <Include src="/world/landmarks/peaks.xml" />
   <Include src="/world/landmarks/wilds.xml" />
+  <!-- Vida noturna de Discordia (peça exploração): janelas, mercado,
+       braseiros nos portões, faróis dos POIs. Só luzes/parts aditivas. -->
+  <Include src="/world/landmarks/village.xml" />
   <!-- Cena separada: ambientes internos (portais das portas → salas em
            (-410, 120); saídas teleportam de volta para as portas exteriores). -->
   <Include src="/world/interiors.xml" />
   <Include src="/world/frontier/ridges.xml" />
+  <Include src="/world/frontier/cliffs.xml" />
   <Include src="/world/frontier/horizon.xml" />
   <Include src="/world/atmosphere/ambient-fx.xml" />
   <Include src="/world/creatures/enemies.xml" />
@@ -90,42 +100,23 @@
            §11 CÂMERA, HUD E UI
            ============================================================ -->
     <PostFxDebugToggle />
-    <!-- HUD: camada declarativa screen-space + widgets (engine HudPlugin). -->
-    <HudScreenLayer>
-      <Clock />
-    </HudScreenLayer>
-    <HealthBar target-entity="player" icon="/assets/icons/hud_health.png" />
-    <XpBar target-entity="player" />
-    <ResourceChip resource="gold" icon="/assets/icons/hud_gold.png" target-entity="player" />
-    <ResourceChip resource="wood" icon="/assets/icons/hud_wood.png" target-entity="player" />
-    <ResourceChip resource="stone" icon="/assets/icons/hud_stone.png" target-entity="player" />
+    <!-- HUD declarativo (engine `src/ui`): estrutura em world/hud.xml,
+         aparência em ui/hud.css, comportamento em scripts/ui/hud.lua.
+         O script corre sempre (a UI não é um NPC com raio de activação). -->
+    <Include src="/world/hud.xml" />
+    <!-- Menu do jogo: modal com Missões / Mochila / Talentos / Loja /
+         Controlos / Sistema, todo em XML + CSS + Luau. Abre em [Q]. -->
+    <Include src="/world/menu.xml" />
+    <!-- Widgets que desenham dados do mundo (pontos, agulhas, marcadores):
+         continuam nativos porque o conteúdo é geométrico, não estilizável.
+         O enquadramento visual deles vive na mesma paleta do hud.css. -->
+    <HudScreenLayer />
     <Minimap range="60" />
     <Compass />
-    <TargetBar />
-    <BossBar target-entity="boss" />
-    <InteractionPrompt key="F" range="4.5" position="bottom-center" />
-    <!-- Navegação de missão: seta screen-space para o marcador rastreado
-           (fora do ecrã encosta à borda e aponta) + canto com as missões
-           ativas. Os pontos no minimapa/bússola vêm do mesmo registo de
-           waypoints (QuestBeaconSystem). -->
     <WaypointArrow margin="64" />
-    <QuestTracker anchor="top-right" max-rows="4" />
     <!-- Diálogo (instância única). QuestTriggerSystem abre ao [F] perto
-           de um <DialogueNPC>; QuestsTab lista as quests ativas. -->
+         de um <DialogueNPC>. -->
     <DialogueBalloon />
-    <!-- Menu de pausa: modal tabbed com [Q]. -->
-    <TabbedModal id="pause" key="q" target-entity="player" title-key="modal.pause">
-      <InventoryTab columns="5" />
-      <SkillsTab />
-      <OptionsTab label-key="modal.tab.system" preset="core">
-        <OptionRow id="save" type="button" label-key="options.save" />
-        <OptionRow id="load" type="button" label-key="options.load" />
-        <OptionRow id="controls" type="note" label-key="options.controls" />
-      </OptionsTab>
-      <WikiTab />
-      <QuestsTab />
-    </TabbedModal>
   </Group>
   <!-- FIM ui -->
-  <Include src="/world/cities/town-demo.xml" />
 </world>

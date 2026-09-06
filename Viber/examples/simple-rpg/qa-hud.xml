@@ -1,0 +1,27 @@
+<!-- ============================================================
+     qa-hud — mundo MÍNIMO para QA visual do HUD e do menu.
+     Terreno procedural leve + player + os includes do HUD e do
+     menu do simple-rpg (os ficheiros reais, zero cópias).
+
+       Usar a sessão partilhada de QA para este mundo.
+     ============================================================ -->
+<world clear-color="#1b2432">
+
+  <Sky />
+  <DayCycle minute-of-day="540" minutes-per-real-second="4" />
+  <AmbientLight brightness="0.7" />
+
+  <Terrain world-size="256" max-height="14" seed="11" />
+  <DirectionalLight illuminance="28000" shadows="1" direction="-0.4 -0.8 -0.3" />
+
+  <PlayerGLTF model-url="/assets/meshes/characters/hero_lod0.glb" pos="0 3 0" />
+
+  <ThirdPersonCamera target="player" distance="6" pitch="25" />
+  <HudScreenLayer />
+  <Minimap range="60" />
+  <Compass />
+  <DialogueBalloon />
+
+  <Include src="/world/hud.xml" />
+  <Include src="/world/menu.xml" />
+</world>

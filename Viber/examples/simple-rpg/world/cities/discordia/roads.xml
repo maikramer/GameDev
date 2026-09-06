@@ -11,11 +11,16 @@
   área aberta da cidade — o que encolheu foi o vazio entre distritos.
 -->
   <Group name="city.roads" translation="0 0 0">
-    <Group translation="0 0 0" body="fixed" collider="none">
-      <!-- Decal da praça: cobblestone 4 m/tile (a migração derrubou o
-           texture-url original; a engine agora suporta texture em
-           primitivas). base-color neutro para casar com as ribbons. -->
-      <Plane translation="0 0.05 0" half-size="10 10" texture="/assets/textures/cobblestone_road.png" texture-tile-size="9" base-color="#9d9891" roughness="0.9" />
-    </Group>
+    <!-- Chão da praça. Era um <Plane> 20x20: um quadrado a y=0.05 fixo, de
+         cantos duros, empilhado por cima do disco de junção que a rede de
+         estradas também põe em 0 0 — dois decals de cobblestone quase à
+         mesma altura, a brigar no depth e a somar feathers. Agora é um
+         <GroundDecal>: drapeja no terreno, a borda ondula e desvanece em
+         alpha até zero, e o disco de junção é suprimido por baixo dele
+         (features.rs). texture-scale=9 = o mesmo divisor das ribbons, por
+         isso o cobble bate exactamente na junção com as artérias. -->
+    <GroundDecal name="city.plaza.floor" at="0 0" radius="10.5" feather="3.5" noise="0.09"
+                 texture="/assets/textures/cobblestone_road/albedo.ktx2" texture-scale="9"
+                 base-color="#9d9891" roughness="0.9" />
   </Group>
 </world>

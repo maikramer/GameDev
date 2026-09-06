@@ -1,0 +1,386 @@
+/* ============================================================
+   ui/showcase.css — vitrina do dialecto de estilo, RESPONSIVA
+   ============================================================
+   O layout inteiro vive em unidades de viewport (vw/vh/vmin) e
+   troca de sítio por @media: funciona da mesma forma em 4K,
+   720p, numa janela estreita ou em retrato. Cada bloco indica
+   a capacidade que demonstra.
+   ============================================================ */
+
+/* ── palco central: fluido, nunca sai do ecrã ────────────── */
+.stage {
+  position: absolute;
+  left: 3vw;
+  top: 4vh;
+  width: 30vw;
+  min-width: 300;
+  max-width: 380;
+  max-height: 92vh;
+  padding: 2.4vmin;
+  gap: 1.8vmin;
+  overflow: clip;
+  background: slate-900ee;
+  border: 1 stone-700;
+  radius: 12;
+  box-shadow: 0 8 24 #00000099, 0 2 6 #00000066;
+}
+
+.heading {
+  color: amber-300;
+  font-size: 4.2vmin;
+  font-weight: bold;
+  text-align: center;
+  text-shadow: 0 2 #000000aa;
+  underline: amber-500;
+}
+
+.label {
+  color: stone-400;
+  font-size: 1.8vmin;
+}
+
+.group {
+  gap: 0.9vmin;
+}
+
+/* ── grelha de inventário: colunas 1fr = fluem com o painel ── */
+.inv {
+  width: 100%;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 0.9vmin;
+}
+
+.slot {
+  aspect: 1;
+  background: stone-800;
+  border: 1 stone-600;
+  radius: 8;
+  align: center;
+  justify: center;
+}
+
+.slot:hover {
+  background: stone-700;
+  border-color: amber-500;
+  cursor: pointer;
+}
+
+.slot.rare {
+  border-color: sky-500;
+}
+
+.slot.legendary {
+  border-color: amber-400;
+  box-shadow: 0 0 10 amber-50066;
+}
+
+.slot.empty {
+  background: stone-90066;
+  opacity: 0.6;
+}
+
+.slot-icon {
+  width: 60%;
+  height: 60%;
+}
+
+.slot-glyph {
+  color: stone-300;
+  font-size: 3vmin;
+  font-weight: bold;
+}
+
+/* ── checks ───────────────────────────────────────────────── */
+.check {
+  gap: 1.2vmin;
+  align: center;
+  cursor: pointer;
+}
+
+.check-box {
+  width: 2.6vmin;
+  height: 2.6vmin;
+  background: stone-800;
+  border: 1 stone-500;
+  radius: 0.7vmin;
+}
+
+/* O quadradinho do check: o filho `.tick` aparece quando ligado. */
+.check .tick {
+  width: 60%;
+  height: 60%;
+  margin: 20%;
+  radius: 0.4vmin;
+  background: emerald-400;
+  display: none;
+}
+
+.check.checked .tick {
+  display: flex;
+}
+
+.check.checked .check-box {
+  background: emerald-900;
+  border-color: emerald-400;
+}
+
+.check-label {
+  color: stone-200;
+  font-size: 2vmin;
+}
+
+/* ── slider ───────────────────────────────────────────────── */
+.slider-line {
+  gap: 1.4vmin;
+  align: center;
+}
+
+.slider-label {
+  color: stone-400;
+  font-size: 1.9vmin;
+  width: 16vmin;
+}
+
+.slider {
+  width: 40%;
+  height: 1.2vmin;
+  background: stone-800;
+  radius: 4;
+}
+
+.slider .fill {
+  background: sky-500;
+  radius: 4;
+}
+
+.slider .handle {
+  width: 2.4vmin;
+  height: 2.4vmin;
+  margin: 0 -1.2vmin;
+  background: sky-200;
+  radius: 50%;
+  border: 1 sky-600;
+  box-shadow: 0 2 4 #00000088;
+}
+
+.slider.dragging .handle {
+  background: white;
+}
+
+.slider-readout {
+  color: sky-300;
+  font-size: 1.9vmin;
+  min-width: 5vmin;
+  text-align: right;
+}
+
+/* ── input ────────────────────────────────────────────────── */
+.input {
+  width: 100%;
+  height: 4.4vmin;
+  padding: 0.5vmin 1.4vmin;
+  background: stone-950;
+  border: 1 stone-600;
+  radius: 6;
+  cursor: text;
+}
+
+.input.focused {
+  border-color: sky-400;
+  box-shadow: 0 0 6 sky-50055;
+}
+
+.input .input-text {
+  color: stone-100;
+  font-size: 2vmin;
+}
+
+.input.placeholder .input-text {
+  color: stone-500;
+}
+
+/* ── barras, cooldowns, selo ──────────────────────────────── */
+.track {
+  width: 100%;
+  height: 1.4vmin;
+  background: stone-800;
+  radius: 5;
+  overflow: clip;
+}
+
+.track .fill {
+  background: lime-500;
+}
+
+.slots {
+  gap: 1.2vmin;
+}
+
+.slots .slot {
+  width: 6vmin;
+  height: 6vmin;
+}
+
+.glyph {
+  width: 55%;
+  height: 55%;
+}
+
+.seal {
+  width: 6vmin;
+  height: 6vmin;
+  background: violet-700;
+  radius: 50%;
+  align: center;
+  justify: center;
+  box-shadow: 0 0 14 violet-50088;
+}
+
+.seal-glyph {
+  color: violet-100;
+  font-size: 3vmin;
+  font-weight: bold;
+}
+
+/* ── cartão de leitura: direita em paisagem… ──────────────── */
+.readout {
+  position: absolute;
+  right: 3vw;
+  top: 6vh;
+  width: 26vw;
+  min-width: 220;
+  max-width: 320;
+  padding: 2vmin;
+  gap: 0.8vmin;
+  background: slate-950dd;
+  border: 1 slate-700;
+  radius: 10;
+  box-shadow: 0 6 18 #00000088;
+}
+
+.readout-text {
+  color: slate-300;
+  font-size: 1.8vmin;
+}
+
+/* …e RODAPÉ em retrato/janela estreita (o @media troca o sítio). */
+@media (max-aspect: 0.95) {
+  .readout {
+    right: auto;
+    top: auto;
+    left: 3vw;
+    bottom: 3vh;
+    width: 60vw;
+  }
+}
+
+/* ── menu de listas: overlay de viewport INTEIRO, corpo clipado ── */
+.overlay {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100vw;
+  height: 100vh;
+  background: #000000aa;
+  align: center;
+  justify: center;
+  direction: column;
+}
+
+.frame {
+  width: 44vw;
+  min-width: 320;
+  max-width: 560;
+  max-height: 86vh;
+  padding: 2.4vmin;
+  gap: 1.4vmin;
+  background: stone-900f2;
+  border: 1 stone-600;
+  radius: 14;
+  box-shadow: 0 12 40 #000000cc;
+}
+
+.tabbar {
+  gap: 0.9vmin;
+}
+
+.tab {
+  padding: 0.9vmin 2vmin;
+  background: stone-800;
+  radius: 6;
+  cursor: pointer;
+}
+
+.tab:hover {
+  background: stone-700;
+}
+
+.tab.active {
+  background: amber-600;
+}
+
+.tab UiText {
+  color: stone-200;
+  font-size: 2vmin;
+}
+
+.tab.active UiText {
+  color: stone-900;
+  font-weight: bold;
+}
+
+/* A página encolhe com a janela e CLIPA; a lista por dentro roda. */
+.page {
+  width: 100%;
+  height: auto;
+  max-height: 58vh;
+  overflow: clip;
+}
+
+.rows {
+  direction: column;
+  width: 100%;
+  gap: 0.6vmin;
+}
+
+.row {
+  width: 100%;
+  padding: 0.9vmin 1.4vmin;
+  background: stone-80099;
+  radius: 6;
+  justify: space-between;
+}
+
+.row.ready {
+  background: stone-70099;
+}
+
+.row-title {
+  color: stone-100;
+  font-size: 2vmin;
+}
+
+.row-count {
+  color: amber-300;
+  font-size: 1.9vmin;
+}
+
+.empty {
+  color: stone-500;
+  font-size: 1.9vmin;
+  text-align: center;
+  padding: 1.6vmin;
+}
+
+/* ── tooltip (a pinta a engine por omissão; aqui afina-se) ── */
+.tooltip {
+  background: slate-950f0;
+  radius: 6;
+  padding: 0.7vmin 1.3vmin;
+  border: 1 slate-700;
+}
+
+.tooltip UiText {
+  color: slate-100;
+  font-size: 1.9vmin;
+}

@@ -32,7 +32,7 @@
     <!-- ============================================================
        LESTE — planalto do deserto: mesas e arcos recortados no céu
        ============================================================ -->
-    <StaticSpawner profile="tree" count="55" seed="4501" region-min="430 0 -430" region-max="840 0 430" align-to-terrain="1" ground-align="auto" avoid-water="1" max-slope-deg="34" max-slope-attempts="24" scale-min="1.8" scale-max="3.6" avoid-overlaps="1" footprint-radius="14" cluster-count="7" cluster-radius="90" max-distance="900" random-yaw="true" variation="rock">
+    <StaticSpawner cull-distance="1000" profile="tree" count="55" seed="4501" region-min="430 0 -430" region-max="840 0 430" align-to-terrain="1" ground-align="auto" avoid-water="1" max-slope-deg="34" max-slope-attempts="24" scale-min="1.8" scale-max="3.6" avoid-overlaps="1" footprint-radius="14" cluster-count="7" cluster-radius="90" max-distance="956" random-yaw="true" variation="rock">
       <GameObject role="static">
         <GLTFLoader role="visual" url="/assets/meshes/terrain/form_outcrop_5_lod0.glb" lod1-url="/assets/meshes/terrain/form_outcrop_5_lod1.glb" lod2-url="/assets/meshes/terrain/form_outcrop_5_lod2.glb" lod-threshold-near="240" lod-threshold-mid="480" />
       </GameObject>
@@ -46,7 +46,7 @@
     <!-- ============================================================
        OESTE — bacia do pântano: mata morta rala sobre o ponto baixo
        ============================================================ -->
-    <StaticSpawner profile="tree" count="55" seed="4502" region-min="-840 0 -430" region-max="-430 0 430" align-to-terrain="1" ground-align="auto" avoid-water="1" max-slope-deg="30" max-slope-attempts="24" scale-min="1.5" scale-max="2.8" avoid-overlaps="1" footprint-radius="12" cluster-count="8" cluster-radius="80" max-distance="900" random-yaw="true" variation="tree">
+    <StaticSpawner cull-distance="1000" profile="tree" count="55" seed="4502" region-min="-840 0 -430" region-max="-430 0 430" align-to-terrain="1" ground-align="auto" avoid-water="1" max-slope-deg="30" max-slope-attempts="24" scale-min="1.5" scale-max="2.8" avoid-overlaps="1" footprint-radius="12" cluster-count="8" cluster-radius="80" max-distance="956" random-yaw="true" variation="tree">
       <GameObject role="static">
         <GLTFLoader role="visual" url="/assets/meshes/swamp/dead_willow_lod0.glb" lod1-url="/assets/meshes/swamp/dead_willow_lod1.glb" lod2-url="/assets/meshes/swamp/dead_willow_lod2.glb" lod-threshold-near="240" lod-threshold-mid="480" />
       </GameObject>
@@ -57,7 +57,7 @@
     <!-- ============================================================
        NORTE — colinas da floresta: bosques que fecham o horizonte
        ============================================================ -->
-    <StaticSpawner profile="tree" count="95" seed="4503" region-min="-840 0 430" region-max="840 0 840" align-to-terrain="1" ground-align="auto" avoid-water="1" max-slope-deg="34" max-slope-attempts="24" scale-min="1.4" scale-max="2.4" avoid-overlaps="1" footprint-radius="10" cluster-count="12" cluster-radius="70" max-distance="900" random-yaw="true" variation="tree">
+    <StaticSpawner cull-distance="1000" profile="tree" count="95" seed="4503" region-min="-840 0 430" region-max="840 0 840" align-to-terrain="1" ground-align="auto" avoid-water="1" max-slope-deg="34" max-slope-attempts="24" scale-min="1.4" scale-max="2.4" avoid-overlaps="1" footprint-radius="10" cluster-count="12" cluster-radius="70" max-distance="1200" random-yaw="true" variation="tree">
       <GameObject role="static">
         <GLTFLoader role="visual" url="/assets/meshes/forest/pine_dark_lod0.glb" lod1-url="/assets/meshes/forest/pine_dark_lod1.glb" lod2-url="/assets/meshes/forest/pine_dark_lod2.glb" lod-threshold-near="240" lod-threshold-mid="480" />
       </GameObject>
@@ -65,7 +65,7 @@
     <!-- ============================================================
        SUL — encostas dos Picos: falésias a fechar o vale
        ============================================================ -->
-    <StaticSpawner profile="tree" count="95" seed="4504" region-min="-840 0 -840" region-max="840 0 -430" align-to-terrain="1" ground-align="auto" avoid-water="1" max-slope-deg="40" max-slope-attempts="24" scale-min="1.6" scale-max="3.2" avoid-overlaps="1" footprint-radius="14" cluster-count="10" cluster-radius="88" max-distance="900" random-yaw="true" variation="rock">
+    <StaticSpawner cull-distance="1000" profile="tree" count="95" seed="4504" region-min="-840 0 -840" region-max="840 0 -430" align-to-terrain="1" ground-align="auto" avoid-water="1" max-slope-deg="40" max-slope-attempts="24" scale-min="1.6" scale-max="3.2" avoid-overlaps="1" footprint-radius="14" cluster-count="10" cluster-radius="88" max-distance="1200" random-yaw="true" variation="rock">
       <GameObject role="static">
         <GLTFLoader role="visual" url="/assets/meshes/terrain/form_cliff_1_lod0.glb" lod1-url="/assets/meshes/terrain/form_cliff_1_lod1.glb" lod2-url="/assets/meshes/terrain/form_cliff_1_lod2.glb" lod-threshold-near="240" lod-threshold-mid="480" />
       </GameObject>

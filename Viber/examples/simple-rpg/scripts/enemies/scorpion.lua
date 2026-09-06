@@ -5,16 +5,13 @@ local AGGRO, DEAGGRO, ATTACK_RANGE = 9, 14, 1.7
 local DAMAGE, COOLDOWN = 11, 1.8
 local WANDER_RADIUS = 5
 
-local st = viber.state()
-st.t = 0
-local target = nil
-
-local function pick_target()
+local function pick_target(st)
   local tx, tz = viber.wander_target(WANDER_RADIUS)
-  target = { tx, tz }
+  st.target = { tx, tz }
 end
 
 function on_update(dt)
+  local st = viber.state() -- POR ENTIDADE: no top-level partilhava entre instâncias
   local has, px, py, pz = viber.player_position()
   if not has then return end
   local x, y, z = viber.position()
@@ -27,19 +24,20 @@ function on_update(dt)
       st.t = 0
     else
       viber.face_player()
-      st.t = st.t + dt
+      st.t = (st.t or 0) + dt
       if st.t >= COOLDOWN then
         st.t = 0
         viber.damage_player(DAMAGE)
+        viber.apply_status("venom", 4) -- veneno 4 s (dá uso ao antídoto [2])
       end
     end
   else
-    if target == nil then pick_target() end
-    local td = math.sqrt((target[1] - x)^2 + (target[2] - z)^2)
+    if st.target == nil then pick_target(st) end
+    local td = math.sqrt((st.target[1] - x)^2 + (st.target[2] - z)^2)
     if td < 0.8 then
-      target = nil
+      st.target = nil
     else
-      viber.move_towards(target[1], target[2], SPEED_WANDER)
+      viber.move_towards(st.target[1], st.target[2], SPEED_WANDER)
     end
   end
 end

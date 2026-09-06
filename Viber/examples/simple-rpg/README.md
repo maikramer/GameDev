@@ -1,9 +1,11 @@
 # simple-rpg (migrado para Viber)
 
 Porta do exemplo `VibeGame/examples/simple-rpg` para a engine nativa Viber.
-O mundo foi convertido por `Viber/scripts/migrate_from_vibegame.py` — tags
-ainda não implementadas **passam verbatim e fazem no-op**, por isto o jogo
-já corre (parcialmente) enquanto a engine cresce por incrementos.
+O mundo foi convertido por `Viber/scripts/migrate_from_vibegame.py`. O jogo
+corre de ponta a ponta: as Fases 0–3 da engine estão feitas e as tags do
+mundo original já têm runtime — só as tags `EngineConfig` data-only
+(`NavMesh`, `SpawnGate`, `ProjectileTemplate`, `AdaptiveQuality`,
+`PostFxDebugToggle`) passam verbatim sem consumidor.
 
 ## Correr
 
@@ -17,34 +19,39 @@ cargo run -- analyze examples/simple-rpg/world.xml       # headless + cobertura
 
 ## Estado atual
 
-O `analyze` imprime o relatório de cobertura — é o roteiro de trabalho da
-engine. Referência (após NPCs de diálogo + chips de recursos): **1399 entidades**
-declaradas — com **1 player jogável** (WASD/setas + Shift sprint sobre o
-terreno, câmara third-person com drag/scroll), **17 NPCs de diálogo**
-(marcador dourado + interação E a <3.5 m, log no bridge) e **3 chips de
-recursos** no HUD ("gold/wood/stone 0") — (702 grupos, 71 primitivas, 68 point lights, 1
-directional, 1 câmara, **450 cenas glTF**, **58 static + 12 dynamic spawn
-groups**, **8 vegetation groups** (cap 800 instâncias/tag), **105 emissores
-de partículas**, **24 zonas de exclusão** respeitadas por todos os
-spawners) + heightfield com 32 ground features; **15 elementos em 12 tags**
-ainda em no-op (`BiomeRegion`×4, `DayCycle`, `Weather`, `NavMesh`,
-`SpawnGate`, `ProjectileTemplate`, `AdaptiveQuality`, `PostFxDebugToggle`,
-`QuestTracker`, `WaypointArrow`, `Sky`, `WorldBorder`) — o HUD completo
-(HP/XP/boss/target bars, minimap, bússola, prompt, modal) e o áudio estão
-renderizados/a tocar: **6 camadas de BGM em crossfade por zona do player**
-(vila/montanha/interiores/explore; boss/battle entram com o combate). ~28 mil entidades vivas na janela.
-Cada tag implementada na engine acende mais parte do mundo sem editar os
-XMLs daqui.
+Jogável de ponta a ponta: **player** com combate melee ([J]/clique, alvo [V],
+dash [C], golpe radial [R], bomba [B], guard [L], talentos com [Q]→Talentos),
+**21 quests** (JSON em `quests/`, diálogo [E] com os NPCs, tracker no HUD,
+bounties no notice-board), **economia** (vault gold/wood/stone, colheita de
+árvores/pedras, loja [K] no mercador, hotbar [1]/[2]), **travel** (A Nota —
+12 marcos para assinar com [F], viagem rápida [G] nas fogueiras, seta de
+waypoint), **save/load** (menu [Q]→Sistema: [J] grava, [L] carrega; JSON em
+`~/.local/share/viber/`), **mundo vivo** (céu procedural + ciclo dia/noite,
+clima, fog/tint por BiomeRegion, BGM com crossfade por zona, SFX, emissores
+de partícula) e **física** (character controller cinemático, knockback,
+destrutíveis que tombam). Os ~38 scripts Luau em `scripts/` (inimigos, bosses,
+colheita, POIs, HUD) correm via a API `viber.*` com "LOD de IA" — além do
+raio de ativação (default 45 m) o `on_update` nem corre. A referência da API
+está em `Viber/docs/LUA_API.md`.
+
+O `analyze` imprime o relatório de cobertura — é o roteiro do que falta à
+engine (hoje: só as 5 tags `EngineConfig` data-only).
 
 Assets: os GLBs do pool partilhado vêm com meshopt + KTX2/BasisU +
 quantização (bevy 0.19 não lê nenhuma das três sintaxes). O espelho
 `assets/` (regenerável com `scripts/sync_assets.py`, não versionado) guarda
-cópias decomprimidas; a asset root do mundo é a pasta que contém `assets/`.
+cópias decomprimidas; a asset root do mundo é a pasta que contém `assets/`
+(o decodificador EXT_meshopt também já corre em runtime, `src/meshopt.rs`).
 
 ## Estrutura
 
-- `world.xml` — raiz ( porta do `index.html` original; `<Scene>` → `<world>` )
+- `world.xml` — raiz ( porta do `index.html` original; `<Scene>` → `<world>` ),
+  com a UI declarativa (`UiRoot`/`UiStyle`) de tabs do HUD
 - `world/**.xml` — módulos migrados, espelham `public/world/` do original
+- `quests/*.json` — definições das 21 quests (embutidas na engine via
+  `include_str!`; campos: `id, npc, biome, title, lines_*, objective, rewards`)
+- `scripts/**.lua` — comportamento Luau (inimigos/bosses, colheita, POIs,
+  HUD/UI) via a API `viber.*` (`Viber/docs/LUA_API.md`)
 - `assets/` — espelho local (não versionado) dos assets referenciados,
   gerado por `scripts/sync_assets.py` a partir do pool partilhado
   `Viber/examples/shared-assets/public` (GLBs decomprimidos de
@@ -71,9 +78,10 @@ python3 Viber/scripts/sync_assets.py   # pool: Viber/examples/shared-assets/publ
 Cada ficheiro de saída leva um cabeçalho com os attrs descartados e as tags
 passadas verbatim. Regras de mapeamento: docstring do conversor.
 
-## Próximos incrementos (por ordem de impacto visual)
+## Fila aberta (na engine, não neste mundo)
 
-1. `GLTFLoader` → `GltfScene` (450 modelos: casas, criaturas, vegetação)
-2. `StaticSpawner` (58 spawners de vegetação/props)
-3. `ParticleSystem` (105 emissores: fogueiras, poeira, clima)
-4. Player + `ThirdPersonCamera` com input (câmara anda, mundo segue)
+- Consumir as tags `EngineConfig` data-only: `NavMesh`, `SpawnGate`,
+  `ProjectileTemplate`, `AdaptiveQuality`, `PostFxDebugToggle`
+- Hot-reload de scripts Luau
+- Nametags de HUD (sistema comentado — `BISECT` em `Viber/src/main.rs`)
+- Instancing GPU para vegetação (hoje cap 800 instâncias/tag)

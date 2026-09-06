@@ -4,14 +4,13 @@
 -- hooks `viber.quest_*`.
 local BOUNTIES = { "city_wolves", "city_bandits", "city_goblins", "city_wood" }
 
-local st = viber.state()
-if not st.ready then
-  st.ready = true
-  st.index = 0
-  viber.set_interaction("Ler o quadro", "e", 3.0)
-end
-
 function on_update(dt)
+  local st = viber.state() -- POR ENTIDADE (no top-level era partilhado)
+  if not st.ready then
+    st.ready = true
+    st.index = 0
+    viber.set_interaction("Ler o quadro", "e", 3.0)
+  end
   if not viber.interacted("e") then
     return
   end
@@ -25,8 +24,7 @@ function on_update(dt)
     if status == "not_taken" then
       viber.quest_accept(id)
       st.index = i
-      viber.toast("Bounty aceita: " .. id)
-      return
+      return -- quest_accept já emite o toast "Quest aceita"
     elseif status == "ready" then
       viber.quest_turn_in(id)
       st.index = i

@@ -1,11 +1,11 @@
 -- chest.lua: baú de uma abertura só — loot real no vault/inventário
 -- (ouro + poção) via hooks da economia.
-local st = viber.state()
-if not st.ready then
-  st.ready = true
-  viber.set_interaction("Abrir o baú", "e", 2.8)
-end
 function on_update(dt)
+  local st = viber.state() -- POR ENTIDADE (no top-level era partilhado)
+  if not st.ready then
+    st.ready = true
+    viber.set_interaction("Abrir o baú", "e", 2.8)
+  end
   if viber.interacted("e") and not st.opened then
     st.opened = true
     viber.add_xp(30)

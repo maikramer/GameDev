@@ -2,7 +2,9 @@
   Migrated from VibeGame by scripts/migrate_from_vibegame.py; tags não
   implementadas passam verbatim e fazem no-op na engine.
   Dropped attrs: ambient-light:ground-color, directional-light:cast-shadow, directional-light:distance, directional-light:pcss, directional-light:shadow-map-size, postprocessing
-  Verbatim (no-op) tags: AdaptiveQuality x1, AudioMixer x1, BiomeRegion x4, DayCycle x1, MusicLayer x6, Sky x1, Weather x1, WorldBorder x1
+  Verbatim (no-op) tags: AdaptiveQuality x1, AudioMixer x1, DayCycle x1, MusicLayer x6, Sky x1, WorldBorder x1
+  Live tags (consumed by the engine): BiomeRegion x4 (display-name alimenta o HUD), Weather x1
+  (rain="0" + cycle="1": o scheduler rola chuva determinística por seed a cada 240 s)
 -->
 <world>
   <!--
@@ -29,11 +31,13 @@
              camada de nuvens "de jogo". -->
     <!-- Calendário dia/noite: o <DayCycle> escreve a elevação/azimute do
              <Sky> (quantizados a 2°) e faz o ramp da luz ambiente
-             (0.22 de dia — o look atual — para 0.07 à noite). Nadir do sol a
-             −22°: noite escura de verdade, as tochas/portões/acampamentos
-             assumem. Dia de 20 min reais; começa 08:00. -->
-    <DayCycle minute-of-day="480" minutes-per-real-second="1.2" dawn-minute="330" dusk-minute="1170" sun-azimuth-base="205" max-sun-elevation="62" min-sun-elevation="20" sky-step-deg="2" drive-sky="1" drive-ambient="1" ambient-day-intensity="0.26" ambient-night-intensity="0.07" />
-    <Sky sun-elevation="17" sun-azimuth="205" turbidity="2.4" rayleigh="2.8" mie-coefficient="0.0035" mie-directional-g="0.80" cloud-coverage="0.45" cloud-density="0.32" cloud-elevation="0.55" environment-intensity="0.38" sun-intensity="2.6" drive-light="1" />
+             (0.26 de dia — o look atual — para 0.13 à noite, ~55 lux: escuro
+             o bastante para as tochas/portões/acampamentos assumirem, claro
+             o bastante para o chão continuar a ler-se). A luz direcional não
+             segue o sol abaixo do horizonte — vira lua (ver `worldsys.rs`).
+             Dia de 20 min reais; começa 08:00. -->
+    <DayCycle minute-of-day="480" minutes-per-real-second="1.2" dawn-minute="330" dusk-minute="1170" sun-azimuth-base="205" max-sun-elevation="62" drive-ambient="1" ambient-day-intensity="0.26" ambient-night-intensity="0.13" />
+    <Sky sun-elevation="17" sun-azimuth="205" turbidity="2.4" rayleigh="2.8" mie-coefficient="0.0035" mie-directional-g="0.80" cloud-coverage="0.60" cloud-density="0.55" cloud-elevation="0.55" environment-intensity="0.38" sun-intensity="2.6" drive-light="1" />
     <!-- Ambiente hemisférico baixo: o IBL do céu é quem colore a sombra
            (azul de céu em cima, quente do chão embaixo); biomas continuam a
            crossfadar o ambient por região. Sombras 2048 + PCSS (penumbra que
@@ -54,7 +58,7 @@
              orla. Cruzar r=1800 conta 5 s no ecrã e devolve o herói ao ponto
              mais próximo DENTRO da fronteira, assente no chão e sem
              velocidade — em vez de cair do mundo no corte final. -->
-    <WorldBorder radius="3800" warn-seconds="5" margin="80" />
+    <WorldBorder radius="1800" warn-seconds="5" margin="80" />
     <!-- Mixer buses + BGM layers. O MusicLayerDriverSystem (engine)
              crossfada por contexto (main.ts bgmZone): boss > battle (aggro) >
              dungeon (interiores) > mountain (Picos Gelados) > village (muralha)
@@ -70,30 +74,29 @@
     <!-- Clima global: vento constante de SW, nuvens com ciclo lento
            (cobertura "respira" ao longo de minutos), chuva controlada por
            bioma (pântano) ou via setWeather() em runtime. -->
-    <Weather wind="0.7 0.25" wind-strength="1.5" clouds="0.25" cloud-height="150" rain="0" cycle="1" />
+    <Weather wind="0.7 0.25" wind-strength="1.5" clouds="0.25" rain="0" cycle="1" />
     <!-- ============================================================
-           §1 BIOMAS — 4 cunhas cardeais. O BiomeDetectionSystem aplica
-           tint/fog/ambient/textura-de-terreno e crossfade de BGM quando
-           o herói entra. type: 1=FLORESTA, 2=DESERTO, 3=PÂNTANO,
-           4=MONTANHA. As cunhas começam fora do quadrado central (±28)
-           e são partidas pelas diagonais (±520 nos cantos) — sem
-           sobreposição; a cidade fica como vale neutro. Os cantos foram
-           de ±240 para ±520 porque a câmera passou a ver até 420 m: com
-           ±240 a serra da borda ficava fora de qualquer bioma e perdia
-           tint/fog.
+           §1 BIOMAS — 4 cunhas cardeais. Tint/fog/exposure por região
+           (consumidos pela engine); o herói entra e a zona aplica-se.
+           As cunhas começam fora do quadrado central (±56) e são
+           partidas pelas diagonais — sem sobreposição; a cidade fica
+           como vale neutro. Os cantos do sul foram de ±240 porque a
+           câmera passou a ver até 420 m: com menos, a serra da borda
+           ficava fora de qualquer bioma e perdia tint/fog.
            ============================================================ -->
-    <!-- NORTE: Floresta Sombria -->
-    <BiomeRegion id="dark-forest" type="1" polygon="[-56,56;56,56;4040,4040;-4040,4040]" tint="#1a3320" fog-color="#22362b" fog-density="0.0030" ambient="#3a4a55" bgm-layer="1" clouds="0.85" pp-exposure="0.78" pp-vignette-darkness="0.50" terrain-texture="/assets/textures/forest_floor.png" />
+    <!-- NORTE: Floresta Sombria. `display-name` alimenta o bind `zone.name`
+         (HUD): nome autoral vence a tabela de fallback da engine. -->
+    <BiomeRegion id="dark-forest" display-name="Floresta Sombria" polygon="[-56,56;56,56;4040,4040;-4040,4040]" tint="#1a3320" fog-density="0.0030" pp-exposure="0.78" />
     <!-- LESTE: Deserto -->
-    <BiomeRegion id="desert" type="2" polygon="[56,-56;56,56;4040,4040;4040,-4040]" tint="#c2a878" fog-color="#e0d3b0" fog-density="0.0014" ambient="#5a4a3a" bgm-layer="1" clouds="0.25" pp-exposure="0.74" pp-bloom-strength="0.18" terrain-texture="/assets/textures/desert_sand.png" />
+    <BiomeRegion id="desert" display-name="Ermo Rubro" polygon="[56,-56;56,56;4040,4040;4040,-4040]" tint="#c2a878" fog-density="0.0014" pp-exposure="0.74" pp-bloom-strength="0.18" />
     <!-- OESTE: Pântano (bacias baixas do relevo real) -->
-    <BiomeRegion id="swamp" type="3" polygon="[-56,-56;-56,56;-4040,4040;-4040,-4040]" tint="#3a4a30" fog-color="#243024" fog-density="0.0046" ambient="#2a3a30" bgm-layer="1" rain="0.35" pp-exposure="0.70" terrain-texture="/assets/textures/swamp_mud.png" />
+    <BiomeRegion id="swamp" display-name="Pântano da Bruma" polygon="[-56,-56;-56,56;-4040,4040;-4040,-4040]" tint="#3a4a30" fog-density="0.0046" pp-exposure="0.70" />
     <!-- SUL: Picos Gelados. Vértice da cunha empurrado de ±56 para ±240:
              o setor sul só ganha cota a partir de r≈260 (126 m a 80-160 m,
              161 m a 400-600 m). Com o vértice na muralha, a textura de neve
              começava a 60 m do portão, em pleno fundo de vale. Entre a
              cidade e r=240 fica o anel neutro do vale. -->
-    <BiomeRegion id="frozen-peaks" type="4" polygon="[-240,-240;240,-240;4040,-4040;-4040,-4040]" tint="#cdd9e6" fog-color="#d6e4f2" fog-density="0.0014" ambient="#aeb9c8" bgm-layer="1" pp-exposure="0.78" terrain-texture="/assets/textures/snow_peak.png" />
+    <BiomeRegion id="frozen-peaks" display-name="Picos Gelados" polygon="[-240,-240;240,-240;4040,-4040;-4040,-4040]" tint="#cdd9e6" fog-density="0.0014" pp-exposure="0.78" />
   </Group>
   <!-- FIM environment -->
 </world>

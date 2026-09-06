@@ -31,7 +31,7 @@
     <!-- ============================================================
        NE — entre Floresta e Deserto
        ============================================================ -->
-    <StaticSpawner profile="tree" count="55" seed="4101" region-min="190 0 190" region-max="330 0 330" align-to-terrain="1" ground-align="auto" avoid-water="1" max-slope-deg="32" max-slope-attempts="40" scale-min="0.6" scale-max="2.4" avoid-overlaps="1" pick-strategy="random" footprint-radius="3.2" cluster-count="8" cluster-radius="44" max-distance="260" random-yaw="true" variation="rock">
+    <StaticSpawner profile="tree" count="55" seed="4101" region-min="190 0 190" region-max="330 0 330" align-to-terrain="1" ground-align="auto" avoid-water="1" max-slope-deg="32" max-slope-attempts="40" scale-min="0.6" scale-max="2.4" avoid-overlaps="1" pick-strategy="random" footprint-radius="3.2" cluster-count="8" cluster-radius="44" max-distance="479" random-yaw="true" variation="rock">
       <GameObject role="static">
         <GLTFLoader role="visual" url="/assets/meshes/terrain/form_outcrop_2_lod0.glb" lod1-url="/assets/meshes/terrain/form_outcrop_2_lod1.glb" lod2-url="/assets/meshes/terrain/form_outcrop_2_lod2.glb" lod-threshold-near="50" lod-threshold-mid="120" />
       </GameObject>
@@ -39,7 +39,7 @@
         <GLTFLoader role="visual" url="/assets/meshes/terrain/form_outcrop_8_lod0.glb" lod1-url="/assets/meshes/terrain/form_outcrop_8_lod1.glb" lod2-url="/assets/meshes/terrain/form_outcrop_8_lod2.glb" lod-threshold-near="50" lod-threshold-mid="120" />
       </GameObject>
     </StaticSpawner>
-    <StaticSpawner profile="tree" count="90" seed="4103" region-min="176 0 176" region-max="300 0 300" align-to-terrain="1" ground-align="auto" avoid-water="1" max-slope-deg="40" scale-min="0.8" scale-max="1.5" avoid-overlaps="1" footprint-radius="3.2" cluster-count="7" cluster-radius="40" max-distance="250" random-yaw="true" variation="tree">
+    <StaticSpawner profile="tree" count="90" seed="4103" region-min="176 0 176" region-max="300 0 300" align-to-terrain="1" ground-align="auto" avoid-water="1" max-slope-deg="40" scale-min="0.8" scale-max="1.5" avoid-overlaps="1" footprint-radius="3.2" cluster-count="7" cluster-radius="40" max-distance="437" random-yaw="true" variation="tree">
       <GameObject role="static">
         <GLTFLoader role="visual" url="/assets/meshes/forest/pine_dark_lod0.glb" lod1-url="/assets/meshes/forest/pine_dark_lod1.glb" lod2-url="/assets/meshes/forest/pine_dark_lod2.glb" lod-threshold-near="60" lod-threshold-mid="140" />
       </GameObject>
@@ -47,7 +47,7 @@
     <!-- ============================================================
        SE — entre Deserto e Pântano
        ============================================================ -->
-    <StaticSpawner profile="tree" count="140" seed="4201" region-min="190 0 -330" region-max="330 0 -190" align-to-terrain="1" ground-align="auto" avoid-water="1" max-slope-deg="68" max-slope-attempts="40" scale-min="0.6" scale-max="2.4" avoid-overlaps="1" pick-strategy="random" footprint-radius="3.2" cluster-count="8" cluster-radius="44" max-distance="260" random-yaw="true" variation="rock">
+    <StaticSpawner profile="tree" count="140" seed="4201" region-min="190 0 -330" region-max="330 0 -190" align-to-terrain="1" ground-align="auto" avoid-water="1" max-slope-deg="68" max-slope-attempts="40" scale-min="0.6" scale-max="2.4" avoid-overlaps="1" pick-strategy="random" footprint-radius="3.2" cluster-count="8" cluster-radius="44" max-distance="479" random-yaw="true" variation="rock">
       <GameObject role="static">
         <GLTFLoader role="visual" url="/assets/meshes/terrain/form_outcrop_5_lod0.glb" lod1-url="/assets/meshes/terrain/form_outcrop_5_lod1.glb" lod2-url="/assets/meshes/terrain/form_outcrop_5_lod2.glb" lod-threshold-near="50" lod-threshold-mid="120" />
       </GameObject>
@@ -55,12 +55,12 @@
         <GLTFLoader role="visual" url="/assets/meshes/terrain/form_outcrop_2_lod0.glb" lod1-url="/assets/meshes/terrain/form_outcrop_2_lod1.glb" lod2-url="/assets/meshes/terrain/form_outcrop_2_lod2.glb" lod-threshold-near="50" lod-threshold-mid="120" />
       </GameObject>
     </StaticSpawner>
-    <StaticSpawner profile="tree" count="110" seed="4202" region-min="300 0 -470" region-max="470 0 -300" align-to-terrain="0" ground-align="auto" avoid-water="1" max-slope-deg="75" max-slope-attempts="40" scale-min="0.35" scale-max="0.9" avoid-overlaps="1" footprint-radius="4.4" cluster-count="6" cluster-radius="52" max-distance="280" random-yaw="true" variation="rock">
+    <StaticSpawner profile="tree" count="110" seed="4202" region-min="300 0 -470" region-max="470 0 -300" ground-align="auto" avoid-water="1" max-slope-deg="75" max-slope-attempts="40" scale-min="0.35" scale-max="0.9" avoid-overlaps="1" footprint-radius="4.4" cluster-count="6" cluster-radius="52" max-distance="677" random-yaw="true" variation="rock">
       <GameObject role="static">
         <GLTFLoader role="visual" url="/assets/meshes/terrain/form_cliff_20_lod0.glb" lod1-url="/assets/meshes/terrain/form_cliff_20_lod1.glb" lod2-url="/assets/meshes/terrain/form_cliff_20_lod2.glb" lod-threshold-near="60" lod-threshold-mid="150" />
       </GameObject>
     </StaticSpawner>
-    <StaticSpawner profile="tree" count="90" seed="4203" region-min="176 0 -300" region-max="300 0 -176" align-to-terrain="1" ground-align="auto" avoid-water="1" max-slope-deg="42" scale-min="0.8" scale-max="1.4" avoid-overlaps="1" footprint-radius="2.6" cluster-count="7" cluster-radius="40" max-distance="250" random-yaw="true" variation="tree">
+    <StaticSpawner profile="tree" count="90" seed="4203" region-min="176 0 -300" region-max="300 0 -176" align-to-terrain="1" ground-align="auto" avoid-water="1" max-slope-deg="42" scale-min="0.8" scale-max="1.4" avoid-overlaps="1" footprint-radius="2.6" cluster-count="7" cluster-radius="40" max-distance="437" random-yaw="true" variation="tree">
       <GameObject role="static">
         <GLTFLoader role="visual" url="/assets/meshes/forest/dead_tree_lod0.glb" lod1-url="/assets/meshes/forest/dead_tree_lod1.glb" lod2-url="/assets/meshes/forest/dead_tree_lod2.glb" lod-threshold-near="60" lod-threshold-mid="140" />
       </GameObject>
@@ -68,7 +68,7 @@
     <!-- ============================================================
        SO — entre Pântano e Picos
        ============================================================ -->
-    <StaticSpawner profile="tree" count="55" seed="4301" region-min="-330 0 -330" region-max="-190 0 -190" align-to-terrain="1" ground-align="auto" avoid-water="1" max-slope-deg="32" max-slope-attempts="40" scale-min="0.6" scale-max="2.4" avoid-overlaps="1" pick-strategy="random" footprint-radius="3.2" cluster-count="8" cluster-radius="44" max-distance="260" random-yaw="true" variation="rock">
+    <StaticSpawner profile="tree" count="55" seed="4301" region-min="-330 0 -330" region-max="-190 0 -190" align-to-terrain="1" ground-align="auto" avoid-water="1" max-slope-deg="32" max-slope-attempts="40" scale-min="0.6" scale-max="2.4" avoid-overlaps="1" pick-strategy="random" footprint-radius="3.2" cluster-count="8" cluster-radius="44" max-distance="479" random-yaw="true" variation="rock">
       <GameObject role="static">
         <GLTFLoader role="visual" url="/assets/meshes/terrain/form_outcrop_8_lod0.glb" lod1-url="/assets/meshes/terrain/form_outcrop_8_lod1.glb" lod2-url="/assets/meshes/terrain/form_outcrop_8_lod2.glb" lod-threshold-near="50" lod-threshold-mid="120" />
       </GameObject>
@@ -76,7 +76,7 @@
         <GLTFLoader role="visual" url="/assets/meshes/terrain/form_outcrop_5_lod0.glb" lod1-url="/assets/meshes/terrain/form_outcrop_5_lod1.glb" lod2-url="/assets/meshes/terrain/form_outcrop_5_lod2.glb" lod-threshold-near="50" lod-threshold-mid="120" />
       </GameObject>
     </StaticSpawner>
-    <StaticSpawner profile="tree" count="90" seed="4303" region-min="-300 0 -300" region-max="-176 0 -176" align-to-terrain="1" ground-align="auto" avoid-water="1" max-slope-deg="40" scale-min="0.8" scale-max="1.5" avoid-overlaps="1" footprint-radius="3.2" cluster-count="7" cluster-radius="40" max-distance="250" random-yaw="true" variation="tree">
+    <StaticSpawner profile="tree" count="90" seed="4303" region-min="-300 0 -300" region-max="-176 0 -176" align-to-terrain="1" ground-align="auto" avoid-water="1" max-slope-deg="40" scale-min="0.8" scale-max="1.5" avoid-overlaps="1" footprint-radius="3.2" cluster-count="7" cluster-radius="40" max-distance="437" random-yaw="true" variation="tree">
       <GameObject role="static">
         <GLTFLoader role="visual" url="/assets/meshes/forest/tree_pine_lod0.glb" lod1-url="/assets/meshes/forest/tree_pine_lod1.glb" lod2-url="/assets/meshes/forest/tree_pine_lod2.glb" lod-threshold-near="60" lod-threshold-mid="140" />
       </GameObject>
@@ -84,7 +84,7 @@
     <!-- ============================================================
        NO — entre Picos e Floresta (o rio corta aqui: garganta)
        ============================================================ -->
-    <StaticSpawner profile="tree" count="55" seed="4401" region-min="-330 0 190" region-max="-190 0 330" align-to-terrain="1" ground-align="auto" avoid-water="1" max-slope-deg="32" max-slope-attempts="40" scale-min="0.6" scale-max="2.4" avoid-overlaps="1" pick-strategy="random" footprint-radius="3.2" cluster-count="8" cluster-radius="44" max-distance="260" random-yaw="true" variation="rock">
+    <StaticSpawner profile="tree" count="55" seed="4401" region-min="-330 0 190" region-max="-190 0 330" align-to-terrain="1" ground-align="auto" avoid-water="1" max-slope-deg="32" max-slope-attempts="40" scale-min="0.6" scale-max="2.4" avoid-overlaps="1" pick-strategy="random" footprint-radius="3.2" cluster-count="8" cluster-radius="44" max-distance="479" random-yaw="true" variation="rock">
       <GameObject role="static">
         <GLTFLoader role="visual" url="/assets/meshes/terrain/form_outcrop_2_lod0.glb" lod1-url="/assets/meshes/terrain/form_outcrop_2_lod1.glb" lod2-url="/assets/meshes/terrain/form_outcrop_2_lod2.glb" lod-threshold-near="50" lod-threshold-mid="120" />
       </GameObject>
@@ -98,7 +98,7 @@
        nenhuma — as 80 instâncias não produziam nada. O rio segue a
        drenagem real e sai para NO por (-133,289) (-158,318) (-186,340),
        que é onde a caixa tem de estar. -->
-    <StaticSpawner profile="tree" count="80" seed="4403" region-min="-420 0 140" region-max="-120 0 470" near-water="1" avoid-water="0" align-to-terrain="1" ground-align="auto" max-slope-deg="62" max-slope-attempts="96" scale-min="1.0" scale-max="2.4" avoid-overlaps="1" pick-strategy="random" footprint-radius="3" max-distance="240" random-yaw="true" variation="rock">
+    <StaticSpawner profile="tree" count="80" seed="4403" region-min="-420 0 140" region-max="-120 0 470" near-water="1" avoid-water="0" align-to-terrain="1" ground-align="auto" max-slope-deg="62" max-slope-attempts="96" scale-min="1.0" scale-max="2.4" avoid-overlaps="1" pick-strategy="random" footprint-radius="3" max-distance="643" random-yaw="true" variation="rock">
       <GameObject role="static">
         <GLTFLoader role="visual" url="/assets/meshes/props/rock_mossy_lod0.glb" lod1-url="/assets/meshes/props/rock_mossy_lod1.glb" lod2-url="/assets/meshes/props/rock_mossy_lod2.glb" lod-threshold-near="50" lod-threshold-mid="120" />
       </GameObject>
@@ -107,7 +107,7 @@
       </GameObject>
     </StaticSpawner>
     <!-- Cairns form_stack (órfãos no bundle) — marcam as cristas. -->
-    <StaticSpawner profile="tree" count="28" seed="4110" region-min="190 0 190" region-max="330 0 330" align-to-terrain="1" ground-align="auto" avoid-water="1" max-slope-deg="62" scale-min="0.8" scale-max="1.5" avoid-overlaps="1" footprint-radius="3.6" cluster-count="6" cluster-radius="36" max-distance="260" random-yaw="true" variation="rock" pick-strategy="random">
+    <StaticSpawner profile="tree" count="28" seed="4110" region-min="190 0 190" region-max="330 0 330" align-to-terrain="1" ground-align="auto" avoid-water="1" max-slope-deg="62" scale-min="0.8" scale-max="1.5" avoid-overlaps="1" footprint-radius="3.6" cluster-count="6" cluster-radius="36" max-distance="479" random-yaw="true" variation="rock" pick-strategy="random">
       <GameObject role="static">
         <GLTFLoader role="visual" url="/assets/meshes/terrain/form_stack_6_lod0.glb" lod1-url="/assets/meshes/terrain/form_stack_6_lod1.glb" lod2-url="/assets/meshes/terrain/form_stack_6_lod2.glb" lod-threshold-near="40" lod-threshold-mid="110" />
       </GameObject>
@@ -115,7 +115,7 @@
         <GLTFLoader role="visual" url="/assets/meshes/terrain/form_stack_11_lod0.glb" lod1-url="/assets/meshes/terrain/form_stack_11_lod1.glb" lod2-url="/assets/meshes/terrain/form_stack_11_lod2.glb" lod-threshold-near="40" lod-threshold-mid="110" />
       </GameObject>
     </StaticSpawner>
-    <StaticSpawner profile="tree" count="28" seed="4210" region-min="190 0 -330" region-max="330 0 -190" align-to-terrain="1" ground-align="auto" avoid-water="1" max-slope-deg="62" scale-min="0.8" scale-max="1.5" avoid-overlaps="1" footprint-radius="3.6" cluster-count="6" cluster-radius="36" max-distance="260" random-yaw="true" variation="rock" pick-strategy="random">
+    <StaticSpawner profile="tree" count="28" seed="4210" region-min="190 0 -330" region-max="330 0 -190" align-to-terrain="1" ground-align="auto" avoid-water="1" max-slope-deg="62" scale-min="0.8" scale-max="1.5" avoid-overlaps="1" footprint-radius="3.6" cluster-count="6" cluster-radius="36" max-distance="479" random-yaw="true" variation="rock" pick-strategy="random">
       <GameObject role="static">
         <GLTFLoader role="visual" url="/assets/meshes/terrain/form_stack_6_lod0.glb" lod1-url="/assets/meshes/terrain/form_stack_6_lod1.glb" lod2-url="/assets/meshes/terrain/form_stack_6_lod2.glb" lod-threshold-near="40" lod-threshold-mid="110" />
       </GameObject>
@@ -123,7 +123,7 @@
         <GLTFLoader role="visual" url="/assets/meshes/terrain/form_stack_11_lod0.glb" lod1-url="/assets/meshes/terrain/form_stack_11_lod1.glb" lod2-url="/assets/meshes/terrain/form_stack_11_lod2.glb" lod-threshold-near="40" lod-threshold-mid="110" />
       </GameObject>
     </StaticSpawner>
-    <StaticSpawner profile="tree" count="28" seed="4310" region-min="-330 0 -330" region-max="-190 0 -190" align-to-terrain="1" ground-align="auto" avoid-water="1" max-slope-deg="62" scale-min="0.8" scale-max="1.5" avoid-overlaps="1" footprint-radius="3.6" cluster-count="6" cluster-radius="36" max-distance="260" random-yaw="true" variation="rock" pick-strategy="random">
+    <StaticSpawner profile="tree" count="28" seed="4310" region-min="-330 0 -330" region-max="-190 0 -190" align-to-terrain="1" ground-align="auto" avoid-water="1" max-slope-deg="62" scale-min="0.8" scale-max="1.5" avoid-overlaps="1" footprint-radius="3.6" cluster-count="6" cluster-radius="36" max-distance="479" random-yaw="true" variation="rock" pick-strategy="random">
       <GameObject role="static">
         <GLTFLoader role="visual" url="/assets/meshes/terrain/form_stack_6_lod0.glb" lod1-url="/assets/meshes/terrain/form_stack_6_lod1.glb" lod2-url="/assets/meshes/terrain/form_stack_6_lod2.glb" lod-threshold-near="40" lod-threshold-mid="110" />
       </GameObject>
@@ -131,7 +131,7 @@
         <GLTFLoader role="visual" url="/assets/meshes/terrain/form_stack_11_lod0.glb" lod1-url="/assets/meshes/terrain/form_stack_11_lod1.glb" lod2-url="/assets/meshes/terrain/form_stack_11_lod2.glb" lod-threshold-near="40" lod-threshold-mid="110" />
       </GameObject>
     </StaticSpawner>
-    <StaticSpawner profile="tree" count="28" seed="4410" region-min="-330 0 190" region-max="-190 0 330" align-to-terrain="1" ground-align="auto" avoid-water="1" max-slope-deg="62" scale-min="0.8" scale-max="1.5" avoid-overlaps="1" footprint-radius="3.6" cluster-count="6" cluster-radius="36" max-distance="260" random-yaw="true" variation="rock" pick-strategy="random">
+    <StaticSpawner profile="tree" count="28" seed="4410" region-min="-330 0 190" region-max="-190 0 330" align-to-terrain="1" ground-align="auto" avoid-water="1" max-slope-deg="62" scale-min="0.8" scale-max="1.5" avoid-overlaps="1" footprint-radius="3.6" cluster-count="6" cluster-radius="36" max-distance="479" random-yaw="true" variation="rock" pick-strategy="random">
       <GameObject role="static">
         <GLTFLoader role="visual" url="/assets/meshes/terrain/form_stack_6_lod0.glb" lod1-url="/assets/meshes/terrain/form_stack_6_lod1.glb" lod2-url="/assets/meshes/terrain/form_stack_6_lod2.glb" lod-threshold-near="40" lod-threshold-mid="110" />
       </GameObject>

@@ -5,20 +5,18 @@ local AGGRO, DEAGGRO, ATTACK_RANGE = 14, 19, 2.5
 local DAMAGE, COOLDOWN = 22, 1.5
 local WANDER_RADIUS = 9
 
-local st = viber.state()
-st.t = 0
-local target = nil
-
-local function pick_target()
+local function pick_target(st)
   local tx, tz = viber.wander_target(WANDER_RADIUS)
-  target = { tx, tz }
+  st.target = { tx, tz }
 end
 
 function on_update(dt)
-  -- Gating (loop 6): o ogro dorme enquanto houver hostis vivos na banda sul
-  -- (frozen-peaks). `viber.alive_in_region(2)` = contagem da banda sul.
+  local st = viber.state() -- POR ENTIDADE: no top-level partilhava entre instâncias
+  -- Gating (loop 6): o ogro dorme enquanto houver OUTROS hostis vivos na
+  -- banda sul (frozen-peaks). `> 1`: ele próprio é hostil e conta-se —
+  -- com `> 0` nunca despertava.
   if not st.awake then
-    if viber.alive_in_region(2) > 0 then
+    if viber.alive_in_region(2) > 1 then
       return
     end
     st.awake = true
@@ -36,19 +34,31 @@ function on_update(dt)
       st.t = 0
     else
       viber.face_player()
-      st.t = st.t + dt
+      st.t = (st.t or 0) + dt
       if st.t >= COOLDOWN then
         st.t = 0
         viber.damage_player(DAMAGE)
       end
     end
   else
-    if target == nil then pick_target() end
-    local td = math.sqrt((target[1] - x)^2 + (target[2] - z)^2)
+    if st.target == nil then pick_target(st) end
+    local td = math.sqrt((st.target[1] - x)^2 + (st.target[2] - z)^2)
     if td < 0.8 then
-      target = nil
+      st.target = nil
+      st.stuck, st.last_td = 0, nil -- chegou: limpa o anti-stuck
     else
-      viber.move_towards(target[1], target[2], SPEED_WANDER)
+      -- anti-stuck: td sem diminuir = preso num collider; repick após ~6 s
+      if st.last_td ~= nil and td >= st.last_td then
+        st.stuck = (st.stuck or 0) + dt
+        if st.stuck > 6 then
+          pick_target(st)
+          st.stuck, st.last_td = 0, nil
+        end
+      else
+        st.stuck = 0
+      end
+      st.last_td = td
+      viber.move_towards(st.target[1], st.target[2], SPEED_WANDER)
     end
   end
 end
