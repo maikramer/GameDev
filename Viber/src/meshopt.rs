@@ -159,7 +159,13 @@ pub fn decode_stream(
     if count == 0 || stride == 0 {
         return Ok(Vec::new());
     }
-    let mut out = vec![0u8; count * stride];
+    // Claims malformados (count/stride vêm do JSON) não podem overflowar o
+    // tamanho do output: em release o wrap devolvia um buffer pequeno e o
+    // decodificador C escrevia além dele.
+    let total = count
+        .checked_mul(stride)
+        .context("decoded stream size overflows (count × stride)")?;
+    let mut out = vec![0u8; total];
 
     // The safe wrappers in `meshopt` are generic over a compile-time sized
     // element type; the extension's stride is only known at runtime, so the
@@ -595,14 +601,23 @@ fn dequantize_vertex_attributes(doc: &mut serde_json::Value, bin: &mut Vec<u8>) 
         let size = component_size(component_type);
         let view_offset = view["byteOffset"].as_u64().unwrap_or(0) as usize;
         let accessor_offset = accessor["byteOffset"].as_u64().unwrap_or(0) as usize;
-        // A view without an explicit stride is tightly packed.
+        // A view without an explicit stride is tightly packed. `byteStride: 0`
+        // é inválido no glTF — sem o filtro, um stride 0 deixava `count`
+        // ilimitado face ao buffer e o reserve abaixo podia esgotar a RAM.
         let stride = view["byteStride"]
             .as_u64()
             .map(|s| s as usize)
+            .filter(|s| *s > 0)
             .unwrap_or(size * kind);
-        let base = view_offset + accessor_offset;
+        let base = view_offset
+            .checked_add(accessor_offset)
+            .context("accessor offset overflows the buffer")?;
 
-        let needed = base + stride * count.saturating_sub(1) + size * kind;
+        let needed = stride
+            .checked_mul(count.saturating_sub(1))
+            .and_then(|tail| tail.checked_add(base))
+            .and_then(|tail| tail.checked_add(size * kind))
+            .context("accessor range overflows the buffer")?;
         if needed > bin.len() {
             bail!(
                 "accessor {index}: reads past the buffer ({needed} > {})",
