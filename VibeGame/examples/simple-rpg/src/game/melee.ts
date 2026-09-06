@@ -33,7 +33,7 @@ import {
   spawnParticleBurst,
 } from 'aigamekit-vibegame';
 import type { State } from 'aigamekit-vibegame';
-import { playerStats } from './skills';
+import { playerAttackPower } from './skills';
 import { isGamePaused } from './pause';
 import { getEnemyLabel } from '../scripts/enemy-registry';
 import { isBossCreature } from '../scripts/creature';
@@ -507,7 +507,7 @@ export function updateMelee(state: State, player: number, dt: number): void {
   const hx = Transform.posX[player];
   const hy = Transform.posY[player];
   const hz = Transform.posZ[player];
-  const dmg = BASE_MELEE_DAMAGE + playerStats.attackBonus;
+  const dmg = BASE_MELEE_DAMAGE + playerAttackPower();
 
   // Soft-lock: nearest living enemy in lock range (full circle).
   let lockEid = -1;
