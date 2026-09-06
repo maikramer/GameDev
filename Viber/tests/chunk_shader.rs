@@ -111,12 +111,10 @@ fn standalone(source: &str, defines: &[&str]) -> String {
         // O valor REAL que o bevy 0.19 substitui no runtime (material.rs:
         // MATERIAL_BIND_GROUP_INDEX = 3) — manter o placeholder a sincronizar
         // com esta constante nos dois lados.
-        out.push_str(
-            &line.replace(
-                "#{MATERIAL_BIND_GROUP}",
-                &bevy::pbr::MATERIAL_BIND_GROUP_INDEX.to_string(),
-            ),
-        );
+        out.push_str(&line.replace(
+            "#{MATERIAL_BIND_GROUP}",
+            &bevy::pbr::MATERIAL_BIND_GROUP_INDEX.to_string(),
+        ));
         out.push('\n');
     }
     assert!(stack.is_empty(), "unbalanced #ifdef in the chunk shader");

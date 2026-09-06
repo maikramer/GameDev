@@ -58,7 +58,9 @@ pub const CROSSING_FLARE: f32 = 1.45;
 /// antes era 0.2 fixo, que fazia a ribbon flutuar sobre declives).
 pub const RIBBON_LIFT: f32 = 0.06;
 /// Profundidade das saias laterais — rasa de propósito: saia alta aparece
-/// como borda escura vista de ângulo raso e perfura ribbons cruzadas.
+/// como borda escura vista de ângulo raso e perfura ribbons cruzadas. Hoje as
+/// saias vão a **alpha 0** em qualquer caso (desenhavam um risco na berma) —
+/// a constante só continua a dar-lhes o offset em Y. Ver `road_ribbon_mesh`.
 pub const RIBBON_SKIRT_DEPTH: f32 = 0.12;
 /// Lift of a junction fusion disc. Deliberately **above** [`RIBBON_LIFT`]:
 /// the disc's whole job is to hide the seam where several ribbon tips
@@ -951,9 +953,8 @@ pub fn road_ribbon_mesh(grid: &BrushGrid, path: &RoadPath, spec: &RoadSpec) -> C
         (stations[0].x.to_bits() ^ stations[0].y.to_bits()).wrapping_add(0x2f13) & 0xFFFF;
     // Seis vértices por estação: [skirtL, edgeL, coreL, coreR, edgeR,
     // skirtR]. O deck (edge/core) mantém o feather do VibeGame; as saias
-    // descem RIBBON_SKIRT_DEPTH a partir das bordas com alpha 1 — vistas de
-    // lado cobrem o corte do leito nas encostas; vistas de cima são
-    // degeneradas (mesma lateral, menor altura).
+    // descem RIBBON_SKIRT_DEPTH a partir das bordas e ficam a alpha 0 (ver
+    // `alphas` abaixo) — o que desenha é só o deck.
     for (i, st) in stations.iter().enumerate() {
         let seg_normal = |d: Vec2| Vec2::new(-d.y, d.x);
         let in_n = if i > 0 {
@@ -997,7 +998,18 @@ pub fn road_ribbon_mesh(grid: &BrushGrid, path: &RoadPath, spec: &RoadSpec) -> C
         let core_r = (outer_r - fr.clamp(0.05, hw * 0.9)).max(0.02);
 
         let laterals = [outer_l, outer_l, core_l, core_r, outer_r, outer_r];
-        let alphas = [1.0, 0.0, 1.0, 1.0, 0.0, 1.0];
+        // As saias laterais NÃO se desenham (alpha 0). Não há corte para
+        // tapar: a borda externa do deck já desvanece a alpha 0, e a
+        // cortina era pior que o problema — partilha a lateral do anel
+        // externo, partilha a UV do vértice de cima (parede vertical com
+        // coordenada constante = textura esticada num só texel) e era OPACA
+        // em baixo, exactamente onde o deck já é transparente. Como o deck
+        // vai `RIBBON_LIFT` acima do chão, ~6 cm dessa cortina ficava SEMPRE
+        // acima da superfície: em ângulo raso desenhava um risco contínuo ao
+        // longo da berma (bug reportado). No tabuleiro de ponte a saia nunca
+        // chegou a existir — o ramo `path.bridge` abaixo ignora `lift`, por
+        // isso os dois anéis coincidem em Y e o quad é degenerado.
+        let alphas = [0.0, 0.0, 1.0, 1.0, 0.0, 0.0];
         for (k, lat) in laterals.iter().enumerate() {
             let p = *st + perp * (*lat * miter);
             let lift = if k == 0 || k == 5 {
@@ -1650,6 +1662,42 @@ mod tests {
             hi - lo > 0.1,
             "feather width should breathe along the road (lo {lo}, hi {hi})"
         );
+    }
+
+    /// REGRESSÃO "risco na berma": a saia lateral partilha a lateral do anel
+    /// externo (alpha 0) e o seu topo fica `RIBBON_LIFT` acima do chão, por
+    /// isso uma saia OPACA desenhava uma linha contínua ao longo da borda da
+    /// estrada. Tem de ficar invisível — só o deck (edge/core) desenha.
+    #[test]
+    fn test_ribbon_skirt_never_draws() {
+        let grid = test_grid();
+        let spec = road_spec();
+        let path = {
+            let mut g = grid.clone();
+            carve_road(&mut g, &spec, 0, &RoadGuards::default()).expect("road")
+        };
+        // Stride 6: [skirtL, edgeL, coreL, coreR, edgeR, skirtR].
+        let mut bridge_path = path.clone();
+        bridge_path.bridge = true;
+        bridge_path.deck_y = Some(6.0);
+        for (label, p) in [("chão", &path), ("ponte", &bridge_path)] {
+            let mesh = road_ribbon_mesh(&grid, p, &spec);
+            for (i, c) in mesh.colors.chunks(6).enumerate() {
+                assert!(
+                    c[0][3].abs() < 1e-6 && c[5][3].abs() < 1e-6,
+                    "{label}, estação {i}: saia tem de ser transparente, \
+                     got L={} R={}",
+                    c[0][3],
+                    c[5][3]
+                );
+            }
+            // O núcleo continua opaco e a borda continua a desvanecer.
+            assert!(
+                (mesh.colors[2][3] - 1.0).abs() < 1e-6,
+                "{label}: núcleo opaco"
+            );
+            assert!(mesh.colors[1][3].abs() < 1e-6, "{label}: borda desvanece");
+        }
     }
 
     #[test]

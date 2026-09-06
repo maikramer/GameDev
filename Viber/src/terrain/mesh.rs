@@ -21,11 +21,18 @@
 //!   across chunks and LODs.
 //! * Skirt walls duplicate the 4 border rows/columns and drop below the
 //!   worst deviation of the field across the border SPAN each vertex
-//!   represents (sweep along the edge tangent at LOD-0 step plus the outward
-//!   probes, − 6 cm, capped): flat borders stay a 6 cm sliver, road trenches
-//!   floor out, and the T-junction crack that opens ALONG the border — the
-//!   fine polyline dipping between two coarse vertices — seals too. Normals
-//!   point outward.
+//!   represents — a sweep at LOD-0 step **along the border line only**
+//!   ([`skirt_span_probe`]), − 6 cm, capped: flat borders stay a 6 cm
+//!   sliver, road trenches crossing the border floor out, and the T-junction
+//!   crack that opens ALONG the border — the fine polyline dipping between
+//!   two coarse vertices — seals too. The sweep never leaves the border
+//!   line: beyond it the ground belongs to the neighbour chunk, and chasing
+//!   its floor turned every convex crest into a metres-tall curtain across
+//!   the seam. Skirt UVs, colours and **normals** are copied from the border
+//!   vertex so the sliver shades as a continuation of the surface (a
+//!   horizontal normal lit it apart and drew a line on the seam); on the
+//!   layers path the cliff factor in vertex ALPHA is zeroed so the vertical
+//!   wall never picks up the triplanar rock.
 //! * Collider meshes ([`build_chunk_collider`]) use **absolute world**
 //!   positions (unlike render meshes) and are consumed by the Phase 3 physics
 //!   integration (avian).
@@ -191,6 +198,25 @@ pub struct ChunkMeshParams {
     /// silhouette (crest/cut) instead of point-sampling — knife ridges and
     /// walls stop sinking as the camera pulls away.
     pub cliff_angle: f32,
+    /// Which of the four borders touch a **volumetric** (surface-nets)
+    /// neighbour, in [`SKIRT_EDGES`] order (`0` min-Z, `1` max-Z, `2` min-X,
+    /// `3` max-X).
+    ///
+    /// A volumetric chunk has no heightfield mesh at all: it is covered by
+    /// voxel boxes whose surface is the SDF's zero level. Surface nets puts a
+    /// vertex at the average of a cell's edge crossings, so along the shared
+    /// border the voxel surface is a polyline up to ~a cell away from the
+    /// plane this chunk's border row sits on — the two meshes do NOT meet and
+    /// an OPEN STRIP of ground is left between them, wide enough to see the
+    /// sky through at a grazing angle. The heightfield side is the one that
+    /// can close it (the voxel mesher must not spill into a flat chunk or the
+    /// two z-fight), so those borders get a skirt at least
+    /// [`ChunkMeshParams::volumetric_seal`] deep instead of the usual sliver.
+    pub volumetric_edges: [bool; 4],
+    /// Minimum skirt depth (meters) on the borders flagged in
+    /// [`ChunkMeshParams::volumetric_edges`]. A few voxel cells is enough —
+    /// the wall only has to be taller than the mesher's disagreement.
+    pub volumetric_seal: f32,
 }
 
 /// Auto texture tile size: keeps texel density constant between LODs and
@@ -346,13 +372,10 @@ pub fn build_chunk_mesh(
             // restrito ao interior; a crista mantém-se lá.
             let is_border = x == segments || z == segments;
             if params.cliff_angle > 0.0 && params.lod_step > 1 && cliff_f > 0.5 && !is_border {
-                let threshold = params.cliff_angle.to_radians().tan() * step as f32;
-                if let Some((rmin, rmax)) = field.range_over(
-                    world_x,
-                    world_z,
-                    world_x + step as f32,
-                    world_z + step as f32,
-                ) {
+                let threshold = params.cliff_angle.to_radians().tan() * step;
+                if let Some((rmin, rmax)) =
+                    field.range_over(world_x, world_z, world_x + step, world_z + step)
+                {
                     if rmax - rmin > threshold {
                         y = if rmax - y >= y - rmin { rmax } else { rmin };
                     }
@@ -394,15 +417,21 @@ pub fn build_chunk_mesh(
     }
 
     // Skirts: duplicate each border row/column and drop a wall whose bottom
-    // ADAPTA-SE à superfície vizinha AO LONGO do vão que cada vértice
-    // representa: `min(varrimento do vão na tangente ± passo, 2·passo fora
-    // da borda) − 6 cm` (cap `skirt_depth`). Em bordas planas tudo ≈ a
-    // própria altura → o skirt vira uma fresta de 6 cm (invisível); sobre
-    // valetas/estradas que cruzam a borda — mesmo em diagonal, entre dois
-    // vértices — desce até o piso e sela a fratura T-junction que as 2
-    // sondas perpendiculares não apanhavam. UVs match the border vertex so
-    // the wall reads as a continuation of the surface; normals are
-    // horizontal and point outward.
+    // ADAPTA-SE ao vão que cada vértice representa **sobre a linha de
+    // borda**: `varrimento na tangente ± passo − 6 cm` (cap `skirt_depth`,
+    // ver [`skirt_span_probe`]). Em bordas planas tudo ≈ a própria altura →
+    // o skirt vira uma fresta de 6 cm (invisível); sobre valetas/estradas
+    // que cruzam a borda — mesmo em diagonal, entre dois vértices — desce
+    // até o piso e sela a fratura T-junction.
+    //
+    // SOMBREAMENTO: UVs, normal e cor vêm todos do vértice de borda, para a
+    // fresta ler como continuação da superfície. A normal **não** aponta
+    // para fora: uma normal horizontal acendia a fresta com outra luz que o
+    // chão e desenhava um risco na costura. O ALFA vai a 0 quando a máscara
+    // de cliff está ligada (caminho layers) porque o fragmento deriva o
+    // declive das derivadas de ecrã — numa parede vertical dá 1, e com
+    // `region = 1` a fresta ganhava o triplanar de ROCHA no meio da relva.
+    // No caminho legacy (sem máscara) o alfa é opacidade: fica intocado.
     if has_skirt {
         let grid_count = verts * verts;
         for (edge, (outward, direct)) in SKIRT_EDGES.into_iter().enumerate() {
@@ -420,13 +449,23 @@ pub fn build_chunk_mesh(
                     step,
                     params.lod0_step as f32,
                 );
-                let drop = (border_pos[1] - probe.min(border_pos[1]) + 0.06).clamp(0.0, skirt_cap);
+                let seal = if params.volumetric_edges[edge] {
+                    params.volumetric_seal.max(0.0)
+                } else {
+                    0.0
+                };
+                let drop = (border_pos[1] - probe.min(border_pos[1]) + 0.06)
+                    .max(seal)
+                    .clamp(0.0, skirt_cap.max(seal));
                 mesh.positions
                     .push([border_pos[0], border_pos[1] - drop, border_pos[2]]);
-                mesh.normals.push(outward);
+                mesh.normals.push(mesh.normals[g]);
                 let border_uv = mesh.uvs[g];
                 mesh.uvs.push(border_uv);
-                let border_color = mesh.colors[g];
+                let mut border_color = mesh.colors[g];
+                if cliff.is_some() {
+                    border_color[3] = 0.0;
+                }
                 mesh.colors.push(border_color);
             }
             for k in 0..segments {
@@ -522,18 +561,28 @@ fn grid_index(edge: usize, k: usize, verts: usize, segments: usize) -> usize {
     }
 }
 
-/// Sonda de saia consciente do VÃO: a fratura T-junction abre-se AO LONGO da
-/// borda — o acorde reto do chunk grosseiro desvia-se da polilinha fina do
-/// vizinho à escala do passo LOD 0 (valetas/estradas que cruzam a borda em
-/// diagonal, cristas paralelas) — e as sondas perpendiculares ao centro do
-/// vértice falham depressões mais estreitas que `step`. O mínimo cobre o
-/// vão inteiro que o vértice de borda representa: varre `d ∈ [−step, +step]`
-/// na TANGENTE da borda (outward rodado 90° no plano XZ; o sentido é
-/// indiferente porque o vão varre os dois), com cruz tangente×outward
-/// (`± step` — os dois lados da linha de borda) a passo fino `fine_step` (o
-/// `lod0_step` do terreno), cap de 8 amostras por direção para custo O(1)
-/// por vértice. A amostra solitária a `2·step` para fora mantém o alcance
-/// do probe antigo (degrau logo além da 1.ª amostra externa).
+/// Sonda de saia consciente do VÃO — **estritamente SOBRE a linha de borda**.
+///
+/// A fratura T-junction abre-se AO LONGO da borda: os dois chunks amostram o
+/// MESMO campo na MESMA linha, só que com passos diferentes; onde a polilinha
+/// fina do vizinho mergulha abaixo do acorde reto do chunk grosseiro, abre-se
+/// a racha. O que a saia tem de tapar é portanto o **desvio ao longo da
+/// linha**, e nada mais: varre `d ∈ [−step, +step]` na TANGENTE da borda
+/// (`outward` rodado 90° no plano XZ; o sentido é indiferente porque o vão
+/// varre os dois lados) a passo fino `fine_step` (o `lod0_step` do terreno,
+/// a malha mais fina que a borda pode encontrar), com cap de 8 amostras para
+/// custo O(1) por vértice. Valetas/estradas que cruzam a borda — mesmo em
+/// diagonal, entre dois vértices — cortam a linha e aparecem no varrimento.
+///
+/// **Nunca amostra para FORA da borda** (era o que a versão anterior fazia,
+/// a `±step` e `2·step` na perpendicular). Fora da borda o terreno é do
+/// vizinho, que o desenha ele próprio; puxar a saia até esse piso não sela
+/// racha nenhuma e, numa CRISTA convexa — onde o terreno desaba logo a
+/// seguir à borda — descia a saia metros abaixo. Essa cortina vertical fica
+/// à frente da encosta que desce e lê-se como uma FAIXA cinzenta a atravessar
+/// o mundo na linha do chunk (o bug reportado: "gaps nas interseções entre
+/// chunks"). Com o varrimento só na linha, uma borda lisa volta a ser a
+/// fresta de 6 cm que sempre foi o desenho.
 fn skirt_span_probe(
     field: &impl HeightField,
     x: f32,
@@ -542,10 +591,9 @@ fn skirt_span_probe(
     step: f32,
     fine_step: f32,
 ) -> f32 {
-    // Alcance perpendicular antigo, preservado.
-    let mut min = field.sample(x + outward[0] * step * 2.0, z + outward[2] * step * 2.0);
+    let mut min = field.sample(x, z);
     // Passo fino com teto de amostras: quando o vão é largo e o passo fino
-    // não cabe, o incremento sobe (nunca mais de 8 amostras por direção).
+    // não cabe, o incremento sobe (nunca mais de 8 amostras no vão).
     let fine = if fine_step > 0.0 && fine_step.is_finite() {
         fine_step
     } else {
@@ -554,13 +602,9 @@ fn skirt_span_probe(
     let samples = (((2.0 * step) / fine).ceil() as usize).clamp(1, 8);
     let inc = (2.0 * step) / samples as f32;
     let (tx, tz) = (-outward[2], outward[0]);
-    for side in [-1.0f32, 1.0f32] {
-        let px = x + outward[0] * step * side;
-        let pz = z + outward[2] * step * side;
-        for k in 0..=samples {
-            let d = -step + k as f32 * inc;
-            min = min.min(field.sample(px + tx * d, pz + tz * d));
-        }
+    for k in 0..=samples {
+        let d = -step + k as f32 * inc;
+        min = min.min(field.sample(x + tx * d, z + tz * d));
     }
     min
 }
@@ -726,6 +770,8 @@ mod tests {
             world_size: 256.0,
             tint: TintParams::default(),
             cliff_angle: 0.0,
+            volumetric_edges: [false; 4],
+            volumetric_seal: 0.0,
         }
     }
 
@@ -744,7 +790,7 @@ mod tests {
         // LOD step 4: vertex columns at multiples of 4 from the origin; the
         // ridge texel (~x = 2.5) falls between the columns at 0 and 4.
         let origin = Vec3::new(-64.0, 0.0, -64.0);
-        let mut off = base_params(origin, 128.0, 4);
+        let off = base_params(origin, 128.0, 4);
         let mut on = base_params(origin, 128.0, 4);
         on.cliff_angle = 50.0;
         let sunk = build_chunk_mesh(&grid, &off, None)
@@ -871,7 +917,7 @@ mod tests {
             noise: 0.0,
             ..CliffSpec::default()
         };
-        let line = carve_cliff(&mut grid, &spec, 0).expect("carve");
+        carve_cliff(&mut grid, &spec, 0).expect("carve");
         let mask = crate::terrain::cliffs::CliffMask::build_with(&grid, 50.0, 120.0, 4.0, 8.0);
         let mesh = build_chunk_mesh(
             &grid,
@@ -1120,33 +1166,35 @@ mod tests {
         }
     }
 
+    /// REGRESSÃO "faixa cinzenta na costura dos chunks": numa CRISTA o
+    /// terreno desaba logo a seguir à borda, mas a borda em si é lisa — não
+    /// há racha nenhuma para tapar. A sonda antiga amostrava para FORA
+    /// (`±step` e `2·step` na perpendicular), lia o piso lá em baixo e
+    /// descia a saia metros abaixo; essa cortina vertical ficava à frente da
+    /// encosta e desenhava uma faixa a atravessar o mundo na linha do chunk.
+    /// Com o varrimento só sobre a linha de borda a saia volta à fresta.
     #[test]
-    fn test_skirt_follows_lower_neighbor_surface() {
-        // Degrau de 4 m no plano x=16.5: a borda max-X está no platô alto com
-        // o lado de fora já no piso baixo → o skirt desce até o piso
-        // (drop ≈ 4.06); a borda min-X tem os dois lados altos → fresta.
+    fn test_skirt_ignores_the_drop_beyond_a_convex_border() {
+        // Degrau de 4 m no plano x=16.5: a borda max-X (x = 16) está toda no
+        // platô alto e é PLANA — o piso baixo está fora do chunk, é o
+        // vizinho que o desenha.
         let field = TestField::new(Box::new(|x: f32, _| if x >= 16.5 { 0.0 } else { 4.0 }), 4.0);
         let mut params = base_params(Vec3::ZERO, 16.0, 1);
         params.skirt_depth = 3.5;
         let mesh = build(&field, &params);
         let verts = 17;
         let grid = verts * verts;
-        for k in 0..verts {
-            let g = grid_index(3, k, verts, 16); // max-X, outward +X
-            let s = grid + 3 * verts + k;
-            let (gp, sp) = (mesh.positions[g], mesh.positions[s]);
-            let drop = gp[1] - sp[1];
-            assert!(
-                (drop - 4.06).abs() < 0.15,
-                "max-X follows the floor: {drop}"
-            );
-        }
-        for k in 0..verts {
-            let g = grid_index(2, k, verts, 16); // min-X, outward -X
-            let s = grid + 2 * verts + k;
-            let (gp, sp) = (mesh.positions[g], mesh.positions[s]);
-            let drop = gp[1] - sp[1];
-            assert!((drop - 0.06).abs() < 0.15, "min-X sliver: {drop}");
+        for edge in [2usize, 3] {
+            for k in 0..verts {
+                let g = grid_index(edge, k, verts, 16);
+                let s = grid + edge * verts + k;
+                let (gp, sp) = (mesh.positions[g], mesh.positions[s]);
+                let drop = gp[1] - sp[1];
+                assert!(
+                    (drop - 0.06).abs() < 0.15,
+                    "borda convexa edge={edge} k={k}: fresta esperada, drop {drop}"
+                );
+            }
         }
     }
 
@@ -1204,25 +1252,51 @@ mod tests {
         }
     }
     #[test]
-    fn test_all_triangles_wind_against_stored_normals() {
-        // On a flat field every geometric normal must agree with the stored
-        // normal: +Y on the surface, horizontal outward on the skirt walls.
+    fn test_all_triangles_wind_outward() {
+        // Campo plano (a fresta de 6 cm chega para os triângulos de saia
+        // terem área): cada triângulo tem de estar enrolado para o lado
+        // certo — a superfície
+        // contra a sua própria normal (+Y), as paredes de saia contra o
+        // `outward` da sua borda. As saias já NÃO guardam a normal
+        // horizontal (guardam a do vértice de borda, para a fresta se
+        // sombrear como chão), por isso o enrolamento delas verifica-se
+        // contra a direção da borda, não contra a normal armazenada.
         let field = TestField::flat();
         let mut params = base_params(Vec3::ZERO, 16.0, 1);
         params.skirt_depth = 2.0;
         let mesh = build(&field, &params);
+        let verts = 17usize;
+        let grid_count = verts * verts;
+        let surface_tris = 16 * 16 * 2;
         let tris = mesh.indices.len() / 3;
         for t in 0..tris {
             let n = tri_normal(&mesh, t);
-            let mut avg = [0.0f32; 3];
-            for k in 0..3 {
-                let sn = mesh.normals[mesh.indices[t * 3 + k] as usize];
-                for c in 0..3 {
-                    avg[c] += sn[c];
+            if t < surface_tris {
+                let mut avg = [0.0f32; 3];
+                for k in 0..3 {
+                    let sn = mesh.normals[mesh.indices[t * 3 + k] as usize];
+                    for c in 0..3 {
+                        avg[c] += sn[c];
+                    }
                 }
+                let dot = n[0] * avg[0] + n[1] * avg[1] + n[2] * avg[2];
+                assert!(dot > 0.0, "surface triangle {t} winds against its normals");
+                continue;
             }
-            let dot = n[0] * avg[0] + n[1] * avg[1] + n[2] * avg[2];
-            assert!(dot > 0.0, "triangle {t} winds against its normals");
+            // Which skirt edge does this triangle belong to? Its skirt
+            // vertices live in the block `grid_count + edge * verts ..`.
+            let edge = (0..3)
+                .map(|k| mesh.indices[t * 3 + k] as usize)
+                .filter(|i| *i >= grid_count)
+                .map(|i| (i - grid_count) / verts)
+                .next()
+                .expect("skirt triangle has at least one skirt vertex");
+            let outward = SKIRT_EDGES[edge].0;
+            let dot = n[0] * outward[0] + n[1] * outward[1] + n[2] * outward[2];
+            assert!(
+                dot > 0.0,
+                "skirt triangle {t} (edge {edge}) faces inward: dot {dot}"
+            );
         }
     }
 

@@ -26,3 +26,25 @@ mínimo útil 6 m, mipmaps + anisotropia nas texturas). Mundo demo:
 Armadilha conhecida fora da pasta: o `AGENTS.md` da raiz documenta que
 larguras de estrada < 1.5 texéis viram no-op (promovidas por `min_effective`)
 — mundos com estradas finixinhas podem parecer "não carved".
+
+## Saias (skirts) — as duas regras que já se pagaram caro
+
+Ambas as saias do sistema (a de **chunk**, `mesh.rs`, e a lateral da **ribbon
+de estrada**, `roads.rs`) existem para tapar uma fenda, e ambas já produziram
+o artefacto oposto — desenharam uma linha onde não havia fenda nenhuma:
+
+1. **A saia de chunk sonda só SOBRE a linha de borda** (`skirt_span_probe`).
+   Amostrar para fora da borda lê o terreno do vizinho, que o vizinho desenha
+   ele próprio: não sela racha nenhuma e, numa crista convexa, descia a saia
+   metros abaixo → cortina cinzenta a atravessar o mundo na costura dos
+   chunks. UV/cor/**normal** da saia copiam o vértice de borda (normal
+   horizontal = fresta com outra luz = risco na costura) e o alfa do
+   cliff-factor vai a 0 (senão o declive vertical apanhava o triplanar de
+   rocha no meio da relva).
+2. **A saia da ribbon não se desenha (alpha 0).** Não há corte
+   para tapar — a borda do deck já desvanece a alpha 0 — e a cortina, opaca e
+   com o topo `RIBBON_LIFT` acima do chão, virava um risco contínuo
+   ao longo da berma.
+
+Regressões: `test_skirt_ignores_the_drop_beyond_a_convex_border`,
+`test_ribbon_skirt_never_draws`.

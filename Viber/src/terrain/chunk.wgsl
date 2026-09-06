@@ -263,11 +263,18 @@ fn fragment(
     var wall_n = vec3<f32>(0.0, 1.0, 0.0);
     var tri_mix = 0.0;
     if (CFG_TRI_SLOPE < 1.0) {
-        let g3x = dpdx(world);
-        let g3y = dpdy(world);
-        let geom_n = normalize(cross(g3x, g3y));
+        // O declive vem da normal INTERPOLADA, não das derivadas de ecrã.
+        // `cross(dpdx(world), dpdy(world))` é a normal do TRIÂNGULO: constante
+        // dentro dele e descontínua na aresta, por isso o gate saltava de
+        // triângulo para triângulo e a encosta enchia-se de manchas de pedra
+        // com bordas poligonais retas (o "faixas/manchas nas montanhas"). A
+        // normal do vértice vem de `HeightField::sample_normal` com um épsilon
+        // constante em todo o terreno: é suave entre triângulos E estável
+        // entre LODs, portanto o mesmo pixel não muda de rocha para relva
+        // quando o chunk troca de nível.
+        let geom_n = normal;
         let slope = 1.0 - abs(geom_n.y);
-        // Gate DUPLA: declive (derivadas de ecrã) × fator de região — o
+        // Gate DUPLA: declive × fator de região — o
         // alpha das vertex colors transporta a máscara de cliff FILTRADA
         // (componentes conexos com área/queda/extent mínimos, cozida no
         // mesh builder). Um declive espúrio isolado tem fator 0 e nunca
@@ -336,12 +343,25 @@ fn fragment(
                 let band_mod = band_id - floor(band_id * 0.25) * 4.0;
                 let hard = step(band_mod, 0.5) * 0.14;
                 let line = smoothstep(0.82, 1.0, fract(band)) * CFG_STRATA_STRENGTH * 0.8;
+                // ── Fade dos detalhes SUB-PIXEL ────────────────────────────
+                // Estratos (4 m), escorrimentos (~4 m) e o bump de luminância
+                // são detalhe de PERTO. A 300 m uma banda de 4 m ocupa ~1 px:
+                // o passo `floor(world.y / 4)` deixa de ser rocha sedimentar e
+                // vira aliasing — riscas horizontais claras/escuras a
+                // atravessar a montanha inteira (o "faixas nas montanhas"). O
+                // mesmo `flat_mix` que já achata a textura por distância
+                // desliga-os: perto nada muda, longe fica a cor plana da
+                // camada. Sem isto nenhum mipmap ajuda — a banda é aritmética
+                // no fragmento, não um texel.
+                let detail = 1.0 - flat_mix;
                 // CFG_ROCK_DARKEN: a parede le PEDRA ESCURA mesmo sob
                 // paletas claras — os tints por slot existem para o chao a
                 // pleno sol (mountain_stone clareia 1.35x); o rochedo
                 // devolve o texel a ~45% (o escuro do basalto da referencia).
                 var rock_col = rock_tex * params.tints[rock].rgb * CFG_ROCK_DARKEN
-                    * band_tint * (1.0 - line) * (1.0 + hard);
+                    * mix(vec3<f32>(1.0), band_tint, detail)
+                    * (1.0 - line * detail)
+                    * (1.0 + hard * detail);
                 // Meteorização vertical (wall space): o brow seca ao sol,
                 // o pé ganha poeira de detrito; AO de contacto onde a
                 // parede encosta no chão; escorrimentos — faixas verticais
@@ -352,7 +372,7 @@ fn fragment(
                 let su = vec2<f32>((world.x + world.z) * 0.22, world.y * 0.06);
                 let streak_n = vnoise(su) * 0.65 + vnoise(su * 2.7) * 0.35;
                 let streak = 1.0
-                    - CFG_STREAK * smoothstep(0.48, 0.88, streak_n) * mix(0.55, 1.0, wall);
+                    - CFG_STREAK * detail * smoothstep(0.48, 0.88, streak_n) * mix(0.55, 1.0, wall);
                 rock_col = rock_col * weather * toe_ao * streak;
                 rock_col = mix(rock_col, params.flats[rock].rgb, flat_mix);
                 albedo = mix(albedo, rock_col, tri);
@@ -363,9 +383,11 @@ fn fragment(
         // região de cliff (declive médio — nem o plano da relva, nem a face
         // nua), mais denso perto do pé onde a humidade se acumula. O gate
         // pela `region` impede musgo em colinas longe de qualquer parede.
+        // Também desvanece com a distância: as manchas têm ~6 m e ao longe
+        // viravam salpicos verdes de 1 px na encosta.
         let moss_n = vnoise(world.xz * 0.17) * 0.6 + vnoise(world.xz * 0.51) * 0.4;
         let moss_band = smoothstep(0.10, 0.20, slope) * (1.0 - smoothstep(0.50, 0.78, slope));
-        let moss = CFG_MOSS * region * moss_band
+        let moss = CFG_MOSS * region * moss_band * (1.0 - flat_mix)
             * smoothstep(0.50, 0.78, moss_n)
             * mix(0.55, 1.25, wall);
         albedo = mix(albedo, vec3<f32>(0.17, 0.24, 0.08), clamp(moss, 0.0, 0.85));

@@ -66,6 +66,8 @@ fn params(lod_step: usize) -> ChunkMeshParams {
         world_size: 4000.0,
         tint: tint(),
         cliff_angle: 50.0,
+        volumetric_edges: [false; 4],
+        volumetric_seal: 0.0,
     }
 }
 
