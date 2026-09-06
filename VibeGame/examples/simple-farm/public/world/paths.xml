@@ -16,7 +16,7 @@
     default-profile="artery"
     default-width="2.6"
     crossing-flare="true"
-    texture-url="/assets/textures/dirt_road_1k.jpg"
+    texture-url="/assets/textures/dirt_road/albedo.webp"
     texture-scale="5"
     flatten-falloff="6"
     flatten-window="40"
@@ -78,28 +78,28 @@
   <Road
     flatten="0"
     width="1.7"
-    texture-url="/assets/textures/dirt_trail_1k.jpg"
+    texture-url="/assets/textures/dirt_trail/albedo.webp"
     texture-scale="4"
     path="52 174  62 200  70 226"
   ></Road>
   <Road
     flatten="0"
     width="1.6"
-    texture-url="/assets/textures/dirt_trail_1k.jpg"
+    texture-url="/assets/textures/dirt_trail/albedo.webp"
     texture-scale="4"
     path="178 -146  196 -172  206 -204"
   ></Road>
   <Road
     flatten="0"
     width="1.5"
-    texture-url="/assets/textures/dirt_trail_1k.jpg"
+    texture-url="/assets/textures/dirt_trail/albedo.webp"
     texture-scale="4"
     path="-104 -142  -126 -164  -146 -190"
   ></Road>
   <Road
     flatten="0"
     width="1.5"
-    texture-url="/assets/textures/dirt_trail_1k.jpg"
+    texture-url="/assets/textures/dirt_trail/albedo.webp"
     texture-scale="4"
     path="-104 40  -112 56  -118 76"
   ></Road>

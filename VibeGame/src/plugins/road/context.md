@@ -17,8 +17,8 @@ Para uma **rede interligada** com larguras e cruzamentos programáticos, preferi
   width="2"
   widths="2 2 2.4 2"
   texture-scale="16"
-  texture-url="/assets/textures/cobblestone_road.png"
-  normal-map-url="/assets/textures/pbr_cobblestone_road/cobblestone_road_normal.png"
+  texture-url="/assets/textures/cobblestone_road/albedo.webp"
+  normal-map-url="/assets/textures/cobblestone_road/normal.webp"
   edge-feather="1.1"
   edge-noise="0.45"
   end-feather-start="0"
@@ -33,7 +33,7 @@ Para uma **rede interligada** com larguras e cruzamentos programáticos, preferi
   default-profile="artery"
   default-width="2"
   crossing-flare="true"
-  texture-url="/assets/textures/cobblestone_road.png"
+  texture-url="/assets/textures/cobblestone_road/albedo.webp"
   normal-map-url="..."
 >
   <Way id="plaza" xz="0 0" width="2.4"></Way>

@@ -281,7 +281,7 @@ O **plugin spawner** posiciona com lattice density-aware (`sampleTerrainSurface`
 ```xml
 <Terrain
   heightmap="/assets/terrain/heightmap.png"
-  texture="/assets/textures/vale_grass.png"
+  texture="/assets/textures/vale_grass/albedo.webp"
   noise-sand-strength="0.45"
   noise-sand-scale="0.012"
   noise-sand-threshold="0.56"

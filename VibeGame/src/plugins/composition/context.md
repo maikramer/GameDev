@@ -52,9 +52,9 @@ flat. Exemplo de parede texturizada com relevo:
 <Box
   pos="0 1.4 -2.4"
   size="5 2.6 0.3"
-  texture-url="/assets/textures/wall_plaster.png"
+  texture-url="/assets/textures/wall_plaster/albedo.webp"
   texture-repeat="2 1"
-  normal-map-url="/assets/textures/wall_plaster_normal.png"
+  normal-map-url="/assets/textures/wall_plaster/normal.webp"
 ></Box>
 ```
 
@@ -84,9 +84,9 @@ desvanece a borda para o terreno sem degraus retangulares.
 <!-- Praça com cantos redondos + estrada, seamless com a relva -->
 <Composition place="at: 0 0" body="fixed" collider="none">
   <Pad pos="0 0.03 0" size="16 16" corner-radius="5" edge-feather="2.2" edge-noise="0.55"
-       texture-url="/assets/textures/cobblestone.png" texture-repeat="12 12"></Pad>
+       texture-url="/assets/textures/cobblestone_road/albedo.webp" texture-repeat="12 12"></Pad>
   <Pad pos="0 0.025 15" size="5.4 18" edge-feather="1.1" edge-noise="0.45"
-       texture-url="/assets/textures/cobblestone.png" texture-repeat="4 13.5"></Pad>
+       texture-url="/assets/textures/cobblestone_road/albedo.webp" texture-repeat="4 13.5"></Pad>
 </Composition>
 ```
 

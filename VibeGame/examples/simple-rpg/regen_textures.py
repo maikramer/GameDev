@@ -5,9 +5,12 @@
   Ground/Terrain: vale_grass, forest_floor, desert_sand, swamp_mud, snow_peak, mountain_stone
   Props/Materiais: wood_planks, wall_plaster, roof_tiles
 
-Cada textura:
-  1. Gerada via vramd (texture2d com group_offload auto na RTX 4050)
-  2. PBR maps gerados via Materialize (height, normal, metallic, smoothness, edge, AO)
+Cada textura vive em `textures/<nome>/` (albedo + mapas + gen.json):
+  1. Difuso gerado via vramd (texture2d com group_offload auto na RTX 4050)
+  2. Pós-processamento determinístico (POST)
+  3. PBR maps gerados via Materialize (height, normal, metallic, smoothness, edge, AO)
+  4. Finalização: PNGs de trabalho convertidos para WebP (albedo q92, mapas q95)
+     — o Materialize só escreve png/jpg, pelo que a conversão corre aqui.
 """
 
 from __future__ import annotations
@@ -103,8 +106,11 @@ SPECS: list[tuple[str, str, str, str]] = [
 
 def generate_texture(name: str, prompt: str, negative: str) -> bool:
     """Gera uma textura via vramd (texture2d). Retorna True se OK."""
-    output = TEXTURES_DIR / f"{name}.png"
-    print(f"  [vramd] A gerar {name}.png...", flush=True)
+    mat_dir = TEXTURES_DIR / name
+    mat_dir.mkdir(parents=True, exist_ok=True)
+    # PNG de trabalho; o finalize converte para albedo.webp no fim.
+    output = mat_dir / "albedo.png"
+    print(f"  [vramd] A gerar {name}/albedo.png...", flush=True)
 
     t0 = time.time()
     result = delegate_to_vramd(
@@ -123,7 +129,7 @@ def generate_texture(name: str, prompt: str, negative: str) -> bool:
     elapsed = time.time() - t0
 
     if result and result.get("status") == "ok":
-        print(f"  [vramd] ✓ {name}.png em {elapsed:.1f}s", flush=True)
+        print(f"  [vramd] ✓ {name}/albedo.png em {elapsed:.1f}s", flush=True)
         # Guardar sidecar JSON com metadados.
         meta = {
             "prompt": prompt,
@@ -135,7 +141,7 @@ def generate_texture(name: str, prompt: str, negative: str) -> bool:
             "seed": result.get("seed"),
             "regenerated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
-        (TEXTURES_DIR / f"{name}.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False))
+        (mat_dir / "gen.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False))
         return True
     else:
         error = result.get("error", "?") if result else "vramd não respondeu"
@@ -166,7 +172,7 @@ def postprocess(name: str) -> None:
     import numpy as np
     from PIL import Image, ImageFilter
 
-    path = TEXTURES_DIR / f"{name}.png"
+    path = TEXTURES_DIR / name / "albedo.png"
     im = Image.open(path).convert("RGB")
     a = np.asarray(im).astype(np.float32)
     if recipe.startswith("local_contrast:"):
@@ -188,19 +194,19 @@ def postprocess(name: str) -> None:
 
 def generate_pbr(name: str, preset: str) -> bool:
     """Gera PBR maps via Materialize. Retorna True se OK."""
-    diffuse = TEXTURES_DIR / f"{name}.png"
-    pbr_dir = TEXTURES_DIR / f"pbr_{name}"
+    mat_dir = TEXTURES_DIR / name
+    diffuse = mat_dir / "albedo.png"
+    # O Materialize escreve `<stem>_<map>.png` ao lado do input: com o difuso
+    # chamado `albedo.png`, os mapas saem `albedo_normal.png`, `albedo_ao.png`, …
+    pbr_dir = mat_dir
 
     if not diffuse.exists():
         print(f"  [MAT] ✗ {name}: diffuse não encontrado", flush=True)
         return False
 
-    # Limpar PBR antigo.
-    if pbr_dir.exists():
-        for old in pbr_dir.glob("*.png"):
-            old.unlink()
-    else:
-        pbr_dir.mkdir(parents=True, exist_ok=True)
+    # Limpar PBR antigo (o difuso de trabalho fica).
+    for old in pbr_dir.glob("albedo_*.png"):
+        old.unlink()
 
     print(f"  [MAT] A gerar PBR maps ({preset})...", flush=True)
     t0 = time.time()
@@ -213,12 +219,31 @@ def generate_pbr(name: str, preset: str) -> bool:
     elapsed = time.time() - t0
 
     if r.returncode == 0:
-        maps = list(pbr_dir.glob("*.png"))
+        maps = list(pbr_dir.glob("albedo_*.png"))
         print(f"  [MAT] ✓ {len(maps)} PBR maps em {elapsed:.1f}s", flush=True)
         return True
     else:
         print(f"  [MAT] ✗ {name}: {r.stderr[:200] if r.stderr else r.stdout[:200]}", flush=True)
         return False
+
+
+def finalize(name: str) -> None:
+    """Converte os PNGs de trabalho para WebP (esquema final por pasta).
+
+    `albedo.png` → `albedo.webp` (q92, sRGB); `albedo_<map>.png` → `<map>.webp`
+    (q95 — lossless em normais ruidosas quase não comprime, q95 é transparente).
+    """
+    from PIL import Image
+
+    mat_dir = TEXTURES_DIR / name
+    for png in sorted(mat_dir.glob("*.png")):
+        if png.stem == "albedo":
+            dst, quality = mat_dir / "albedo.webp", 92
+        else:
+            dst, quality = mat_dir / f"{png.stem.removeprefix('albedo_')}.webp", 95
+        Image.open(png).save(dst, "WEBP", quality=quality, method=6)
+        png.unlink()
+        print(f"  [WEBP] {dst.relative_to(TEXTURES_DIR)}", flush=True)
 
 
 def main() -> None:
@@ -240,8 +265,10 @@ def main() -> None:
         # 2. Pós-processamento determinístico (contraste/valor), se houver.
         postprocess(name)
 
-        # 3. Gerar PBR maps via Materialize (a partir do difuso já tratado).
+        # 3. Gerar PBR maps via Materialize (a partir do difuso já tratado)
+        #    e converter tudo para WebP.
         if generate_pbr(name, preset):
+            finalize(name)
             ok_count += 1
         else:
             fail_count += 1
