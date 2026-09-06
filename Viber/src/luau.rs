@@ -835,6 +835,11 @@ impl LuaScriptHost {
         api.set(
             "wander_target",
             lua.create_function(|lua, radius: f32| {
+                if !radius.is_finite() {
+                    return Err(mlua::Error::runtime(
+                        "viber.wander_target: raio não finito (NaN/inf)",
+                    ));
+                }
                 // Só os campos necessários (entity): clonar o ctx inteiro
                 // (quest_states + vault) por chamada eram milhares de
                 // alocações/frame com ~100 scripts activos.
@@ -877,6 +882,11 @@ impl LuaScriptHost {
         api.set(
             "damage_player",
             lua.create_function(|lua, amount: f32| {
+                if !amount.is_finite() {
+                    return Err(mlua::Error::runtime(
+                        "viber.damage_player: amount não finito (NaN/inf)",
+                    ));
+                }
                 let mut ctx = lua
                     .app_data_mut::<ScriptCtx>()
                     .expect("ScriptCtx app data seeded in LuaScriptHost::new");
@@ -904,6 +914,11 @@ impl LuaScriptHost {
         api.set(
             "heal_player",
             lua.create_function(|lua, amount: f32| {
+                if !amount.is_finite() {
+                    return Err(mlua::Error::runtime(
+                        "viber.heal_player: amount não finito (NaN/inf)",
+                    ));
+                }
                 lua.app_data_mut::<ScriptCtx>()
                     .expect("ScriptCtx app data seeded in LuaScriptHost::new")
                     .commands
@@ -1100,6 +1115,20 @@ impl LuaScriptHost {
         api.set(
             "set_interaction",
             lua.create_function(|lua, (label, key, range): (String, String, Option<f32>)| {
+                // Validado à fila (erro de script → warn 1×): a aplicação
+                // pós-frame largava a tecla desconhecida EM SILÊNCIO — o
+                // alvo de interação nunca aparecia sem diagnóstico.
+                key_code_from_str(&key).ok_or_else(|| {
+                    mlua::Error::runtime(format!(
+                        "viber.set_interaction: tecla desconhecida '{key}' (válidas: e j f q r space)"
+                    ))
+                })?;
+                let range = range.unwrap_or(3.5);
+                if !range.is_finite() {
+                    return Err(mlua::Error::runtime(
+                        "viber.set_interaction: range não finito (NaN/inf)",
+                    ));
+                }
                 let mut ctx = lua
                     .app_data_mut::<ScriptCtx>()
                     .expect("ScriptCtx app data seeded in LuaScriptHost::new");
@@ -1112,7 +1141,7 @@ impl LuaScriptHost {
                     entity,
                     label,
                     key,
-                    range: range.unwrap_or(3.5),
+                    range,
                 });
                 Ok(())
             })?,
@@ -1732,8 +1761,10 @@ fn aggro_alert_system(
         let alert_pos = alert.position;
         for (entity, lref, transform) in &mut scripts {
             // só quem está perto DO ALVO ATINGIDO (não do player)
-            if transform.translation().distance_squared(alert_pos).sqrt()
-                <= crate::travel::ALERT_RADIUS_M
+            // Early-out por distância quadrada: sqrt por entidade×alerta
+            // não compra nada (a comparação é a mesma).
+            if transform.translation().distance_squared(alert_pos)
+                <= crate::travel::ALERT_RADIUS_M * crate::travel::ALERT_RADIUS_M
             {
                 if let Err(error) = host.run_player_attack_alert(
                     entity,
@@ -2326,6 +2357,33 @@ mod tests {
             (cur - max).abs() < 1e-3 && cur > 0.0,
             "default Health nasce cheio, tive cur={cur} max={max}"
         );
+    }
+
+    #[test]
+    fn test_non_finite_and_unknown_key_args_are_rejected() {
+        let host = host_with("function on_update(dt) end", "guards.lua");
+        for snippet in [
+            "return viber.damage_player(0/0)",
+            "return viber.heal_player(math.huge)",
+            "return viber.teleport_player(0/0, 0, 0)",
+            "return viber.wander_target(0/0)",
+            "return viber.set_interaction('Usar', 'k')",
+            "return viber.set_interaction('Usar', 'e', 0/0)",
+        ] {
+            assert!(
+                host.lua.load(snippet).exec().is_err(),
+                "devia rejeitar: {snippet}"
+            );
+        }
+        // Valores finitos continuam a passar (fora de on_update os setters
+        // de combate/teleporte enfileiram à mesma — não precisam de entidade).
+        assert!(host.lua.load("return viber.damage_player(5)").exec().is_ok());
+        assert!(host.lua.load("return viber.heal_player(5)").exec().is_ok());
+        assert!(host
+            .lua
+            .load("return viber.teleport_player(1, 2, 3)")
+            .exec()
+            .is_ok());
     }
 
     #[test]
