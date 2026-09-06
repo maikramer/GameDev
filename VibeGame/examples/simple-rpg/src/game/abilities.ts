@@ -327,15 +327,14 @@ export function updateAbilities(
     if (cd[a.id] > 0) cd[a.id] = Math.max(0, cd[a.id] - dt);
   }
 
-  if (!isGamePaused() && player > 0 && !isDead(player)) {
-    for (const a of ABILITIES) {
-      const down = isKeyDown(a.keyCode);
-      if (down && !pressed[a.keyCode] && cd[a.id] <= 0) {
-        activate(state, player, a.id);
-        cd[a.id] = a.cooldown;
-      }
-      pressed[a.keyCode] = down;
+  const active = !isGamePaused() && player > 0 && !isDead(player);
+  for (const a of ABILITIES) {
+    const down = isKeyDown(a.keyCode);
+    if (active && down && !pressed[a.keyCode] && cd[a.id] <= 0) {
+      activate(state, player, a.id);
+      cd[a.id] = a.cooldown;
     }
+    pressed[a.keyCode] = down;
   }
 
   for (const a of ABILITIES) {

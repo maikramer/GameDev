@@ -144,13 +144,13 @@ export function useConsumable(
 export function updateConsumables(state: State, player: number): void {
   buildHotbar();
 
-  if (!isGamePaused() && player > 0) {
-    for (const s of SLOTS) {
-      if (s.id === 'bomb') continue; // [B] handled by BombSystem
-      const down = isKeyDown(s.keyCode);
-      if (down && !pressed[s.keyCode]) useConsumable(state, player, s.id);
-      pressed[s.keyCode] = down;
-    }
+  const active = !isGamePaused() && player > 0;
+  for (const s of SLOTS) {
+    if (s.id === 'bomb') continue; // [B] handled by BombSystem
+    const down = isKeyDown(s.keyCode);
+    if (active && down && !pressed[s.keyCode])
+      useConsumable(state, player, s.id);
+    pressed[s.keyCode] = down;
   }
 
   for (const s of SLOTS) {
