@@ -3,8 +3,8 @@
 //! DOM-parity widgets (help bar, action slots, name-tag pool).
 
 use bevy::prelude::*;
-use bevy::ui::widget::ImageNode;
 use bevy::ui::BoxShadow;
+use bevy::ui::widget::ImageNode;
 
 use super::assets::{
     HudAssets, centered_at, gradient_overlay, label, panel_base, panel_edge, panel_shadow,

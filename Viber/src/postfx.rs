@@ -34,6 +34,7 @@ use bevy::render::view::Msaa;
 
 use crate::ambient::point_in_polygon;
 use crate::player::Player;
+use crate::profiler::{Group, timed};
 use crate::worldsys::BiomeRegions;
 
 /// Exposição base (EV100) — o mesmo default do Bevy (`EV100_BLENDER`).
@@ -115,11 +116,7 @@ pub fn decay_kick(kick: f32, dt: f32) -> f32 {
         return 0.0;
     }
     let next = kick * (-dt.max(0.0) / KICK_TAU).exp();
-    if next < KICK_EPS {
-        0.0
-    } else {
-        next
-    }
+    if next < KICK_EPS { 0.0 } else { next }
 }
 
 /// `pp-exposure` do XML é um multiplicador de exposição linear (0.78, 0.70…),
@@ -176,7 +173,7 @@ impl Plugin for PostFxPlugin {
                 // O grading lê [`crate::worldsys::AtmosphereState`] do MESMO
                 // frame (publicada depois de `sun_drive`; o registo/glue vive
                 // no `AmbientPlugin`, que também consome a paleta).
-                drive_postfx.after(crate::worldsys::atmosphere_drive),
+                timed(Group::Fx, drive_postfx).after(crate::worldsys::atmosphere_drive),
             )
                 .chain(),
         );
@@ -367,7 +364,10 @@ mod tests {
             assert!(kick <= prev, "decay monotónico: {prev} → {kick}");
             prev = kick;
             frames += 1;
-            assert!(frames < 600, "kick tem de terminar (~1 s), não eternizar-se");
+            assert!(
+                frames < 600,
+                "kick tem de terminar (~1 s), não eternizar-se"
+            );
         }
         // ~1 s de decay visível: 3 τ ≈ 0.96 s.
         assert!(
@@ -387,10 +387,18 @@ mod tests {
         let mut state = PostFxState::default();
         assert_eq!(state.kick, 0.0);
         state.kick_exposure(crate::vitals::LEVELUP_KICK_EV);
-        assert!((state.kick - 0.6).abs() < 1e-5, "kick do level-up: {}", state.kick);
+        assert!(
+            (state.kick - 0.6).abs() < 1e-5,
+            "kick do level-up: {}",
+            state.kick
+        );
         // Um segundo level-up a meio soma (não reinicia) — até ao teto.
         state.kick_exposure(crate::vitals::LEVELUP_KICK_EV);
-        assert!((state.kick - MAX_KICK_EV).abs() < 1e-5, "teto: {}", state.kick);
+        assert!(
+            (state.kick - MAX_KICK_EV).abs() < 1e-5,
+            "teto: {}",
+            state.kick
+        );
         state.kick_exposure(MAX_KICK_EV);
         assert!((state.kick - MAX_KICK_EV).abs() < 1e-5, "não passa do teto");
         // Lixo não mexe.

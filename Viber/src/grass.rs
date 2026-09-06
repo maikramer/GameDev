@@ -33,6 +33,7 @@ use bevy::reflect::TypePath;
 use bevy::render::render_resource::AsBindGroup;
 use bevy::shader::ShaderRef;
 
+use crate::profiler::{Group, timed};
 use crate::terrain::runtime::TerrainRuntime;
 use crate::worldsys::{BiomeRegions, WeatherState};
 
@@ -523,9 +524,9 @@ impl bevy::app::Plugin for GrassPlugin {
             )
             .add_systems(
                 bevy::app::Update,
-                grass_daynight_tint.after(stream_grass_tiles),
+                timed(Group::Terrain, grass_daynight_tint).after(stream_grass_tiles),
             )
-            .add_systems(bevy::app::Update, stream_grass_tiles);
+            .add_systems(bevy::app::Update, timed(Group::Terrain, stream_grass_tiles));
     }
 }
 

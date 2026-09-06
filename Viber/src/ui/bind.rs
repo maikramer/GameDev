@@ -511,8 +511,14 @@ mod tests {
 
     #[test]
     fn test_split_class_bind_only_matches_name_class_pairs() {
-        assert_eq!(split_class_bind("health.low:danger"), Some(("health.low", "danger")));
-        assert_eq!(split_class_bind("combat.active:shown "), Some(("combat.active", "shown")));
+        assert_eq!(
+            split_class_bind("health.low:danger"),
+            Some(("health.low", "danger"))
+        );
+        assert_eq!(
+            split_class_bind("combat.active:shown "),
+            Some(("combat.active", "shown"))
+        );
         // Binds normais nunca têm `:`.
         assert_eq!(split_class_bind("health"), None);
         assert_eq!(split_class_bind("zone.name"), None);
@@ -540,8 +546,18 @@ mod tests {
         app.world_mut().resource_mut::<UiData>().health = 80.0;
         app.world_mut().resource_mut::<UiData>().health_max = 100.0;
         app.update();
-        assert!(app.world().get::<UiClasses>(card).unwrap().0.iter().all(|c| c != "danger"));
-        assert_eq!(*app.world().get::<Visibility>(card).unwrap(), Visibility::Inherited);
+        assert!(
+            app.world()
+                .get::<UiClasses>(card)
+                .unwrap()
+                .0
+                .iter()
+                .all(|c| c != "danger")
+        );
+        assert_eq!(
+            *app.world().get::<Visibility>(card).unwrap(),
+            Visibility::Inherited
+        );
         assert!(app.world().resource::<UiBindWarnings>().0.is_empty());
 
         // Vida baixa: a classe entra (idempotente no segundo frame).

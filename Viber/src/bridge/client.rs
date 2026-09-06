@@ -42,12 +42,7 @@ impl BridgeClient {
     }
 
     /// `call` com timeout de LEITURA próprio (o connect mantém os seus 2 s).
-    fn call_timeout(
-        &self,
-        method: &str,
-        params: Value,
-        read_timeout: Duration,
-    ) -> Result<Value> {
+    fn call_timeout(&self, method: &str, params: Value, read_timeout: Duration) -> Result<Value> {
         let request = json!({
             "jsonrpc": "2.0",
             "id": 0,
@@ -223,6 +218,27 @@ impl BridgeClient {
 
     pub fn prof(&self) -> Result<Value> {
         self.call("viber.profiler", json!({}))
+    }
+
+    /// Snapshot rico de um tab do profiler (`viber.profiler.tab`):
+    /// `systems|world|physics|audio|extras|all`.
+    pub fn prof_tab(&self, tab: &str) -> Result<Value> {
+        self.call("viber.profiler.tab", json!({ "tab": tab }))
+    }
+
+    /// Alterna um extra do profiler; devolve `{"id", "on"}`.
+    pub fn prof_extra_toggle(&self, id: &str) -> Result<Value> {
+        self.call("viber.profiler.extra_toggle", json!({ "id": id }))
+    }
+
+    /// Exporta o snapshot completo do profiler para ficheiro
+    /// (`viber.profiler.export`); devolve `{path, bytes}`.
+    pub fn prof_export(&self, path: Option<&std::path::Path>) -> Result<Value> {
+        let mut params = json!({});
+        if let Some(path) = path {
+            params["path"] = json!(path.display().to_string());
+        }
+        self.call("viber.profiler.export", params)
     }
 
     /// Executa Luau na engine (`viber.lua`) — devolve

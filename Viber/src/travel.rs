@@ -24,6 +24,7 @@ use bevy::prelude::*;
 
 use crate::luau::ScriptToast;
 use crate::player::Player;
+use crate::profiler::{Group, timed};
 
 /// Alcance para assinar um marco (m) — `NOTA_MARK_RADIUS` por bioma.
 pub const NOTA_RANGE_DEFAULT_M: f32 = 12.0;
@@ -217,15 +218,19 @@ impl Plugin for TravelPlugin {
             .add_message::<TravelPing>()
             .add_systems(
                 Startup,
-                (spawn_travel_menu, spawn_waypoint_hud, spawn_travel_fade_overlay),
+                (
+                    spawn_travel_menu,
+                    spawn_waypoint_hud,
+                    spawn_travel_fade_overlay,
+                ),
             )
             .add_systems(
                 Update,
                 (
-                    nota_measure_system,
-                    travel_menu_system,
+                    timed(Group::World, nota_measure_system),
+                    timed(Group::World, travel_menu_system),
                     travel_fade_system,
-                    waypoint_hud_system,
+                    timed(Group::Hud, waypoint_hud_system),
                     enemy_registry_system,
                     quest_debug_landmark,
                 ),

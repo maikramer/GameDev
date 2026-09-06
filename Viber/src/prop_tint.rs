@@ -27,6 +27,7 @@ use bevy::pbr::StandardMaterial;
 use bevy::prelude::*;
 
 use crate::grass::day_tint;
+use crate::profiler::{Group, timed};
 
 /// Originais de albedo capturados por material + último tint aplicado.
 #[derive(Resource, Default)]
@@ -46,7 +47,7 @@ pub struct PropTintPlugin;
 impl Plugin for PropTintPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PropTintState>()
-            .add_systems(Update, prop_daynight_tint);
+            .add_systems(Update, timed(Group::Fx, prop_daynight_tint));
     }
 }
 
@@ -149,7 +150,11 @@ mod tests {
         // Cadáver a meio do fade (alpha 0.35): o tint de noite mantém o 0.35.
         let tinted = tinted_base_color(original, night, 0.35);
         let linear = tinted.to_linear();
-        assert!((linear.alpha - 0.35).abs() < 1e-5, "alpha {:#?}", linear.alpha);
+        assert!(
+            (linear.alpha - 0.35).abs() < 1e-5,
+            "alpha {:#?}",
+            linear.alpha
+        );
         // RGB multiplicado pelo tint sobre o ORIGINAL (não compõe).
         assert!((linear.red - original.red * night[0]).abs() < 1e-5);
         assert!((linear.green - original.green * night[1]).abs() < 1e-5);

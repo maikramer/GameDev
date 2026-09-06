@@ -64,6 +64,7 @@ use crate::combat::{ATTACK_TIME_SCALE, HeldWeapon, SWING_IMPACT_FRACTION};
 use crate::economy::Vault;
 use crate::feedback::DamageNumberEvent;
 use crate::luau::ScriptInteraction;
+use crate::profiler::{Group, timed};
 use crate::recipes::{BreakStyleSpec, DestructibleSpec};
 use crate::spawner::Rng;
 use crate::terrain::runtime::TerrainRuntime;
@@ -432,8 +433,8 @@ impl bevy::app::Plugin for HarvestPlugin {
                 (
                     harvest_context_system,
                     harvest_tool_system,
-                    harvest_attack_system,
-                    harvest_impact_system,
+                    timed(Group::Combat, harvest_attack_system),
+                    timed(Group::Combat, harvest_impact_system),
                 )
                     .chain()
                     .in_set(HarvestSet)

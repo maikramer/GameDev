@@ -727,7 +727,13 @@ pub fn hit_react_system(
         let Some(node) = hit_react_node(&animator) else {
             continue;
         };
-        if play_action(&mut animator, &mut players, node, ACTION_INTERRUPT_BLEND, false) {
+        if play_action(
+            &mut animator,
+            &mut players,
+            node,
+            ACTION_INTERRUPT_BLEND,
+            false,
+        ) {
             if let Some(mut cooldown) = cooldown {
                 cooldown.timer = HIT_REACT_COOLDOWN;
             } else {
@@ -1432,8 +1438,14 @@ mod tests {
     #[test]
     fn test_hit_react_guard_cooldown_and_busy() {
         assert!(hit_react_allowed(false, false), "livre: flincha");
-        assert!(!hit_react_allowed(true, false), "cooldown aberto: sem flinch");
-        assert!(!hit_react_allowed(false, true), "rig ocupado (swing/death): sem flinch");
+        assert!(
+            !hit_react_allowed(true, false),
+            "cooldown aberto: sem flinch"
+        );
+        assert!(
+            !hit_react_allowed(false, true),
+            "rig ocupado (swing/death): sem flinch"
+        );
         assert!(!hit_react_allowed(true, true));
     }
 
@@ -1455,7 +1467,9 @@ mod tests {
     #[test]
     fn test_hit_react_cooldown_expires_and_replays() {
         // 0.4 s de cooldown: a 0.3 s ainda bloqueia, a 0.41 s deixa.
-        let mut cooldown = HitReactCooldown { timer: HIT_REACT_COOLDOWN };
+        let mut cooldown = HitReactCooldown {
+            timer: HIT_REACT_COOLDOWN,
+        };
         let dt = 1.0 / 60.0;
         for _ in 0..18 {
             cooldown.timer = (cooldown.timer - dt).max(0.0);
@@ -1478,7 +1492,10 @@ mod tests {
             advance_motion(&mut a, Vec3::ZERO, false, -3.0, dt);
         }
         let was_airborne = a.air_time;
-        assert!(was_airborne > LANDING_AIR_TIME, "voo acumulado {was_airborne}");
+        assert!(
+            was_airborne > LANDING_AIR_TIME,
+            "voo acumulado {was_airborne}"
+        );
         advance_motion(&mut a, Vec3::ZERO, true, 0.0, dt);
         assert!(is_landing(was_airborne, true), "aterragem detetada");
         assert_eq!(a.air_time, 0.0, "air_time zerou no frame grounded");

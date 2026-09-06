@@ -32,6 +32,7 @@ use crate::animation::{
 };
 use crate::luau::{LuaScriptRef, ScriptInteraction, ScriptToast};
 use crate::player::Player;
+use crate::profiler::{Group, timed};
 use crate::vitals::{Health, Xp, apply_damage};
 
 /// Alcance do golpe corpo-a-corpo (m) — VibeGame `MELEE_RANGE` 3.0.
@@ -364,7 +365,7 @@ impl bevy::app::Plugin for CombatPlugin {
             Update,
             (ensure_player_vitals, ensure_creature_vitals, cycle_weapon),
         );
-        app.add_systems(Update, player_melee_attack);
+        app.add_systems(Update, timed(Group::Combat, player_melee_attack));
         // R2-G9: ambos escrevem o Transform do herói — o doc do estádio 2
         // promete DEPOIS de `player_movement` (o lunge não disputa a
         // locomoção) e ANTES da câmara third-person (que segue o herói).
@@ -375,12 +376,12 @@ impl bevy::app::Plugin for CombatPlugin {
                 .after(crate::player::player_movement)
                 .before(crate::camera::third_person_camera),
         );
-        app.add_systems(Update, hit_stop_system);
+        app.add_systems(Update, timed(Group::Combat, hit_stop_system));
         app.add_systems(
             Update,
             (
-                cast_fireball,
-                fireball_step,
+                timed(Group::Combat, cast_fireball),
+                timed(Group::Combat, fireball_step),
                 play_death_animation,
                 tick_corpses,
                 corpse_fade_setup,
@@ -891,14 +892,18 @@ pub fn swing_track_system(
         // Hit-react: a vítima flincha (one-shot com guard 0,4 s em
         // `animation::hit_react_system`; corpses locked e swings em curso
         // ignoram-no).
-        fx.commands.entity(entity).insert(crate::animation::HitReact);
+        fx.commands
+            .entity(entity)
+            .insert(crate::animation::HitReact);
         // Stagger FÍSICO: squash-and-stretch na escala da raiz — lê à
         // distância onde o flinch de animação é sub-pixel. Re-hit a meio
         // reutiliza a base guardada (senão a deformação compunha).
         if !killed {
-            fx.commands.entity(entity).insert(crate::impact::HitRecoil::new(
-                recoil.map(|r| r.base_scale).unwrap_or(transform.scale()),
-            ));
+            fx.commands
+                .entity(entity)
+                .insert(crate::impact::HitRecoil::new(
+                    recoil.map(|r| r.base_scale).unwrap_or(transform.scale()),
+                ));
             // Reacção da criatura ao golpe (o Hit é o impacto da arma; este
             // é o "ugh" do alvo — o web-original tinha os dois separados).
             fx.sfx.write(crate::ambient::SfxEvent {
@@ -1004,7 +1009,12 @@ pub fn swing_track_system(
         } else if crit_any {
             (SHAKE_CRIT, KICK_CRIT, PUNCH_HEAVY_STOPS, FOV_KICK_HEAVY)
         } else if finisher {
-            (SHAKE_FINISHER, KICK_FINISHER, PUNCH_HEAVY_STOPS, FOV_KICK_HEAVY)
+            (
+                SHAKE_FINISHER,
+                KICK_FINISHER,
+                PUNCH_HEAVY_STOPS,
+                FOV_KICK_HEAVY,
+            )
         } else {
             (SHAKE_HIT, KICK_HIT, PUNCH_HIT_STOPS, 0.0)
         };
@@ -1014,13 +1024,17 @@ pub fn swing_track_system(
         crate::camera::add_camera_kick(&mut kick, aim * kick_impulse + Vec3::Y * KICK_UP);
         // Pulso de pós-processo: o frame do golpe clareia e floresce, o
         // `drive_postfx` devolve ao bioma sozinho.
-        crate::postfx::punch_impact(&mut postfx, punch, if kill_any {
-            PUNCH_KILL_BLOOM
-        } else if crit_any || finisher {
-            PUNCH_HEAVY_BLOOM
-        } else {
-            PUNCH_HIT_BLOOM
-        });
+        crate::postfx::punch_impact(
+            &mut postfx,
+            punch,
+            if kill_any {
+                PUNCH_KILL_BLOOM
+            } else if crit_any || finisher {
+                PUNCH_HEAVY_BLOOM
+            } else {
+                PUNCH_HIT_BLOOM
+            },
+        );
         // FOV kick do impacto (land/kill): punch de +5° que decai em 0,3 s;
         // finisher/abate somam o peso extra pesado.
         crate::camera::fov_kick(&mut camera_fx, crate::camera::FOV_KICK_IMPACT + fov);
@@ -1589,10 +1603,7 @@ fn fireball_step(
             request_hit_stop(&mut fx.hit_stop, HIT_STOP_NORMAL);
             crate::camera::add_camera_shake(&mut fx.shake, SHAKE_HIT);
             let ball_dir = ball.vel.with_y(0.0).normalize_or_zero();
-            crate::camera::add_camera_kick(
-                &mut fx.kick,
-                ball_dir * KICK_HIT + Vec3::Y * KICK_UP,
-            );
+            crate::camera::add_camera_kick(&mut fx.kick, ball_dir * KICK_HIT + Vec3::Y * KICK_UP);
             crate::postfx::punch_impact(&mut fx.postfx, PUNCH_HIT_STOPS, PUNCH_HIT_BLOOM);
             // Dano em área; abates via kill_creature (paridade melee/strike/
             // bomba: XP, quests, alerta de aggro — antes a fireball não
@@ -1610,9 +1621,11 @@ fn fireball_step(
                         timer: crate::feedback::HIT_FLASH_SECS,
                     });
                     if health.current > 0.0 {
-                        commands.entity(target).insert(crate::impact::HitRecoil::new(
-                            recoil.map(|r| r.base_scale).unwrap_or(t.scale()),
-                        ));
+                        commands
+                            .entity(target)
+                            .insert(crate::impact::HitRecoil::new(
+                                recoil.map(|r| r.base_scale).unwrap_or(t.scale()),
+                            ));
                     }
                     numbers.write(crate::feedback::DamageNumberEvent {
                         position: t.translation() + Vec3::Y * 1.8,

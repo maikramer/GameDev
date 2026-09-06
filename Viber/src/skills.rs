@@ -19,6 +19,7 @@ use crate::economy::Vault;
 use crate::feedback::{AttackAlert, DamageNumberEvent, Invulnerable};
 use crate::luau::{LuaScriptRef, ScriptInteraction, ScriptToast};
 use crate::player::Player;
+use crate::profiler::{Group, timed};
 use crate::quests::QuestLog;
 use crate::vitals::{Health, Xp, apply_damage, gain_xp};
 
@@ -354,9 +355,9 @@ impl Plugin for SkillsPlugin {
             .add_systems(
                 Update,
                 (
-                    abilities_system,
+                    timed(Group::Combat, abilities_system),
                     bomb_throw_system,
-                    bomb_step_system,
+                    timed(Group::Combat, bomb_step_system),
                     guard_system,
                     level_system,
                 ),
@@ -627,13 +628,18 @@ pub fn abilities_system(
             if health.current > 0.0 {
                 // Stagger visual (squash) — reutiliza a base de um recoil em
                 // curso para o re-hit não compor a deformação.
-                commands.entity(target).insert(crate::impact::HitRecoil::new(
-                    recoil.map(|r| r.base_scale).unwrap_or(t.scale()),
-                ));
+                commands
+                    .entity(target)
+                    .insert(crate::impact::HitRecoil::new(
+                        recoil.map(|r| r.base_scale).unwrap_or(t.scale()),
+                    ));
                 // Knockback para fora do centro do slam (~1.2 m de recuo).
-                commands.entity(target).insert(
-                    crate::physics_fx::knockback_after(delta, STRIKE_KNOCKBACK_STRENGTH),
-                );
+                commands
+                    .entity(target)
+                    .insert(crate::physics_fx::knockback_after(
+                        delta,
+                        STRIKE_KNOCKBACK_STRENGTH,
+                    ));
             }
             crate::particles::spawn_burst(
                 &mut commands,
@@ -684,11 +690,7 @@ pub fn abilities_system(
             crate::camera::add_camera_shake(&mut fx.shake, STRIKE_SHAKE);
             // O slam empurra a câmara PARA CIMA (o chão sobe contra ela).
             crate::camera::add_camera_kick(&mut fx.kick, Vec3::Y * STRIKE_KICK_UP);
-            crate::postfx::punch_impact(
-                &mut fx.postfx,
-                STRIKE_PUNCH_STOPS,
-                STRIKE_PUNCH_BLOOM,
-            );
+            crate::postfx::punch_impact(&mut fx.postfx, STRIKE_PUNCH_STOPS, STRIKE_PUNCH_BLOOM);
         }
         // O anel + poeira saem SEMPRE: o slam aterra, acerte ou não.
         crate::impact::spawn_impact_ring(
@@ -703,13 +705,7 @@ pub fn abilities_system(
             &mut commands,
             &mut fx.meshes,
             &mut fx.materials,
-            &crate::combat::impact_spec(
-                "ground-dust",
-                (0.5, 1.0),
-                (0.5, 1.0),
-                (2.0, 4.5),
-                None,
-            ),
+            &crate::combat::impact_spec("ground-dust", (0.5, 1.0), (0.5, 1.0), (2.0, 4.5), None),
             pos.with_y(pos.y + 0.15),
             12,
         );
@@ -832,9 +828,11 @@ fn bomb_step_system(
                     timer: crate::feedback::HIT_FLASH_SECS,
                 });
                 if health.current > 0.0 {
-                    commands.entity(target).insert(crate::impact::HitRecoil::new(
-                        recoil.map(|r| r.base_scale).unwrap_or(t.scale()),
-                    ));
+                    commands
+                        .entity(target)
+                        .insert(crate::impact::HitRecoil::new(
+                            recoil.map(|r| r.base_scale).unwrap_or(t.scale()),
+                        ));
                 }
                 crate::particles::spawn_burst(
                     &mut commands,
@@ -1041,8 +1039,10 @@ mod tests {
             .id();
         app.update(); // baseline silencioso do LevelProgress (previous = 225)
 
-        // 300/225 faz EXATAMENTE um salto de rampa (225→338).
-        app.world_mut().get_mut::<Xp>(hero).unwrap().current = 300;
+        // +300 XP a 0/225 faz EXATAMENTE um salto de rampa (225→338), pelo
+        // MESMO caminho do jogo (gain_xp — mutação direta de `current` não
+        // rampa o `next`).
+        gain_xp(&mut app.world_mut().get_mut::<Xp>(hero).unwrap(), 300);
         app.update();
         let level = app.world().get::<LevelState>(hero).unwrap();
         assert_eq!(level.level, 6, "225→338 é UM nível, não dois");

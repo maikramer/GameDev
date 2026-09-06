@@ -25,6 +25,7 @@ use bevy::math::Vec3;
 use bevy::prelude::*;
 use bevy::world_serialization::{WorldAsset, WorldAssetRoot};
 
+use crate::profiler::{Group, timed};
 use crate::terrain::runtime::TerrainRuntime;
 
 /// Wander speed as a fraction of the authored chase speed.
@@ -219,7 +220,9 @@ pub fn enemy_ai(
         // (pelo nome) promove a layer `boss` — e a criatura dá a VOZ (growl
         // por tipo de nome; criaturas sem voz conhecida ficam mudas).
         if prev_state == EnemyState::Wander && enemy.state == EnemyState::Chase {
-            let lowered = name.map(|n| n.to_string().to_lowercase()).unwrap_or_default();
+            let lowered = name
+                .map(|n| n.to_string().to_lowercase())
+                .unwrap_or_default();
             let is_boss = lowered.contains("boss");
             combat_music.engage(time.elapsed_secs_f64(), is_boss);
             let voice = if is_boss {
@@ -290,8 +293,11 @@ pub fn enemy_ai(
                 // SUPERFÍCIE RENDERIZADA (paridade com spawners/knockback): o
                 // sample analítico flutua acima das cordas do mesh nas
                 // cristas — a criatura ficava "dentro" do chão desenhado.
-                transform.translation =
-                    Vec3::new(moved.x, runtime.sample_mesh_surface(moved.x, moved.z), moved.z);
+                transform.translation = Vec3::new(
+                    moved.x,
+                    runtime.sample_mesh_surface(moved.x, moved.z),
+                    moved.z,
+                );
                 transform.rotation = crate::player::facing_rotation(dir3);
             }
         } else if matches!(enemy.state, EnemyState::Chase) {
@@ -407,8 +413,7 @@ pub fn respawn_spawners(
         // R2-G6: player encostado ao ponto de nascença — adia (a entrada
         // volta à fila inteira, sem perder cena/glTF nem estado).
         let too_close = player_xz.is_some_and(|p| {
-            Vec2::new(entry.position.x, entry.position.z).distance(p)
-                < RESPAWN_PLAYER_CLEARANCE_M
+            Vec2::new(entry.position.x, entry.position.z).distance(p) < RESPAWN_PLAYER_CLEARANCE_M
         });
         if too_close {
             let mut deferred = entry;
@@ -460,7 +465,7 @@ impl Plugin for AiPlugin {
             .add_systems(
                 Update,
                 (
-                    enemy_ai,
+                    timed(Group::Ai, enemy_ai),
                     ensure_fsm_vitals,
                     queue_creature_respawns,
                     respawn_spawners,
@@ -865,11 +870,7 @@ mod tests {
         // NADA nasceu e a entrada voltou à fila com +5 s.
         let world = app.world_mut();
         assert!(
-            world
-                .query::<&EnemyCreature>()
-                .iter(world)
-                .next()
-                .is_none(),
+            world.query::<&EnemyCreature>().iter(world).next().is_none(),
             "camping: nenhum inimigo nasce a 1 m do player"
         );
         let queue = &world.resource::<RespawnQueue>().0;

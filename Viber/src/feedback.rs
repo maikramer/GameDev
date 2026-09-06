@@ -774,9 +774,7 @@ fn target_ring_system(
     let Some(wanted) = wanted else {
         return;
     };
-    let alive = rings
-        .iter()
-        .any(|(_, ring, _, _)| ring.target == wanted);
+    let alive = rings.iter().any(|(_, ring, _, _)| ring.target == wanted);
     if !alive {
         if let Ok(t) = positions.get(wanted) {
             commands.spawn((
@@ -1203,10 +1201,16 @@ mod tests {
     fn test_damage_number_scale_overshoots_and_settles() {
         // Arranca em 1.0, pico de 1.25× exato aos 40 ms, assente em 1.0.
         assert!((damage_number_scale(0.0) - 1.0).abs() < 1e-5);
-        assert!((damage_number_scale(-1.0) - 1.0).abs() < 1e-5, "idade inválida = 1.0");
+        assert!(
+            (damage_number_scale(-1.0) - 1.0).abs() < 1e-5,
+            "idade inválida = 1.0"
+        );
         assert!((damage_number_scale(NUMBER_POP_PEAK_AT) - NUMBER_POP_PEAK).abs() < 1e-4);
         assert!((damage_number_scale(NUMBER_POP_SETTLE_AT) - 1.0).abs() < 1e-4);
-        assert!((damage_number_scale(0.5) - 1.0).abs() < 1e-5, "passado o pop");
+        assert!(
+            (damage_number_scale(0.5) - 1.0).abs() < 1e-5,
+            "passado o pop"
+        );
         // Dentro da subida: entre 1.0 e o pico, monotónico crescente.
         let quarter = damage_number_scale(NUMBER_POP_PEAK_AT * 0.25);
         assert!(quarter > 1.0 && quarter < NUMBER_POP_PEAK, "{quarter}");

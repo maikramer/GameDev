@@ -13,14 +13,15 @@ use serde_json::Value;
 use viber::bridge::{self, client::BridgeClient};
 use viber::combat;
 use viber::luau;
+use viber::profiler::{Group, timed};
 use viber::recipes::ParsedWorld;
 use viber::recipes::spawn::{self, PendingWorld};
 use viber::ui;
 use viber::{
-    ai, ambient, animation, audit, camera, economy, feedback, grass, harvest, hud, impact,
-    menus, meshopt, music, particles, physics, physics_fx, player, postfx, profiler, prop_tint,
-    quests, recipes, render_lod, save, scaffold, skills, sky, spawner, terrain, textures, trail,
-    travel, vitals, worldsys, xml,
+    ai, ambient, animation, audit, camera, economy, feedback, grass, harvest, hud, impact, menus,
+    meshopt, music, particles, physics, physics_fx, player, postfx, profiler, prop_tint, quests,
+    recipes, render_lod, save, scaffold, skills, sky, spawner, terrain, textures, trail, travel,
+    vitals, worldsys, xml,
 };
 
 /// Native Bevy engine for AiGameKit declarative worlds.
@@ -128,6 +129,15 @@ enum DebugCommand {
         /// Delay between samples, milliseconds
         #[arg(long, default_value_t = 500)]
         interval_ms: u64,
+        /// Rich tab dump: systems|world|physics|audio|extras|all (pt aliases:
+        /// sistemas|mundo|fisica|audio|extras|tudo). Implies --json shape;
+        /// human printers per tab unless --json.
+        #[arg(long)]
+        tab: Option<String>,
+        /// Export the FULL profiler snapshot to a JSON file. Optional path
+        /// (default: $TMPDIR/viber-profiles/viber-profile-<epoch>.json).
+        #[arg(long, num_args = 0..=1, default_missing_value = "")]
+        export: Option<String>,
     },
     /// Execute Luau na engine (`viber.lua`): mover/teleportar o player,
     /// desativar/despawnar entidades, dar itens… API completa: `viber.debug.*`
@@ -767,15 +777,15 @@ fn run(path: &Path, bridge_port: Option<u16>) -> Result<()> {
     app.add_systems(
         bevy::app::Update,
         (
-            hud::hud_health_sync,
+            timed(Group::Hud, hud::hud_health_sync),
             hud::hud_xp_sync,
             // Balão de diálogo: única via que decrementa o timer e volta a
             // esconder — sem registo, o balão ficava no ecrã para sempre.
-            hud::hud_balloon_update,
+            timed(Group::Hud, hud::hud_balloon_update),
             // Janela do profiler (tecla P): toggle + refresh ao vivo.
             hud::profiler_window::hud_profiler_window,
             // Modal [Q]: sincroniza abas/conteúdos e trata cliques.
-            hud::menu::hud_menu_system,
+            timed(Group::Hud, hud::menu::hud_menu_system),
         ),
     );
     app.add_systems(
@@ -785,23 +795,31 @@ fn run(path: &Path, bridge_port: Option<u16>) -> Result<()> {
             // cameras, the player steers their yaw with A/D, then the
             // third-person camera trails it. All three touch OrbitCamera.
             (
-                spawn::orbit_camera_follow,
-                player::player_movement,
-                camera::third_person_camera,
+                timed(Group::Camera, spawn::orbit_camera_follow),
+                timed(Group::Player, player::player_movement),
+                timed(Group::Camera, camera::third_person_camera),
             )
                 .chain(),
-            spawn::auto_orbit,
-            spawn::gltf_scene_spawner,
-            player::dialogue_interaction,
+            timed(Group::Camera, spawn::auto_orbit),
+            timed(Group::Spawner, spawn::gltf_scene_spawner),
+            timed(Group::Player, player::dialogue_interaction),
             hud::hud_prompt_update,
             hud::compass::hud_compass_update,
-            hud::hud_minimap_update,
+            timed(Group::Hud, hud::hud_minimap_update),
             // Pool de nametags (8 pílulas): re-ligadas — com "!" de quest,
             // hostis em vermelho e alpha por distância (45→60 m).
-            hud::hud_nametags_update,
-            music::music_driver,
-            worldsys::daycycle_drive,
-            worldsys::sun_drive,
+            timed(Group::Hud, hud::hud_nametags_update),
+            timed(Group::World, music::music_driver),
+            timed(Group::World, worldsys::daycycle_drive),
+            timed(Group::World, worldsys::sun_drive),
+        ),
+    );
+    // Tuplo dividido: o Bevy limita tuples de sistemas a 20 elementos e o
+    // bloco acima cresceu (weather/atmosphere drives). Constraints são
+    // explícitas (.after), a separação não muda semântica.
+    app.add_systems(
+        bevy::app::Update,
+        (
             // Clamp da borda DEPOIS do movimento/dash do player (mesmo frame) —
             // sem ordem, o clamp viajava um frame atrás do WASD.
             worldsys::world_border_clamp
@@ -810,8 +828,8 @@ fn run(path: &Path, bridge_port: Option<u16>) -> Result<()> {
             sky::sky_follow_camera,
             worldsys::seat_statics_once,
             hud::hud_toggle,
-            particles::particle_emitter_update,
-            spawner::instantiate_spawn_groups,
+            timed(Group::Fx, particles::particle_emitter_update),
+            timed(Group::Spawner, spawner::instantiate_spawn_groups),
             vitals::debug_damage,
             // Dano recebido também abana a câmara (peso ∝ dano).
             feedback::shake_on_player_hurt,
@@ -1242,7 +1260,9 @@ fn session_down(world: Option<&Path>) -> Result<()> {
             // argv[0] relativo, apagado desde o spawn, ou current_exe falhou:
             // o basename exato "viber" chega (um inocente com o caminho da
             // engine em qualquer outro argumento já não conta).
-            _ => Path::new(&argv0).file_name().is_some_and(|name| name == "viber"),
+            _ => Path::new(&argv0)
+                .file_name()
+                .is_some_and(|name| name == "viber"),
         };
         if !is_engine {
             bail!(
@@ -1313,6 +1333,151 @@ fn print_tree(tree: &serde_json::Value) {
             .map(|values| values.len())
             .unwrap_or(0);
         println!("{id:<10} {name:<24} {parent:<10} {xyz:<16} {components}");
+    }
+}
+
+/// Aceita aliases pt/en dos tabs do profiler → id canónico da bridge.
+fn normalize_prof_tab(tab: &str) -> String {
+    match tab.trim().to_lowercase().as_str() {
+        "sistemas" | "systems" => "systems".into(),
+        "mundo" | "world" => "world".into(),
+        "fisica" | "física" | "physics" => "physics".into(),
+        "audio" | "áudio" => "audio".into(),
+        "extras" => "extras".into(),
+        "tudo" | "all" => "all".into(),
+        other => other.into(),
+    }
+}
+
+/// Impressão humana por tab (`viber debug prof --tab mundo` etc.).
+fn print_prof_tab(tab: &str, value: &serde_json::Value) {
+    match tab {
+        "world" => {
+            if let Some(player) = value.get("player") {
+                println!(
+                    "player {}  pos {:.1} {:.1} {:.1}  yaw {:.0}°  chão {}",
+                    player["name"].as_str().unwrap_or("?"),
+                    player["pos"]["x"].as_f64().unwrap_or(0.0),
+                    player["pos"]["y"].as_f64().unwrap_or(0.0),
+                    player["pos"]["z"].as_f64().unwrap_or(0.0),
+                    player["yaw_deg"].as_f64().unwrap_or(0.0),
+                    if player["grounded"].as_bool() == Some(true) {
+                        "sim"
+                    } else {
+                        "não"
+                    },
+                );
+            } else {
+                println!("player (nenhum)");
+            }
+            if let Some(camera) = value.get("camera") {
+                println!(
+                    "câmera {}  pos {:.1} {:.1} {:.1}",
+                    camera["name"].as_str().unwrap_or("?"),
+                    camera["pos"]["x"].as_f64().unwrap_or(0.0),
+                    camera["pos"]["y"].as_f64().unwrap_or(0.0),
+                    camera["pos"]["z"].as_f64().unwrap_or(0.0),
+                );
+            }
+            println!(
+                "entidades {}  próximas {}/{} no raio {:.0} m",
+                value["entity_count"].as_u64().unwrap_or(0),
+                value["nearby"].as_array().map(|a| a.len()).unwrap_or(0),
+                value["nearby_in_radius"].as_u64().unwrap_or(0),
+                value["nearby_radius"].as_f64().unwrap_or(0.0),
+            );
+            for near in value["nearby"].as_array().into_iter().flatten() {
+                println!(
+                    "  {:>7.1}m  {}  #{}  [{}]",
+                    near["dist"].as_f64().unwrap_or(0.0),
+                    near["name"].as_str().unwrap_or("?"),
+                    near["entity"].as_u64().unwrap_or(0),
+                    near["tags"]
+                        .as_array()
+                        .map(|t| t
+                            .iter()
+                            .filter_map(|v| v.as_str())
+                            .collect::<Vec<_>>()
+                            .join(","))
+                        .unwrap_or_default(),
+                );
+            }
+        }
+        "physics" => {
+            let bodies = &value["bodies"];
+            println!(
+                "corpos {} (fixos {} · din {} · cin {})  sono {}/{} acordados",
+                bodies["total"].as_u64().unwrap_or(0),
+                bodies["fixed"].as_u64().unwrap_or(0),
+                bodies["dynamic"].as_u64().unwrap_or(0),
+                bodies["kinematic"].as_u64().unwrap_or(0),
+                bodies["sleeping"].as_u64().unwrap_or(0),
+                bodies["awake"].as_u64().unwrap_or(0),
+            );
+            println!(
+                "colisores {}  sensores {}  pendentes {}  cct {}",
+                value["colliders"]["total"].as_u64().unwrap_or(0),
+                value["colliders"]["sensors"].as_u64().unwrap_or(0),
+                value["pending_colliders"].as_u64().unwrap_or(0),
+                value["cct"].as_u64().unwrap_or(0),
+            );
+            if let Some(rapier) = value.get("rapier") {
+                println!(
+                    "rapier corpos {}  colisores {}  juntas {}  dt {:.4}",
+                    rapier["bodies"].as_u64().unwrap_or(0),
+                    rapier["colliders"].as_u64().unwrap_or(0),
+                    rapier["impulse_joints"].as_u64().unwrap_or(0),
+                    rapier["timestep"].as_f64().unwrap_or(0.0),
+                );
+            }
+            if let Some(step) = value.get("step") {
+                println!(
+                    "step {:.2} ms (média {:.2} · p95 {:.2})",
+                    step["last_ms"].as_f64().unwrap_or(0.0),
+                    step["avg_ms"].as_f64().unwrap_or(0.0),
+                    step["p95_ms"].as_f64().unwrap_or(0.0),
+                );
+            }
+            for (shape, count) in value["colliders"]["by_shape"]
+                .as_object()
+                .into_iter()
+                .flatten()
+            {
+                println!("  {shape}: {count}");
+            }
+        }
+        "audio" => {
+            let buses = &value["buses"];
+            println!(
+                "buses master {:.2}  música {:.2}  sfx {:.2}",
+                buses["master"].as_f64().unwrap_or(0.0),
+                buses["music"].as_f64().unwrap_or(0.0),
+                buses["sfx"].as_f64().unwrap_or(0.0),
+            );
+            println!(
+                "sinks {} total · {} a tocar · {} pausados · {} muted · {} spatial · {} loop",
+                value["total"].as_u64().unwrap_or(0),
+                value["playing"].as_u64().unwrap_or(0),
+                value["paused"].as_u64().unwrap_or(0),
+                value["muted"].as_u64().unwrap_or(0),
+                value["spatial"].as_u64().unwrap_or(0),
+                value["looping"].as_u64().unwrap_or(0),
+            );
+            for layer in value["layers"].as_array().into_iter().flatten() {
+                println!(
+                    "  layer {} base {:.2}{}",
+                    layer["layer"].as_str().unwrap_or("?"),
+                    layer["base_volume"].as_f64().unwrap_or(0.0),
+                    if layer["paused"].as_bool() == Some(true) {
+                        " [pausa]"
+                    } else {
+                        ""
+                    },
+                );
+            }
+        }
+        "systems" => print_prof(value),
+        _ => println!("{value:#}"),
     }
 }
 
@@ -1482,8 +1647,30 @@ fn run_debug(command: DebugCommand) -> Result<()> {
             json,
             samples,
             interval_ms,
+            tab,
+            export,
         } => {
             let client = BridgeClient::localhost(bridge::client::resolve_port(port));
+            if let Some(path) = export {
+                let path = (!path.is_empty()).then(|| PathBuf::from(&path));
+                let result = client.prof_export(path.as_deref())?;
+                println!(
+                    "✓ export → {} ({} bytes)",
+                    result["path"].as_str().unwrap_or("?"),
+                    result["bytes"].as_u64().unwrap_or(0)
+                );
+                return Ok(());
+            }
+            if let Some(tab) = tab {
+                let tab = normalize_prof_tab(&tab);
+                let value = client.prof_tab(&tab)?;
+                if json || tab == "all" || tab == "extras" {
+                    println!("{value:#}");
+                } else {
+                    print_prof_tab(&tab, &value);
+                }
+                return Ok(());
+            }
             if samples <= 1 {
                 let prof = client.prof()?;
                 if json {

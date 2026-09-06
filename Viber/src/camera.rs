@@ -941,7 +941,10 @@ mod tests {
         // Impacto (5°) dentro do dash (8°) NÃO encolhe nem recomeça o decay.
         fov_kick(&mut fx, FOV_KICK_IMPACT);
         let half = fx.step(FOV_KICK_DECAY / 2.0);
-        assert!((half - FOV_KICK_DASH * 0.5).abs() < 1e-4, "decay pela metade: {half}");
+        assert!(
+            (half - FOV_KICK_DASH * 0.5).abs() < 1e-4,
+            "decay pela metade: {half}"
+        );
         // Kick maior recomeça do novo pico.
         fov_kick(&mut fx, FOV_KICK_DASH);
         assert!((fx.kick - FOV_KICK_DASH).abs() < 1e-5);

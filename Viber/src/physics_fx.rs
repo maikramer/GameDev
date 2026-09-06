@@ -15,6 +15,7 @@
 
 use bevy::prelude::*;
 
+use crate::profiler::{Group, timed};
 use crate::terrain::runtime::TerrainRuntime;
 
 /// Decaimento exponencial do knockback (por segundo).
@@ -157,7 +158,13 @@ pub struct PhysicsFxPlugin;
 
 impl Plugin for PhysicsFxPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (knockback_system, falling_system));
+        app.add_systems(
+            Update,
+            (
+                timed(Group::Fx, knockback_system),
+                timed(Group::Fx, falling_system),
+            ),
+        );
     }
 }
 
@@ -202,7 +209,8 @@ mod tests {
     }
 
     /// App headless mínima com o plugin (relógio avançado à mão, como em
-    /// `ai.rs`) — devolve o id a partir do nome dado ao spawn.
+    /// `ai.rs` — sem TimePlugin o delta real microscópico não estraga os
+    /// passos do knockback).
     fn fx_app() -> App {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins.build().disable::<bevy::time::TimePlugin>());
@@ -218,13 +226,20 @@ mod tests {
         let mut app = fx_app();
         let alive = app
             .world_mut()
-            .spawn((Transform::from_xyz(0.0, 0.0, 0.0), Knockback { velocity: Vec3::X * 2.0 }))
+            .spawn((
+                Transform::from_xyz(0.0, 0.0, 0.0),
+                Knockback {
+                    velocity: Vec3::X * 2.0,
+                },
+            ))
             .id();
         let dead = app
             .world_mut()
             .spawn((
                 Transform::from_xyz(0.0, 0.0, 0.0),
-                Knockback { velocity: Vec3::X * 2.0 },
+                Knockback {
+                    velocity: Vec3::X * 2.0,
+                },
                 crate::combat::Corpse {
                     timer: crate::combat::CORPSE_LIFETIME,
                 },
@@ -240,26 +255,85 @@ mod tests {
         assert_eq!(dead_x, 0.0, "cadáver fica no lugar: {dead_x}");
     }
 
-    /// R2-G5a: o HERÓI não leva Y-slam — o Y entra e sai intacto (o salto a
-    /// meio não é sentado no chão pelo empurrão). XZ continua a deslocar.
+    /// R2-G5a: o HERÓI não leva Y-slam — com terreno REAL na app (o caminho
+    /// do slam ativo), o Y entra e sai intacto; XZ desloca na mesma.
     #[test]
     fn test_knockback_keeps_player_y_headless() {
+        use std::sync::Arc;
+
         let mut app = fx_app();
+        // Grid procedural pequeno (mesmo setup dos testes de `ai.rs`) — sem
+        // isto o branch do Y-slam nem corria e o teste não apanhava a
+        // regressão.
+        let spec = crate::terrain::spec::TerrainSpec {
+            world_size: 128.0,
+            max_height: 40.0,
+            seed: 5,
+            ..crate::terrain::spec::TerrainSpec::default()
+        };
+        let map = crate::terrain::heightmap::HeightMapU16::procedural(
+            &spec,
+            spec.resolution.max(1) as usize,
+        );
+        let grid = crate::terrain::brush::BrushGrid::from_height_map(
+            &map,
+            spec.world_size,
+            spec.max_height,
+            spec.height_smoothing,
+        )
+        .expect("grid builds");
+        app.insert_resource(TerrainRuntime {
+            spec,
+            grid: Arc::new(grid),
+            water: vec![],
+            roads: vec![],
+            pads: vec![],
+            voxel: Arc::new(crate::terrain::voxel::VoxelField::default()),
+        });
+
         let hero = app
             .world_mut()
             .spawn((
                 crate::player::Player::default(),
-                Transform::from_xyz(0.0, 3.5, 0.0),
-                Knockback { velocity: Vec3::X * 2.0 },
+                Transform::from_xyz(10.0, 3.5, 10.0),
+                Knockback {
+                    velocity: Vec3::X * 2.0,
+                },
             ))
             .id();
+        // Um NÃO-player na mesma zona: leva o Y-slam (comportamento mantido).
+        let prop = app
+            .world_mut()
+            .spawn((
+                Transform::from_xyz(10.0, 3.5, 10.0),
+                Knockback {
+                    velocity: Vec3::X * 2.0,
+                },
+            ))
+            .id();
+
         app.world_mut()
             .resource_mut::<Time>()
             .advance_by(std::time::Duration::from_millis(100));
         app.update();
-        let t = app.world().get::<Transform>(hero).unwrap().translation;
-        assert!((t.y - 3.5).abs() < 1e-5, "Y do herói intocado: {}", t.y);
-        assert!(t.x > 0.0, "XZ desloca na mesma: {t:?}");
+
+        let hero_t = app.world().get::<Transform>(hero).unwrap().translation;
+        assert!(
+            (hero_t.y - 3.5).abs() < 1e-5,
+            "Y do herói intocado: {}",
+            hero_t.y
+        );
+        assert!(hero_t.x > 10.0, "XZ do herói desloca: {hero_t:?}");
+        let prop_t = app.world().get::<Transform>(prop).unwrap().translation;
+        let ground = app
+            .world()
+            .resource::<TerrainRuntime>()
+            .sample_mesh_surface(prop_t.x, prop_t.z);
+        assert!(
+            (prop_t.y - ground).abs() < 1e-3,
+            "não-player assenta na superfície: {} vs {ground}",
+            prop_t.y
+        );
     }
 
     /// R2-G5b: o deslocamento do knockback é clampado ao disco do
@@ -276,7 +350,12 @@ mod tests {
         // (radius − margin): fica em 90.
         let id = app
             .world_mut()
-            .spawn((Transform::from_xyz(90.0, 0.0, 0.0), Knockback { velocity: Vec3::X * 2.0 }))
+            .spawn((
+                Transform::from_xyz(90.0, 0.0, 0.0),
+                Knockback {
+                    velocity: Vec3::X * 2.0,
+                },
+            ))
             .id();
         app.world_mut()
             .resource_mut::<Time>()
@@ -292,7 +371,12 @@ mod tests {
         // por update (sem TimePlugin o delta é o que aqui se der).
         let inner = app
             .world_mut()
-            .spawn((Transform::from_xyz(0.0, 0.0, 0.0), Knockback { velocity: Vec3::X * 2.0 }))
+            .spawn((
+                Transform::from_xyz(0.0, 0.0, 0.0),
+                Knockback {
+                    velocity: Vec3::X * 2.0,
+                },
+            ))
             .id();
         app.world_mut()
             .resource_mut::<Time>()

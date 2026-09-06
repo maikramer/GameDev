@@ -112,11 +112,7 @@ pub fn hud_nametags_update(
             &mut Text,
             &Children,
         ),
-        (
-            With<NameTagPill>,
-            Without<NameTag>,
-            Without<NameTagBang>,
-        ),
+        (With<NameTagPill>, Without<NameTag>, Without<NameTagBang>),
     >,
     mut bangs: Query<
         (&mut Visibility, &mut ImageNode),
@@ -176,7 +172,11 @@ pub fn hud_nametags_update(
             bang: false,
         });
     }
-    candidates.sort_by(|a, b| a.dist.partial_cmp(&b.dist).unwrap_or(std::cmp::Ordering::Equal));
+    candidates.sort_by(|a, b| {
+        a.dist
+            .partial_cmp(&b.dist)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     for (index, (mut node, mut visibility, children)) in tags.iter_mut().enumerate() {
         let Some(candidate) = candidates.get(index) else {

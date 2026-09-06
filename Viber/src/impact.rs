@@ -10,6 +10,7 @@
 //!   que expande e desvanece em ~0,4 s: lê a distância onde as partículas
 //!   ficam pequenas. Finisher, slam [R], bomba e abates.
 
+use crate::profiler::{Group, timed};
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::math::primitives::Torus;
 use bevy::prelude::*;
@@ -178,7 +179,10 @@ impl bevy::app::Plugin for ImpactFxPlugin {
     fn build(&self, app: &mut bevy::app::App) {
         app.add_systems(
             bevy::app::Update,
-            (hit_recoil_system, impact_ring_system),
+            (
+                timed(Group::Fx, hit_recoil_system),
+                timed(Group::Fx, impact_ring_system),
+            ),
         );
     }
 }

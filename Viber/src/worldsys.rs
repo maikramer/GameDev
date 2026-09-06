@@ -962,7 +962,12 @@ mod tests {
     /// propagava-se à luz direcional e ao ambiente (ronda 2 de bugs).
     #[test]
     fn test_sun_arc_survives_degenerate_dawn_dusk() {
-        for (dawn, dusk) in [(330.0, 330.0), (1170.0, 330.0), (0.0, 1440.0), (1440.0, 0.0)] {
+        for (dawn, dusk) in [
+            (330.0, 330.0),
+            (1170.0, 330.0),
+            (0.0, 1440.0),
+            (1440.0, 0.0),
+        ] {
             for minute in [0.0, 60.0, 330.0, 719.5, 1170.0, 1439.0] {
                 let el = sun_elevation(minute, dawn, dusk, 62.0);
                 let az = sun_azimuth(minute, dawn, dusk, 205.0);
@@ -1004,10 +1009,7 @@ mod tests {
         // Sementes diferentes no mesmo índice também.
         assert_ne!(weather_cycle_target(1, 5), weather_cycle_target(2, 5));
         // Enviesado para seco (quadrado do uniforme): média bem abaixo de 0.5.
-        let mean: f32 = (0..256u64)
-            .map(|i| weather_cycle_target(9, i))
-            .sum::<f32>()
-            / 256.0;
+        let mean: f32 = (0..256u64).map(|i| weather_cycle_target(9, i)).sum::<f32>() / 256.0;
         assert!(mean < 0.45, "média seca: {mean}");
     }
 
@@ -1060,7 +1062,10 @@ mod tests {
         assert_eq!(scheduler.index, 2);
 
         // Default: período 0 → 240 s.
-        assert_eq!(WeatherScheduler::new(0, 0.0, 0.0).period, WEATHER_CYCLE_DEFAULT_SECS);
+        assert_eq!(
+            WeatherScheduler::new(0, 0.0, 0.0).period,
+            WEATHER_CYCLE_DEFAULT_SECS
+        );
         // E a mesma seed+índice reproduce a mesma sequência inteira.
         let mut a = WeatherScheduler::new(123, 0.5, 10.0);
         let mut b = WeatherScheduler::new(123, 0.5, 10.0);

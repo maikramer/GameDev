@@ -12,6 +12,7 @@ use bevy::math::Vec3;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
+use crate::profiler::{Group, timed};
 use crate::recipes::ParticleSpec;
 
 /// Resolved emitter values (preset defaults + world overrides).
@@ -337,8 +338,7 @@ pub fn resolve(spec: &ParticleSpec) -> ResolvedEmitter {
     // Teto mais apertado primeiro: emissores ambiente (teto 1024) só
     // truncam acima disso, mas o autor precisa de saber do limite do
     // `<ParticleSystem>` na mesma — a mensagem nomeia os dois.
-    let required =
-        (resolved.emission_rate * resolved.life.1).ceil() as usize + CAPACITY_HEADROOM;
+    let required = (resolved.emission_rate * resolved.life.1).ceil() as usize + CAPACITY_HEADROOM;
     if required > EMITTER_MESH_CAP
         && !CAPACITY_WARNED.swap(true, std::sync::atomic::Ordering::Relaxed)
     {
@@ -941,11 +941,11 @@ fn burst_despawn_system(
 pub struct BurstPlugin;
 impl bevy::app::Plugin for BurstPlugin {
     fn build(&self, app: &mut bevy::app::App) {
-        app.add_systems(bevy::app::Update, burst_despawn_system);
+        app.add_systems(bevy::app::Update, timed(Group::Fx, burst_despawn_system));
         // Sprite radial suave nos materiais dos emissores (WS-A) — `Option`
         // em tudo o que depende do AssetPlugin, para sobreviver em Apps de
         // teste headless sem assets.
-        app.add_systems(bevy::app::Update, emitter_sprite_bind);
+        app.add_systems(bevy::app::Update, timed(Group::Fx, emitter_sprite_bind));
     }
 }
 
@@ -994,7 +994,11 @@ mod tests {
     #[test]
     fn test_rain_preset_is_thin_and_stretched() {
         let rain = preset("rain");
-        assert!(rain.emission_rate >= 400.0, "rate alto: {}", rain.emission_rate);
+        assert!(
+            rain.emission_rate >= 400.0,
+            "rate alto: {}",
+            rain.emission_rate
+        );
         assert!(!rain.additive, "chuva é Blend, não Add");
         assert!(rain.speed.1 < 0.0, "speed negativo = a cair");
         assert!(rain.gravity.y < -8.0, "gravidade forte");
@@ -1050,8 +1054,17 @@ mod tests {
         };
         let mut mesh = particle_mesh(1);
         // Câmara em +Z: right = X, up = Y (eixos canónicos).
-        write_billboards(&mut mesh, &[particle], Vec3::ZERO, Vec3::new(0.0, 0.0, 10.0), 1.0, 1);
-        let positions = mesh.attribute(bevy::mesh::Mesh::ATTRIBUTE_POSITION).unwrap();
+        write_billboards(
+            &mut mesh,
+            &[particle],
+            Vec3::ZERO,
+            Vec3::new(0.0, 0.0, 10.0),
+            1.0,
+            1,
+        );
+        let positions = mesh
+            .attribute(bevy::mesh::Mesh::ATTRIBUTE_POSITION)
+            .unwrap();
         let bevy::mesh::VertexAttributeValues::Float32x3(positions) = positions else {
             panic!("position attribute type");
         };
@@ -1080,10 +1093,7 @@ mod tests {
         // Meio do falloff (r ≈ 0.61 no pixel 51 da linha central): entre os
         // dois extremos — o pixel 1 já está no r ≈ 0.95, quase desligado.
         let edge = alpha(51, 31);
-        assert!(
-            (30..=230).contains(&edge),
-            "meio do falloff: {edge}"
-        );
+        assert!((30..=230).contains(&edge), "meio do falloff: {edge}");
         // RGB é branco em todo o lado (a cor real vem das vertex colors).
         assert_eq!(data[0], 255);
     }
@@ -1189,10 +1199,19 @@ mod tests {
             20 + CAPACITY_HEADROOM
         );
         // Piso: rate 0 (sim de burst reutiliza `seeded`) nunca dá mesh vazio.
-        assert_eq!(capacity_quads(0.0, 1.0, AMBIENT_MESH_CAP), CAPACITY_HEADROOM);
+        assert_eq!(
+            capacity_quads(0.0, 1.0, AMBIENT_MESH_CAP),
+            CAPACITY_HEADROOM
+        );
         // Tetos POR SITE mantidos: declarativo 512, ambiente 1024.
-        assert_eq!(capacity_quads(10_000.0, 1.0, EMITTER_MESH_CAP), EMITTER_MESH_CAP);
-        assert_eq!(capacity_quads(10_000.0, 1.0, AMBIENT_MESH_CAP), AMBIENT_MESH_CAP);
+        assert_eq!(
+            capacity_quads(10_000.0, 1.0, EMITTER_MESH_CAP),
+            EMITTER_MESH_CAP
+        );
+        assert_eq!(
+            capacity_quads(10_000.0, 1.0, AMBIENT_MESH_CAP),
+            AMBIENT_MESH_CAP
+        );
         // O rain da engine (500/s × 0.85 s) cabe no teto declarativo — mundos
         // atuais não disparam o warn de truncamento.
         assert!(capacity_quads(500.0, 0.85, EMITTER_MESH_CAP) <= EMITTER_MESH_CAP);

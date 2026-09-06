@@ -426,7 +426,8 @@ fn biome_fog_system(
     // fecha o horizonte: +60 % de densidade com tempestade cheia — o mesmo
     // sítio a 200 m lê-se véu a chover.
     let rain = weather.map(|w| w.rain.clamp(0.0, 1.0)).unwrap_or(0.0);
-    let density = FOG_BASE_DENSITY * density_mult * (1.0 + 0.35 * atmosphere.night) * (1.0 + 0.6 * rain);
+    let density =
+        FOG_BASE_DENSITY * density_mult * (1.0 + 0.35 * atmosphere.night) * (1.0 + 0.6 * rain);
 
     // Inscattering direcional — a escala NÃO é arbitrária, e errá-la lava o
     // frame inteiro de branco (r1/r2).
@@ -840,8 +841,7 @@ fn rain_emitter_driver(
         // Ainda não existe: spawna UM. O `Commands::queue` só dá `&mut World`
         // — daí o `spawn_looping_in_world`.
         commands.queue(move |world: &mut World| {
-            let entity =
-                crate::particles::spawn_looping_in_world(world, &rain_spec(), anchor);
+            let entity = crate::particles::spawn_looping_in_world(world, &rain_spec(), anchor);
             world.entity_mut(entity).insert(RainEmitter);
         });
         return;
@@ -941,7 +941,9 @@ fn setup_rain_ambience(
     }
     commands.spawn((
         RainAmbienceLoop,
-        AudioPlayer::<bevy::audio::AudioSource>(server.load("assets/audio/sfx/ambient/rain_loop.ogg")),
+        AudioPlayer::<bevy::audio::AudioSource>(
+            server.load("assets/audio/sfx/ambient/rain_loop.ogg"),
+        ),
         PlaybackSettings::LOOP.with_volume(bevy::audio::Volume::Linear(0.0)),
     ));
 }
@@ -996,10 +998,7 @@ fn lantern_driver(
     time: Res<Time>,
     atmosphere: Option<Res<crate::worldsys::AtmosphereState>>,
     players: Query<&GlobalTransform, With<Player>>,
-    mut lanterns: Query<
-        (&mut Transform, &mut PointLight, &mut Visibility),
-        With<TravellerLantern>,
-    >,
+    mut lanterns: Query<(&mut Transform, &mut PointLight, &mut Visibility), With<TravellerLantern>>,
     mut commands: Commands,
 ) {
     // `iter().next()` e não `single()`: ≥2 players não pode matar a lanterna.
@@ -1007,9 +1006,7 @@ fn lantern_driver(
         return;
     };
     let anchor = player.translation() + Vec3::Y * LANTERN_HEIGHT;
-    let night = atmosphere
-        .map(|a| a.night.clamp(0.0, 1.0))
-        .unwrap_or(0.0);
+    let night = atmosphere.map(|a| a.night.clamp(0.0, 1.0)).unwrap_or(0.0);
     let target = LANTERN_MAX_INTENSITY * night;
     let Ok((mut transform, mut light, mut visibility)) = lanterns.single_mut() else {
         commands.spawn((
@@ -1073,11 +1070,7 @@ mod tests {
         // Text2Sound (.ogg) — nada na engine pode apontar a .wav.
         assert!(SfxClip::Ui.file().ends_with("ui.ogg"));
         for clip in SFX_CLIPS_ALL {
-            assert!(
-                clip.file().ends_with(".ogg"),
-                "{} não é .ogg",
-                clip.file()
-            );
+            assert!(clip.file().ends_with(".ogg"), "{} não é .ogg", clip.file());
         }
         // colheita nativa: 4 clips .ogg partilhados com a referência
         for clip in [
@@ -1109,7 +1102,9 @@ mod tests {
     fn test_lua_registry_covers_all_clips() {
         for clip in SFX_CLIPS_ALL {
             assert!(
-                crate::luau::SFX_NAME_REGISTRY.iter().any(|(_, c)| c == clip),
+                crate::luau::SFX_NAME_REGISTRY
+                    .iter()
+                    .any(|(_, c)| c == clip),
                 "clip {:?} sem nome no SFX_NAME_REGISTRY",
                 clip
             );
@@ -1159,10 +1154,8 @@ mod tests {
                 cycle: false,
             });
             app.add_systems(bevy::app::Update, biome_fog_system);
-            app.world_mut().spawn((
-                Player::default(),
-                GlobalTransform::from_xyz(0.0, 0.0, 0.0),
-            ));
+            app.world_mut()
+                .spawn((Player::default(), GlobalTransform::from_xyz(0.0, 0.0, 0.0)));
             app.world_mut().spawn((Camera3d::default(),));
             app.update();
             let camera = app

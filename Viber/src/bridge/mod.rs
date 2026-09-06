@@ -38,6 +38,9 @@ pub const METHOD_SCREENSHOT_STATUS: &str = "viber.screenshot_status";
 pub const METHOD_TREE: &str = "viber.tree";
 pub const METHOD_LOGS: &str = "viber.logs";
 pub const METHOD_PROFILER: &str = "viber.profiler";
+pub const METHOD_PROFILER_TAB: &str = "viber.profiler.tab";
+pub const METHOD_PROFILER_EXPORT: &str = "viber.profiler.export";
+pub const METHOD_PROFILER_EXTRA_TOGGLE: &str = "viber.profiler.extra_toggle";
 pub const METHOD_LUA: &str = "viber.lua";
 pub const METHOD_KEY: &str = "viber.input.key";
 pub const METHOD_TEXT: &str = "viber.input.text";
@@ -165,6 +168,9 @@ impl Plugin for BridgePlugin {
                     .with_method_main(METHOD_TREE, tree)
                     .with_method_main(METHOD_LOGS, logs_method)
                     .with_method_main(METHOD_PROFILER, profiler_snapshot)
+                    .with_method_main(METHOD_PROFILER_TAB, profiler_tab)
+                    .with_method_main(METHOD_PROFILER_EXPORT, profiler_export)
+                    .with_method_main(METHOD_PROFILER_EXTRA_TOGGLE, profiler_extra_toggle)
                     .with_method_main(METHOD_LUA, lua::eval)
                     .with_method_main(METHOD_KEY, input_key)
                     .with_method_main(METHOD_TEXT, input_text)
@@ -304,16 +310,14 @@ fn process_capture_requests(world: &mut World) {
             .filter(|(_, info)| info.status == "pending")
             .map(|(id, _)| *id)
             .collect();
-        store
-            .screenshot_entities
-            .retain(|(id, entity)| {
-                if pending.contains(id) {
-                    true
-                } else {
-                    finished.push(*entity);
-                    false
-                }
-            });
+        store.screenshot_entities.retain(|(id, entity)| {
+            if pending.contains(id) {
+                true
+            } else {
+                finished.push(*entity);
+                false
+            }
+        });
         finished
     };
     for entity in finished {
@@ -492,6 +496,58 @@ fn logs_method(params: In<Option<Value>>, world: &mut World) -> BrpResult {
 /// corpo do overlay F3, para QA headless (`viber debug prof`).
 fn profiler_snapshot(_params: In<Option<Value>>, world: &mut World) -> BrpResult {
     Ok(crate::profiler::snapshot(world))
+}
+
+/// Snapshot rico de um tab do profiler (`viber.profiler.tab`):
+/// `{"tab": "systems|world|physics|audio|extras|all"}`. `all` devolve todos
+/// (o mesmo payload do export, sem escrever ficheiro).
+fn profiler_tab(params: In<Option<Value>>, world: &mut World) -> BrpResult {
+    let tab = params
+        .0
+        .as_ref()
+        .and_then(|p| p.get("tab"))
+        .and_then(Value::as_str)
+        .unwrap_or("systems")
+        .to_string();
+    if tab == "all" {
+        return Ok(crate::profiler::export_snapshot(world));
+    }
+    if tab == "extras" {
+        return Ok(json!({ "extras": crate::profiler::extras_snapshot(world) }));
+    }
+    Ok(crate::profiler::tab_snapshot(world, &tab))
+}
+
+/// Exporta o snapshot completo do profiler para ficheiro
+/// (`viber.profiler.export`): `{"path": "…"}` opcional; devolve
+/// `{"path", "bytes"}`.
+fn profiler_export(params: In<Option<Value>>, world: &mut World) -> BrpResult {
+    let path: Option<PathBuf> = match params.0.as_ref().and_then(|p| p.get("path")) {
+        None | Some(Value::Null) => None,
+        Some(Value::String(s)) => Some(PathBuf::from(s)),
+        Some(_) => return Err(invalid("`path` tem de ser string".into())),
+    };
+    match crate::profiler::export_to_file(world, path) {
+        Ok(path) => {
+            let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            Ok(json!({ "path": path.display().to_string(), "bytes": bytes }))
+        }
+        Err(error) => Err(invalid(format!("export falhou: {error}"))),
+    }
+}
+
+/// Alterna um extra do profiler (`viber.profiler.extra_toggle`):
+/// `{"id": "colliders"}` → `{"id", "on"}`.
+fn profiler_extra_toggle(params: In<Option<Value>>, world: &mut World) -> BrpResult {
+    #[derive(serde::Deserialize)]
+    struct Params {
+        id: String,
+    }
+    let params: Params = parse_params(params.0)?;
+    match crate::profiler::toggle_extra(world, &params.id) {
+        Some(on) => Ok(json!({ "id": params.id, "on": on })),
+        None => Err(invalid(format!("extra desconhecido: {}", params.id))),
+    }
 }
 
 // ---------------------------------------------------------------- input

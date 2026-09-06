@@ -39,6 +39,7 @@ use super::spec::{
     DEFAULT_LOD_HYSTERESIS, DEFAULT_LOD_RESELECT_DISTANCE, DEFAULT_MAX_MESH_BUILDS_PER_FRAME,
     TerrainSpec,
 };
+use crate::profiler::{Group, timed};
 
 /// Tag on every terrain chunk mesh entity managed by this plugin.
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
@@ -91,8 +92,14 @@ pub struct TerrainPlugin;
 
 impl bevy::app::Plugin for TerrainPlugin {
     fn build(&self, app: &mut bevy::app::App) {
-        app.init_resource::<ChunkLodState>()
-            .add_systems(bevy::app::Update, (adopt_chunks, update_chunk_lods).chain());
+        app.init_resource::<ChunkLodState>().add_systems(
+            bevy::app::Update,
+            (
+                timed(Group::Terrain, adopt_chunks),
+                timed(Group::Terrain, update_chunk_lods),
+            )
+                .chain(),
+        );
     }
 }
 

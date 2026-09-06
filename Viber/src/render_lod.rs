@@ -16,6 +16,7 @@
 //!   visibility, `NotShadowCaster` is read on the *mesh* entity, so this one
 //!   does need a one-shot propagation pass once the scene has spawned.
 
+use crate::profiler::{Group, timed};
 use bevy::gltf::Gltf;
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
@@ -155,7 +156,11 @@ impl bevy::app::Plugin for RenderLodPlugin {
     fn build(&self, app: &mut bevy::app::App) {
         app.init_resource::<MeshLodStats>().add_systems(
             bevy::app::PostUpdate,
-            (cull_distant_objects, update_mesh_lod, propagate_no_shadow)
+            (
+                timed(Group::Render, cull_distant_objects),
+                timed(Group::Render, update_mesh_lod),
+                timed(Group::Render, propagate_no_shadow),
+            )
                 .chain()
                 .before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate),
         );

@@ -24,6 +24,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use crate::player::Player;
+use crate::profiler::{Group, timed};
 use crate::vitals::{Health, Xp};
 use bevy::prelude::*;
 use mlua::{Function, Lua, Table};
@@ -1312,7 +1313,13 @@ impl bevy::app::Plugin for LuauScriptPlugin {
         app.add_message::<crate::feedback::AttackAlert>();
         app.insert_resource(host).add_systems(
             Update,
-            (luau_on_add, luau_update, aggro_alert_system, luau_on_remove).chain(),
+            (
+                luau_on_add,
+                timed(Group::Scripts, luau_update),
+                timed(Group::Scripts, aggro_alert_system),
+                luau_on_remove,
+            )
+                .chain(),
         );
     }
 }
@@ -1483,9 +1490,16 @@ pub fn luau_update(
         if let Some(mut ctx) = host.lua.app_data_mut::<ScriptCtx>() {
             ctx.interaction_range = interaction.map(|i| i.range);
         }
+        // Secção "scripts" do profiler: um escopo por ficheiro (igual ao
+        // `script/<file>` do VibeGame). record_script auto-gateia em freeze.
+        let script_t0 = std::time::Instant::now();
         if let Err(e) = host.run_update(entity, &lref.path, dt, origin, player_pos, elapsed) {
             host.warn_once(&lref.path, &e);
         }
+        crate::profiler::timed::record_script(
+            &lref.path,
+            script_t0.elapsed().as_secs_f32() * 1000.0,
+        );
     }
 
     // Recolhe os comandos enfileirados por TODOS os scripts (as teclas já
@@ -2377,13 +2391,19 @@ mod tests {
         }
         // Valores finitos continuam a passar (fora de on_update os setters
         // de combate/teleporte enfileiram à mesma — não precisam de entidade).
-        assert!(host.lua.load("return viber.damage_player(5)").exec().is_ok());
+        assert!(
+            host.lua
+                .load("return viber.damage_player(5)")
+                .exec()
+                .is_ok()
+        );
         assert!(host.lua.load("return viber.heal_player(5)").exec().is_ok());
-        assert!(host
-            .lua
-            .load("return viber.teleport_player(1, 2, 3)")
-            .exec()
-            .is_ok());
+        assert!(
+            host.lua
+                .load("return viber.teleport_player(1, 2, 3)")
+                .exec()
+                .is_ok()
+        );
     }
 
     #[test]

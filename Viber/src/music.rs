@@ -216,7 +216,10 @@ mod tests {
 
         combat.engage(10.0, false);
         assert_eq!(combat.active_layer(10.0), Some("battle"));
-        assert_eq!(combat.active_layer(10.0 + COMBAT_MUSIC_HOLD as f64 - 0.5), Some("battle"));
+        assert_eq!(
+            combat.active_layer(10.0 + COMBAT_MUSIC_HOLD as f64 - 0.5),
+            Some("battle")
+        );
         assert_eq!(
             combat.active_layer(10.0 + COMBAT_MUSIC_HOLD as f64 + 0.5),
             None,

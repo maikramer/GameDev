@@ -25,6 +25,7 @@ use serde::Deserialize;
 use crate::hud::HudBalloon;
 use crate::luau::{LuaScriptRef, ScriptInteraction, ScriptToast};
 use crate::player::Player;
+use crate::profiler::{Group, timed};
 use crate::vitals::Health;
 use crate::vitals::Xp;
 
@@ -368,10 +369,10 @@ impl Plugin for QuestsPlugin {
             .add_systems(
                 Update,
                 (
-                    quest_dialogue_system,
+                    timed(Group::World, quest_dialogue_system),
                     quest_banner_drive,
                     quest_visit_system,
-                    quest_tracker_system,
+                    timed(Group::World, quest_tracker_system),
                     quest_debug_teleport,
                     quest_debug_nearest,
                     quest_debug_hostile,

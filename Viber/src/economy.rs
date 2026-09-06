@@ -21,6 +21,7 @@ use bevy::prelude::*;
 use crate::feedback::DamageNumberEvent;
 use crate::luau::ScriptToast;
 use crate::player::Player;
+use crate::profiler::{Group, timed};
 use crate::vitals::Health;
 
 /// Cura da poção (HP) — VibeGame potion 50.
@@ -160,8 +161,8 @@ impl Plugin for EconomyPlugin {
             .add_systems(
                 Update,
                 (
-                    hotbar_use_system,
-                    vault_chips_system,
+                    timed(Group::World, hotbar_use_system),
+                    timed(Group::World, vault_chips_system),
                     vault_loot_sfx_system,
                     debug_give_system,
                 ),
