@@ -122,31 +122,136 @@ impl Default for UiScroll {
 
 /// Parses a key name from a `key="…"` attribute.
 ///
-/// Only the keys a menu realistically binds; an unknown name is reported and
-/// the modal falls back to F1 rather than becoming unopenable.
+/// Aceita o teclado todo em nomes CSS-ish: letras (`"p"`), dígitos (`"1"`),
+/// função (`"f5"`), navegação (`"pageup"`, `"home"`, `"arrowleft"`),
+/// pontuação (`"`"`/`"backquote"`, `","`, `"["`…). Um nome desconhecido é
+/// reportado e o modal cai em F1 em vez de ficar inabritável.
 pub fn parse_key(name: &str) -> KeyCode {
-    match name.trim().to_ascii_lowercase().as_str() {
-        "q" => KeyCode::KeyQ,
-        "e" => KeyCode::KeyE,
-        "i" => KeyCode::KeyI,
-        "m" => KeyCode::KeyM,
-        "k" => KeyCode::KeyK,
-        "j" => KeyCode::KeyJ,
-        "l" => KeyCode::KeyL,
-        "b" => KeyCode::KeyB,
-        "c" => KeyCode::KeyC,
-        "tab" => KeyCode::Tab,
+    let key = name.trim().to_ascii_lowercase();
+    let key = key.as_str();
+    match key {
         "escape" | "esc" => KeyCode::Escape,
-        "f1" => KeyCode::F1,
-        "f2" => KeyCode::F2,
-        "f3" => KeyCode::F3,
-        other => {
-            if !other.is_empty() {
-                warn!("ui: unknown modal key `{other}` — falling back to F1");
+        "tab" => KeyCode::Tab,
+        "space" => KeyCode::Space,
+        "enter" | "return" => KeyCode::Enter,
+        "backspace" => KeyCode::Backspace,
+        "delete" | "del" => KeyCode::Delete,
+        "insert" | "ins" => KeyCode::Insert,
+        "home" => KeyCode::Home,
+        "end" => KeyCode::End,
+        "pageup" | "page-up" => KeyCode::PageUp,
+        "pagedown" | "page-down" => KeyCode::PageDown,
+        "pause" => KeyCode::Pause,
+        "arrowup" | "up" => KeyCode::ArrowUp,
+        "arrowdown" | "down" => KeyCode::ArrowDown,
+        "arrowleft" | "left" => KeyCode::ArrowLeft,
+        "arrowright" | "right" => KeyCode::ArrowRight,
+        "backquote" | "grave" | "`" => KeyCode::Backquote,
+        "minus" | "-" => KeyCode::Minus,
+        "equal" | "=" => KeyCode::Equal,
+        "comma" | "," => KeyCode::Comma,
+        "period" | "." => KeyCode::Period,
+        "slash" | "/" => KeyCode::Slash,
+        "semicolon" | ";" => KeyCode::Semicolon,
+        "quote" | "'" => KeyCode::Quote,
+        "bracketleft" | "[" => KeyCode::BracketLeft,
+        "bracketright" | "]" => KeyCode::BracketRight,
+        "backslash" | "\\" => KeyCode::Backslash,
+        _ => {
+            // Letras: "p" (ou "KeyP"/"P" — o trim+lowercase já tratou).
+            if let Some(rest) = key.strip_prefix("key") {
+                if rest.len() == 1 {
+                    if let Some(code) = letter_key(rest) {
+                        return code;
+                    }
+                }
+            }
+            if let Some(code) = letter_key(key) {
+                return code;
+            }
+            // Dígitos: "1"…"0" (ou "Digit1").
+            let digit = key.strip_prefix("digit").unwrap_or(key);
+            if let Some(code) = match digit {
+                "1" => Some(KeyCode::Digit1),
+                "2" => Some(KeyCode::Digit2),
+                "3" => Some(KeyCode::Digit3),
+                "4" => Some(KeyCode::Digit4),
+                "5" => Some(KeyCode::Digit5),
+                "6" => Some(KeyCode::Digit6),
+                "7" => Some(KeyCode::Digit7),
+                "8" => Some(KeyCode::Digit8),
+                "9" => Some(KeyCode::Digit9),
+                "0" => Some(KeyCode::Digit0),
+                _ => None,
+            } {
+                return code;
+            }
+            // Teclas de função F1–F12.
+            if let Some(n) = key.strip_prefix('f') {
+                if let Ok(n) = n.parse::<u8>() {
+                    let code = match n {
+                        1 => KeyCode::F1,
+                        2 => KeyCode::F2,
+                        3 => KeyCode::F3,
+                        4 => KeyCode::F4,
+                        5 => KeyCode::F5,
+                        6 => KeyCode::F6,
+                        7 => KeyCode::F7,
+                        8 => KeyCode::F8,
+                        9 => KeyCode::F9,
+                        10 => KeyCode::F10,
+                        11 => KeyCode::F11,
+                        12 => KeyCode::F12,
+                        _ => KeyCode::F1,
+                    };
+                    if (1..=12).contains(&n) {
+                        return code;
+                    }
+                }
+            }
+            if !key.is_empty() {
+                warn!("ui: unknown modal key `{key}` — falling back to F1");
             }
             KeyCode::F1
         }
     }
+}
+
+/// "a".."z" → `KeyCode::KeyA`.."KeyZ".
+fn letter_key(name: &str) -> Option<KeyCode> {
+    let bytes = name.as_bytes();
+    if bytes.len() == 1 && bytes[0].is_ascii_lowercase() {
+        return Some(match bytes[0] {
+            b'a' => KeyCode::KeyA,
+            b'b' => KeyCode::KeyB,
+            b'c' => KeyCode::KeyC,
+            b'd' => KeyCode::KeyD,
+            b'e' => KeyCode::KeyE,
+            b'f' => KeyCode::KeyF,
+            b'g' => KeyCode::KeyG,
+            b'h' => KeyCode::KeyH,
+            b'i' => KeyCode::KeyI,
+            b'j' => KeyCode::KeyJ,
+            b'k' => KeyCode::KeyK,
+            b'l' => KeyCode::KeyL,
+            b'm' => KeyCode::KeyM,
+            b'n' => KeyCode::KeyN,
+            b'o' => KeyCode::KeyO,
+            b'p' => KeyCode::KeyP,
+            b'q' => KeyCode::KeyQ,
+            b'r' => KeyCode::KeyR,
+            b's' => KeyCode::KeyS,
+            b't' => KeyCode::KeyT,
+            b'u' => KeyCode::KeyU,
+            b'v' => KeyCode::KeyV,
+            b'w' => KeyCode::KeyW,
+            b'x' => KeyCode::KeyX,
+            b'y' => KeyCode::KeyY,
+            b'z' => KeyCode::KeyZ,
+            _ => return None,
+        });
+    }
+    None
 }
 
 /// Opens and closes modals from the keyboard and mirrors the state into
@@ -412,6 +517,45 @@ pub fn drive_ui_scroll(
     }
 }
 
+#[cfg(test)]
+#[cfg(test)]
+mod parse_key_tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_key_letters_digits_function() {
+        assert_eq!(parse_key("p"), KeyCode::KeyP);
+        assert_eq!(parse_key("KeyP"), KeyCode::KeyP);
+        assert_eq!(parse_key("Q"), KeyCode::KeyQ);
+        assert_eq!(parse_key("5"), KeyCode::Digit5);
+        assert_eq!(parse_key("digit0"), KeyCode::Digit0);
+        assert_eq!(parse_key("f5"), KeyCode::F5);
+        assert_eq!(parse_key("F12"), KeyCode::F12);
+    }
+
+    #[test]
+    fn test_parse_key_navigation_and_punctuation() {
+        assert_eq!(parse_key("pageup"), KeyCode::PageUp);
+        assert_eq!(parse_key("page-down"), KeyCode::PageDown);
+        assert_eq!(parse_key("home"), KeyCode::Home);
+        assert_eq!(parse_key("escape"), KeyCode::Escape);
+        assert_eq!(parse_key("esc"), KeyCode::Escape);
+        assert_eq!(parse_key("`"), KeyCode::Backquote);
+        assert_eq!(parse_key("backquote"), KeyCode::Backquote);
+        assert_eq!(parse_key(","), KeyCode::Comma);
+        assert_eq!(parse_key("["), KeyCode::BracketLeft);
+        assert_eq!(parse_key("arrowleft"), KeyCode::ArrowLeft);
+        assert_eq!(parse_key("up"), KeyCode::ArrowUp);
+        assert_eq!(parse_key("space"), KeyCode::Space);
+    }
+
+    #[test]
+    fn test_parse_key_unknown_falls_back_to_f1() {
+        assert_eq!(parse_key("wat"), KeyCode::F1);
+        assert_eq!(parse_key(""), KeyCode::F1);
+        assert_eq!(parse_key("f13"), KeyCode::F1);
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -14,5 +14,5 @@ bridge como `viber.profiler`). Interações com outros sistemas: `travel.rs`
 (marcos/waypoint alimentam minimapa e compasso), `quests.rs` (dots do
 tracker), `combat.rs`/`vitals.rs` (barras e alvo).
 
-Fila aberta conhecida: nametags (`BISECT` em `src/main.rs`, sistema
-comentado).
+Nametags (pílulas flutuantes nome+distância) foram removidas a pedido do
+autor em 2026-09-06 — poluíam a vista e ficavam fora de layout.

@@ -516,6 +516,11 @@ pub fn apply_ui_styles(
             if let Some(weight) = props.font_weight {
                 font.weight = FontWeight(weight.clamp(1.0, 1000.0) as u16);
             }
+            // `LineHeight` é componente próprio no Bevy 0.19 (não campo do
+            // `TextFont`) — entra via commands, como as decorações.
+            if let Some(line_height) = props.line_height {
+                commands.entity(entity).insert(line_height);
+            }
             if let Some(mut layout) = layout {
                 if let Some(justify) = props.text_align {
                     layout.justify = justify;

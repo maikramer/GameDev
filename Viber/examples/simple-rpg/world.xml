@@ -107,6 +107,10 @@
     <!-- Menu do jogo: modal com Missões / Mochila / Talentos / Loja /
          Controlos / Sistema, todo em XML + CSS + Luau. Abre em [Q]. -->
     <Include src="/world/menu.xml" />
+    <!-- Profiler [P]: mesma stack declarativa — painel em world/profiler.xml,
+         pintura em ui/profiler.css, driver em scripts/ui/profiler.lua. Dados
+         via viber.profiler() (engine src/profiler/script.rs). -->
+    <Include src="/world/profiler.xml" />
     <!-- Widgets que desenham dados do mundo (pontos, agulhas, marcadores):
          continuam nativos porque o conteúdo é geométrico, não estilizável.
          O enquadramento visual deles vive na mesma paleta do hud.css. -->

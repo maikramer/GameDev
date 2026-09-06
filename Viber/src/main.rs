@@ -782,8 +782,6 @@ fn run(path: &Path, bridge_port: Option<u16>) -> Result<()> {
             // Balão de diálogo: única via que decrementa o timer e volta a
             // esconder — sem registo, o balão ficava no ecrã para sempre.
             timed(Group::Hud, hud::hud_balloon_update),
-            // Janela do profiler (tecla P): toggle + refresh ao vivo.
-            hud::profiler_window::hud_profiler_window,
             // Modal [Q]: sincroniza abas/conteúdos e trata cliques.
             timed(Group::Hud, hud::menu::hud_menu_system),
         ),
@@ -806,9 +804,6 @@ fn run(path: &Path, bridge_port: Option<u16>) -> Result<()> {
             hud::hud_prompt_update,
             hud::compass::hud_compass_update,
             timed(Group::Hud, hud::hud_minimap_update),
-            // Pool de nametags (8 pílulas): re-ligadas — com "!" de quest,
-            // hostis em vermelho e alpha por distância (45→60 m).
-            timed(Group::Hud, hud::hud_nametags_update),
             timed(Group::World, music::music_driver),
             timed(Group::World, worldsys::daycycle_drive),
             timed(Group::World, worldsys::sun_drive),

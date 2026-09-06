@@ -11,7 +11,7 @@
 //!   the DOM-parity widgets;
 //! * [`vitals`] — health/xp fill mirroring;
 //! * [`interact`] — prompt, dialogue balloon, key-toggled panels;
-//! * [`compass`] / [`minimap`] / [`nametags`] — the animated widgets.
+//! * [`compass`] / [`minimap`] — the animated widgets.
 
 pub mod assets;
 pub mod compass;
@@ -19,8 +19,6 @@ pub mod elements;
 pub mod interact;
 pub mod menu;
 pub mod minimap;
-pub mod nametags;
-pub mod profiler_window;
 pub mod vitals;
 pub mod widgets;
 
@@ -38,7 +36,6 @@ pub use minimap::{
     MinimapAnchor, MinimapArrow, MinimapDot, MinimapRange, arrow_rotation_rad, hud_minimap_update,
     minimap_xy,
 };
-pub use nametags::{NAME_TAG_MAX_M, NAME_TAG_MIN_M, NAME_TAG_POOL, NameTag, hud_nametags_update};
 pub use vitals::{
     HudHealthFill, HudHealthLabel, HudXpFill, HudXpLabel, health_label_text, hud_health_sync,
     hud_xp_sync, xp_label_text,

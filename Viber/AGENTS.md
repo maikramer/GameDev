@@ -17,7 +17,7 @@ não Unity/three.js.
 | Terreno (specs, sampler, mesh, LOD) | `src/terrain/` | `spec.rs` (contrato), `sampler.rs`/`heightmap.rs` (altura), `mesh.rs` (chunks), `plugin.rs` (LOD runtime), `runtime.rs` (bootstrap + carve), `cliffs.rs` (cliffs procedurais + sharpen + CliffMask) |
 | Scripts Luau + API `viber.*` | `src/luau.rs` | referência completa em **`docs/LUA_API.md`**; hooks `on_update(dt)`/`on_player_attack`; "LOD de IA" via `ScriptActivation` |
 | UI declarativa (`UiRoot`/`UiStyle`) + `viber.ui.*` | `src/ui/` | `tree.rs` (XML→bevy_ui), `style.rs` (stylesheet), `palette.rs` (cores Tailwind), `anim.rs` (movimento), `widgets.rs` (check/slider/input/tooltip/cursor), `script.rs` (API Luau), `bind.rs` (bindings), `modal.rs` (modais autorais) |
-| HUD de jogo | `src/hud/` | widgets que desenham dados do mundo: minimapa, compasso, nametags, `profiler_window.rs`. Painéis, barras e menus do `simple-rpg` vivem agora na UI declarativa (`src/ui/`) |
+| HUD de jogo | `src/hud/` | widgets que desenham dados do mundo: minimapa, compasso, `profiler_window.rs`. Painéis, barras e menus do `simple-rpg` vivem agora na UI declarativa (`src/ui/`) |
 | Player + câmara | `src/player.rs`, `src/camera.rs` | WASD/setas + Shift sprint + Space salto; third-person com drag/scroll |
 | Combate | `src/combat.rs`, `src/skills.rs`, `src/feedback.rs`, `src/vitals.rs` | melee [J], alvo [V], skills [C]/[R]/[B]/[L], dano flutuante/i-frames/respawn, HP/XP |
 | Colheita (destructibles) | `src/harvest.rs` | minerar/cortar nativos: `destructible="…"` no XML + `<ResourceNode>` no template; [J]/clique perto do prop toca clip `mine`/`chop` com picareta/machado na mão; `fall` = árvore cai e fica toco, `shatter` = pedra despedaça; loot → vault/XP/quests |
@@ -533,5 +533,6 @@ spawner, default 45 m) o `on_update` nem corre. **Sem hot-reload** e sem hooks
 
 **Fila aberta (conhecida):** tags `EngineConfig` data-only sem consumidor
 (`NavMesh`, `SpawnGate`, `ProjectileTemplate`, `AdaptiveQuality`,
-`PostFxDebugToggle`); hot-reload de scripts; nametags de HUD (sistema
-comentado — `BISECT` em `main.rs`); instancing GPU para vegetação.
+`PostFxDebugToggle`); hot-reload de scripts; instancing GPU para vegetação.
+(Nametags de HUD — pílulas flutuantes nome+distância sobre NPCs — foram
+**removidas** a pedido do autor em 2026-09-06; não recriar sem decisão.)

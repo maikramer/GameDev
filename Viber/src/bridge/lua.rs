@@ -2265,7 +2265,8 @@ fn info_table(lua: &Lua, info: &EntityInfo) -> mlua::Result<Value> {
 }
 
 /// JSON → Lua (para devolver o snapshot do profiler como tabela).
-fn json_to_lua(lua: &Lua, value: &Json) -> mlua::Result<Value> {
+/// Partilhado com a API `viber.profiler()` (`src/profiler/script.rs`).
+pub(crate) fn json_to_lua(lua: &Lua, value: &Json) -> mlua::Result<Value> {
     Ok(match value {
         Json::Null => Value::Nil,
         Json::Bool(b) => Value::Boolean(*b),

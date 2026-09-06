@@ -4,7 +4,9 @@
 //! **Áudio** (buses/sinks) e **Extras** (toggles de debug da engine).
 //!
 //! Superfície:
-//! * janela HUD com abas (tecla **P**) — `hud::profiler_window`;
+//! * janela declarativa (XML+CSS+Luau) com o modal **P** — o driver é o
+//!   `ui/profiler.lua` do mundo (ex.: `examples/simple-rpg`), alimentado por
+//!   `viber.profiler()` / `viber.profiler_cmd()` (`script.rs`);
 //! * overlay mínimo **F3** (fps/frame/entidades);
 //! * debug bridge: `viber.profiler` (compat), `viber.profiler.tab`
 //!   (`{"tab": "systems|world|physics|audio|extras|all"}`) e
@@ -20,6 +22,7 @@
 
 pub mod audio_tab;
 pub mod physics_tab;
+pub mod script;
 pub mod timed;
 pub mod world_tab;
 
@@ -46,8 +49,10 @@ const FRAME_WINDOW: usize = 180;
 /// Refrescamento do texto do overlay (s) — evitar reescrever texto a 60 fps.
 const OVERLAY_REFRESH: f32 = 0.25;
 
-/// Abas da janela, por ordem (a UI indexa por posição).
-pub const TABS: [&str; 5] = ["sistemas", "mundo", "física", "áudio", "extras"];
+/// Abas do profiler, por ordem — ids canónicos EN (o tab-group do XML, o
+/// `--tab` do CLI e `viber.ui.tab("prof")` falam nestes ids; os rótulos
+/// visíveis são PT no XML).
+pub const TABS: [&str; 5] = ["systems", "world", "physics", "audio", "extras"];
 pub const TAB_SYSTEMS: usize = 0;
 pub const TAB_WORLD: usize = 1;
 pub const TAB_PHYSICS: usize = 2;
@@ -80,7 +85,7 @@ impl Default for HudState {
 
 /// Estado partilhado do profiler: aba activa da janela, congelação, raio de
 /// "entidades próximas" e última mensagem de estado (caminho de export, etc.).
-#[derive(Resource)]
+#[derive(Resource, Clone)]
 pub struct ProfilerState {
     pub tab: usize,
     pub frozen: bool,
@@ -393,6 +398,53 @@ pub fn export_snapshot(world: &mut World) -> serde_json::Value {
     })
 }
 
+/// O JSON COMPLETO do profiler — o mesmo payload do botão COPIAR, do
+/// ficheiro de export, do publish para o driver Luau e do `viber.profiler.tab
+/// {"tab":"all"}` da bridge. Um só construtor para os quatro caminhos nunca
+/// divergirem.
+pub fn full_snapshot(world: &mut World) -> serde_json::Value {
+    let mut value = export_snapshot(world);
+    let state = world.resource::<ProfilerState>().clone();
+    value["state"] = json!({
+        "tab": state.tab,
+        "tab_name": TABS.get(state.tab).copied().unwrap_or("systems"),
+        "frozen": state.frozen,
+        "open": world
+            .get_resource::<crate::ui::modal::UiModalsOpen>()
+            .map(|m| m.open.iter().any(|id| id == "profiler-win"))
+            .unwrap_or(false),
+        "nearby_radius": state.nearby_radius,
+        "status": state.status,
+    });
+    value
+}
+
+/// Copia o [`full_snapshot`] para o clipboard (o "Copy JSON" do VibeGame).
+/// Devolve o número de bytes colocados ou o motivo da falha (sem display,
+/// Wayland/X11 indisponível, …).
+pub fn copy_snapshot_to_clipboard(world: &mut World) -> Result<usize, String> {
+    let text = serde_json::to_string_pretty(&full_snapshot(world))
+        .map_err(|error| format!("serialize: {error}"))?;
+    // A instância fica em cache: criar um Clipboard por cópia reabre a
+    // ligação X11/Wayland de cada vez.
+    static CLIPBOARD: std::sync::Mutex<Option<arboard::Clipboard>> = std::sync::Mutex::new(None);
+    let mut guard = CLIPBOARD
+        .lock()
+        .map_err(|_| "clipboard poisoned".to_string())?;
+    let clipboard = match guard.as_mut() {
+        Some(clipboard) => clipboard,
+        None => {
+            let fresh = arboard::Clipboard::new()
+                .map_err(|error| format!("clipboard indisponível: {error}"))?;
+            guard.insert(fresh)
+        }
+    };
+    clipboard
+        .set_text(text.as_str())
+        .map_err(|error| format!("clipboard set: {error}"))?;
+    Ok(text.len())
+}
+
 /// Exporta o snapshot para ficheiro e devolve o caminho. `None` →
 /// directório por omissão (`$TMPDIR/viber-profiles/`, a mesma convenção das
 /// capturas da bridge).
@@ -406,7 +458,7 @@ pub fn export_to_file(world: &mut World, path: Option<PathBuf>) -> std::io::Resu
         std::fs::create_dir_all(&dir).ok();
         dir.join(format!("viber-profile-{secs}.json"))
     });
-    let value = export_snapshot(world);
+    let value = full_snapshot(world);
     let text = serde_json::to_string_pretty(&value).unwrap_or_else(|_| "{}".into());
     std::fs::write(&path, text)?;
     Ok(path)
@@ -560,10 +612,30 @@ impl Plugin for ProfilerPlugin {
         app.init_resource::<FrameStats>()
             .init_resource::<FrameCounter>()
             .init_resource::<ProfilerState>()
+            .init_resource::<script::ProfilerScriptState>()
+            .init_resource::<script::PublishThrottle>()
             .insert_resource(extras)
             .init_resource::<HudState>()
             .add_systems(Startup, spawn_overlay)
             .add_systems(First, (count_frames, sync_frozen_state).chain())
+            // Superfície Luau (padrão viber.ui): instalar antes dos scripts
+            // activarem, publicar a view antes de `on_update`, aplicar
+            // comandos depois. As teclas F5/F12/`/PageUp são engine-side.
+            .add_systems(
+                Update,
+                script::install_profiler_script_api
+                    .before(crate::luau::luau_on_add)
+                    .before(crate::luau::luau_update),
+            )
+            .add_systems(
+                Update,
+                script::publish_profiler_view.before(crate::luau::luau_update),
+            )
+            .add_systems(
+                Update,
+                script::apply_profiler_commands.after(crate::luau::luau_update),
+            )
+            .add_systems(Update, script::profiler_keys_system)
             .add_systems(Update, (record_frame_time, profiler_overlay_update).chain());
     }
 }
@@ -841,6 +913,8 @@ mod tests {
         world.init_resource::<Time>();
         world.init_resource::<FrameStats>();
         world.init_resource::<FrameCounter>();
+        // full_snapshot lê o estado (aba/congelação) — o teste cobre o caminho.
+        world.init_resource::<ProfilerState>();
         let dir = tempfile::tempdir().expect("tmpdir");
         let path = dir.path().join("prof.json");
         let written = export_to_file(&mut world, Some(path.clone())).expect("export");

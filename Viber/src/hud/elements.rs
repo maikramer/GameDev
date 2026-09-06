@@ -11,7 +11,6 @@ use super::assets::{
 };
 use super::interact::{BALLOON_DURATION, HudBalloon, HudPrompt};
 use super::minimap::{MinimapAnchor, MinimapArrow, MinimapDot, MinimapRange};
-use super::nametags::NameTag;
 use super::vitals::xp_label_text;
 use super::vitals::{HudHealthFill, HudHealthLabel, HudXpFill, HudXpLabel};
 
@@ -56,8 +55,6 @@ pub fn spawn_hud(world: &mut World, tag: &str, attrs: &[(String, String)]) {
             // Os antigos slots de acção saíram daqui: a barra de habilidades
             // é agora `<UiCooldown>` no HUD declarativo (`src/ui`), onde a
             // veladura de recarga e o aro de "pronta" são folha de estilo.
-            name_tag_pool(world, &hud);
-            super::profiler_window::build_profiler_window(world, &hud);
         }
         "healthbar" => {
             // Tag legada: mantém-se a funcionar (mundos antigos não partem),
@@ -721,57 +718,4 @@ pub fn spawn_resource_chip(world: &mut World, index: usize, resource: &str) {
             }
             slot.spawn(label(&hud, "0", 15.0, Color::srgb(0.96, 0.94, 0.86)));
         });
-}
-
-/// Bottom-left action slots (C/E/R): dark slots with colored glyphs and
-/// keycap letters, styled after the original buttons.
-/// Pooled world-anchored NPC name tags: reassigned every frame by the
-/// nametags module. A pílula carrega o texto (e cor/borda por frame); o
-/// filho é o "!" dourado de quest (o mesmo marcador do minimapa).
-fn name_tag_pool(world: &mut World, hud: &HudAssets) {
-    for _ in 0..super::nametags::NAME_TAG_POOL {
-        world
-            .spawn((
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: Val::Px(0.0),
-                    top: Val::Px(0.0),
-                    ..Default::default()
-                },
-                Visibility::Hidden,
-                NameTag,
-                Name::new("hud:nametag"),
-            ))
-            .with_children(|tag| {
-                tag.spawn((
-                    Node {
-                        flex_direction: FlexDirection::Row,
-                        align_items: AlignItems::Center,
-                        column_gap: Val::Px(5.0),
-                        padding: UiRect::axes(Val::Px(10.0), Val::Px(5.0)),
-                        border_radius: BorderRadius::all(Val::Px(11.0)),
-                        ..Default::default()
-                    },
-                    BackgroundColor(Color::srgba(0.02, 0.02, 0.02, 0.78)),
-                    BorderColor::all(Color::srgba(1.0, 0.96, 0.85, 0.14)),
-                    super::nametags::NameTagPill,
-                    label(hud, "", 13.0, Color::srgb(0.96, 0.96, 0.92)),
-                ))
-                .with_children(|pill| {
-                    pill.spawn((
-                        Node {
-                            width: Val::Px(12.0),
-                            height: Val::Px(12.0),
-                            ..Default::default()
-                        },
-                        ImageNode {
-                            image: hud.quest_marker.clone(),
-                            ..Default::default()
-                        },
-                        Visibility::Hidden,
-                        super::nametags::NameTagBang,
-                    ));
-                });
-            });
-    }
 }

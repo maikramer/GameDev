@@ -322,8 +322,13 @@ pub fn timed<I: bevy::ecs::system::SystemInput, O, M, S: System<In = I, Out = O>
     group: Group,
     inner: impl IntoSystem<I, O, M, System = S>,
 ) -> Timed<S> {
+    // O nome captura-se do ARGUMENTO (o fn item: `viber::combat::melee`) e
+    // não do sistema convertido — o `type_name` do `FunctionSystem` traz o
+    // caminho dos PARÂMETROS genéricos (ruído `bevy_ecs::system::…<FN(…)>`).
+    let key: &'static str = std::any::type_name_of_val(&inner);
     Timed {
         group,
+        key,
         inner: IntoSystem::into_system(inner),
     }
 }
@@ -333,6 +338,7 @@ pub fn timed<I: bevy::ecs::system::SystemInput, O, M, S: System<In = I, Out = O>
 /// (nome, acesso, flags), só que cronometrado.
 pub struct Timed<S: System> {
     group: Group,
+    key: &'static str,
     inner: S,
 }
 
@@ -361,11 +367,7 @@ impl<S: System> System for Timed<S> {
         // SAFETY: repassa os mesmos contratos do sistema interior (o caller
         // garante o acesso exclusivo exigido por `initialize`).
         let out = unsafe { self.inner.run_unsafe(input, world) };
-        record_system(
-            self.group,
-            std::any::type_name::<S>(),
-            t0.elapsed().as_secs_f32() * 1000.0,
-        );
+        record_system(self.group, self.key, t0.elapsed().as_secs_f32() * 1000.0);
         out
     }
 

@@ -42,6 +42,9 @@ bevy_rapier3d = { version = "0.36", features = ["async-collider", "debug-render-
 # swap to `features = ["lua54", "vendored"]` and adjust luau-specific
 # sandbox code in `src/luau.rs` accordingly.
 mlua = { version = "0.10", features = ["luau", "vendored", "send"] }
+# Clipboard do botão COPIAR do profiler (`viber.profiler_cmd("copy")`) —
+# texto apenas: sem `image-data` (não pagar codecs) e com Wayland.
+arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
 meshopt = "0.6"
 
 [dev-dependencies]
