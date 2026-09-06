@@ -563,6 +563,15 @@ pub fn bootstrap(world: &mut World) {
         );
         if changed > 0 {
             info!("sharpen terraced {changed} texels into cliff bands");
+            // The pass rewrote the ground the bands resolved their walls
+            // against — re-probe the heights so the voxel solids sit on the
+            // terraced field the meshes and gameplay actually read (a foot
+            // left on the pre-sharpen ramp floated or buried). Stations,
+            // widths and columns are height-independent and stay; the mask
+            // above keeps its pre-sharpen shape on purpose.
+            for (k, band) in cliff_bands.iter_mut().enumerate() {
+                band.probe_heights(&pending.features.cliffs[cliff_band_owner[k]], &grid, texel);
+            }
         }
     }
 
@@ -874,6 +883,7 @@ fn spawn_chunks(
                 origin,
                 size: edge,
                 lod_step: step << lod,
+                lod0_step: step,
                 skirt_depth: spec.skirt_depth_meters(),
                 normal_epsilon: epsilon,
                 texture_tile_size: spec.texture_tile_size,

@@ -28,8 +28,8 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULT_TTL_SECS: u64 = 300;
 /// Intervalo de polling do `claim --wait` (s).
 const WAIT_POLL: Duration = Duration::from_secs(2);
-/// "Restante" reportado quando o lease.json existe mas ainda não tem
-/// conteúdo (outro claim entre o `create_new` e a escrita atómica): curto de
+/// "Restante" reportado quando o lease.json existe mas não é parseável
+/// (verdadeiramente corrupto, ou resquício de estados antigos): curto de
 /// propósito, para o poll do `claim --wait` re-tentar depressa.
 const LEASE_PENDING: Duration = Duration::from_millis(200);
 
@@ -286,10 +286,12 @@ impl SessionPaths {
     }
 
     fn try_claim(&self, owner: &str, ttl: Duration) -> Result<ClaimOutcome> {
-        // Lease expirado → rouba. Ficheiro não-parseável NÃO se remove: com
-        // escrita atómica (`write_atomic` via rename) um lease sem conteúdo
-        // só existe no intervalo entre o `create_new` e a escrita — outro
-        // processo está A MEIO do claim, e apagar era roubar-lho (TOCTOU).
+        // Lease expirado → rouba. Ficheiro não-parseável NÃO se remove: o
+        // `publish_new` publica o lease com conteúdo COMPLETO desde o
+        // primeiro instante (nada de janela vazia), portanto não-parseável
+        // aqui é ficheiro verdadeiramente corrupto ou alheio — apagar era
+        // destruir estado de outro processo (TOCTOU). Devolve Busy; quem
+        // chama tem a lógica de exit 3 e o `claim --wait` re-tenta.
         if let Some(lease) = self.read_lease() {
             let remaining = lease.expires_at_ms.saturating_sub(now_ms());
             if remaining > 0 {
@@ -325,11 +327,10 @@ impl SessionPaths {
                 }
             }
         } else if self.lease_file().exists() {
-            // Presente mas não-parseável (vazio ou JSON quebrado): o dono
-            // legítimo está a meio da escrita (ou o ficheiro está
-            // verdadeiramente corrupto — na dúvida, NUNCA remover aqui).
-            // Busy com retry curto; o chamador tem a lógica de exit 3 e o
-            // `claim --wait` re-tenta quando o conteúdo chegar.
+            // Presente mas não-parseável: com publicação atómica não é
+            // "escrita a meio" de ninguém — é corrupto ou alheio. Na dúvida,
+            // NUNCA remover: Busy com retry curto (o chamador tem a lógica
+            // de exit 3; o `claim --wait` re-tenta).
             return Ok(ClaimOutcome::Busy {
                 owner: "?".into(),
                 remaining: LEASE_PENDING,
@@ -538,9 +539,11 @@ mod tests {
     fn test_unparseable_lease_is_busy_and_survives() {
         let (_dir, paths) = tmp_session("unparseable");
         paths.ensure_dir().unwrap();
-        // Ficheiro VAZIO = `create_new` de outro claim a meio (a escrita
-        // atómica ainda não promoveu o conteúdo) — NÃO pode ser roubado:
-        // busy, com o ficheiro intacto para o dono terminar.
+        // Ficheiro VAZIO: o `publish_new` publica o lease com conteúdo
+        // completo desde o 1.º instante, portanto vazio não é "boot a meio"
+        // de processo nenhum vivo — é corrupto/alheio. MESMO ASSIM não pode
+        // ser roubado: busy, com o ficheiro intacto (nunca remover o que
+        // não sabemos parsear).
         std::fs::write(paths.lease_file(), "").unwrap();
         let claim = paths
             .claim("agente-b", Duration::from_secs(60), None)

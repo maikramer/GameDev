@@ -428,7 +428,14 @@ fn build_slider(world: &mut World, node: &XmlNode, track: Entity) {
         );
     }
     let (min, max) = normalized_range(min, max);
-    let value = attr_f32(node, "value").unwrap_or(max);
+    let value = match attr_f32(node, "value") {
+        Some(v) if v.is_finite() => v.clamp(min, max),
+        Some(_) => {
+            warn!("ui: <{}> slider com value não finito — a usar o máximo {max}", node.tag);
+            max
+        }
+        None => max,
+    };
     let vertical = attr(node, "direction").is_some_and(|d| d.eq_ignore_ascii_case("vertical"));
     let mut fill_classes = UiClasses::parse(attr(node, "fill-class").unwrap_or_default());
     fill_classes.0.insert(0, "fill".to_string());

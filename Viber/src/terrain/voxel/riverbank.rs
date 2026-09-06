@@ -61,6 +61,21 @@ pub fn river_banks(
         BankStyle::Overhang => CliffProfile::Overhang,
         _ => CliffProfile::Vertical,
     };
+    // As larguras do registry são EFETIVAS (linha de água — o carve guarda
+    // `half · reach`, ver `WaterBody::half_width`); a parede e a sonda do
+    // topo vivem no espaço de DESIGN (o assento carvado vai até à
+    // meia-largura de design + `bank_width`), pelo que a crista volta à
+    // largura de design — mundos voxel existentes mantêm a parede onde
+    // sempre esteve.
+    let wl_reach =
+        super::super::water::waterline_reach(spec.depth, spec.water_offset).clamp(0.4, 1.0);
+    let design_half = |i: usize| -> f32 {
+        if body.half_width.is_empty() {
+            body.water_width * 0.5
+        } else {
+            body.half_width_at(i) / wl_reach
+        }
+    };
     let mut bands = Vec::with_capacity(2);
     for side in [-1.0f32, 1.0f32] {
         let mut stations = Vec::with_capacity(n);
@@ -84,7 +99,7 @@ pub fn river_banks(
             // Normal para FORA do canal; a face pende para DENTRO (o rio é
             // o lado baixo da banda).
             let outward = Vec2::new(-dir.y, dir.x) * side;
-            let half = body.half_width_at(i);
+            let half = design_half(i);
             let crest = *st + outward * (half + BENCH);
             stations.push(crest);
             // Topo: o banco natural além da crista (o carve voxel preservou-
@@ -212,7 +227,15 @@ pub fn spring_band(
         return None;
     }
     let perp = Vec2::new(-downstream.y, downstream.x);
-    let radius = body.half_width_at(0) + 1.8;
+    // Raio em espaço de DESIGN (ver nota em `river_banks` — as larguras do
+    // registry são efetivas, da linha de água).
+    let wl_reach =
+        super::super::water::waterline_reach(spec.depth, spec.water_offset).clamp(0.4, 1.0);
+    let radius = if body.half_width.is_empty() {
+        body.water_width * 0.5
+    } else {
+        body.half_width_at(0) / wl_reach
+    } + 1.8;
     // Meia-abertura (rad) voltada a JUSANTE: a rocha cobre o arco de
     // montante; a boca de 90° fica virada para onde o rio corre.
     let opening = 45.0f32.to_radians();

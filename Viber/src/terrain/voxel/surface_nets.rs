@@ -73,7 +73,6 @@ pub struct VoxelChunkParams {
 }
 
 impl VoxelChunkParams {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         origin: Vec3,
         voxel_size: f32,

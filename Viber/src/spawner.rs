@@ -546,8 +546,7 @@ pub fn compute_placements(
             // da ordem do XML, contra o contrato "o teste usa footprint ×
             // scale-max (conservador); o registo usa a escala real".
             if footprint > 0.0 {
-                occupancy
-                    .register(pos.x, pos.y, footprint * scale_u * axis.x.max(axis.z));
+                occupancy.register(pos.x, pos.y, footprint * scale_u * axis.x.max(axis.z));
             }
             // Y de assentamento: plantas aquáticas À SUPERFÍCIE da água
             // (VibeGame "in-water: só superfície do lago, Y = waterY"), nunca

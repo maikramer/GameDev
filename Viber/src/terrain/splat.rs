@@ -549,17 +549,17 @@ pub fn weights_at(
     let n_dirt_region = value_noise(x / NOISE_DIRT_REGION, z / NOISE_DIRT_REGION, p.seed, 5);
     let n_forest_region = value_noise(x / NOISE_FOREST_REGION, z / NOISE_FOREST_REGION, p.seed, 6);
 
+    // ── Shore: sand on lake/river floors, fading out across the shore band.
+    // (Antes do bloco da neve: a supressão de neve submersa precisa das
+    // mesmas máscaras de profundidade que o leito.)
+    let (sand_mask, mud_band, shallow, bed_floor) = shore_weights(x, z, y, ctx);
+
     // ── Hard override layers first: cliffs and the snow line take budget
     //    away from everything below them (rock beats snow on a cliff, the
     //    same precedence the old vertex tint used).
     //
     // As arestas seguem o bioma: nos picos a rocha nasce mais cedo e a neve
     // muito mais baixo; no deserto a neve é empurrada para fora do mapa.
-    // ── Shore: sand on lake/river floors, fading out across the shore band.
-    // (Antes do bloco da neve: a supressão de neve submersa precisa das
-    // mesmas máscaras de profundidade que o leito.)
-    let (sand_mask, mud_band, shallow, bed_floor) = shore_weights(x, z, y, ctx);
-
     let rock0 = (0.30 + climate.rock_bias).clamp(0.05, 0.9);
     let stone = smoothstep(rock0, rock0 + 0.22, slope);
     let snow_h = (p.snow_height + climate.snow_bias).clamp(0.0, 1.5);
@@ -1187,21 +1187,34 @@ mod tests {
 
         // Walk out from the waterline: sand must fade monotonically to < 0.1
         // before 2× the shore width.
-        let mut prev = 1.0f32;
+        // A areia ancora-se na LINHA DE ÁGUA REAL (contorno × mirror_reach),
+        // que fica além do raio nominal — o walk pode SUBIR até cruzar a
+        // linha; a partir daí desvanece a monotonamente.
+        let mut prev = 0.0f32;
+        let mut rising = true;
+        let mut peak_seen = false;
         let mut passed = false;
         for d in [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0] {
             let p = lake.at + Vec2::new(lake.radius.max(1.0) + d, 0.0);
             let w = weights_of(&world, p.x, p.y);
             let sand_total = w[SLOT_SAND] + w[SLOT_DESERT_SAND];
-            assert!(
-                sand_total <= prev + 1e-3,
-                "sand must fade monotonically outward: {sand_total} after {prev} at {d} m"
-            );
-            prev = sand_total;
+            if rising {
+                if sand_total < prev - 1e-3 {
+                    rising = false;
+                    peak_seen = prev > 0.3;
+                }
+            } else {
+                assert!(
+                    sand_total <= prev + 1e-3,
+                    "sand must fade monotonically after the waterline: {sand_total} after {prev} at {d} m"
+                );
+            }
+            prev = prev.max(sand_total);
             if d > 4.0 && sand_total < 0.1 {
                 passed = true;
             }
         }
+        assert!(peak_seen, "sand must peak at the real waterline");
         assert!(passed, "sand must vanish past the shore band");
     }
 
@@ -1366,10 +1379,12 @@ mod tests {
             radius: 10.0,
             carve_radius: 12.5,
             water_y: 40.0,
+            mirror_reach: 1.0,
             stations: Vec::new(),
             surface_y: Vec::new(),
             water_width: 0.0,
             half_width: Vec::new(),
+            depths: Vec::new(),
             cascades: Vec::new(),
         };
         let boxes_w: Vec<(Bounds, &WaterBody)> = vec![(water_bounds(&body, 4.0), &body)];

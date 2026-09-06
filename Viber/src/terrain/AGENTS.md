@@ -34,10 +34,11 @@ VibeGame. Contrato XML completo: `AGENTS.md` da raiz.
 - **Skirts + frontier normals** em vez de stitching entre chunks/LODs.
 - **Visual do chão, dois caminhos exclusivos:** tint LEGADO por
   altura/inclinação em vertex colors (sem WGSL) OU o splat blend
-  (`layers="…"`), que SUBSTITUI o tint — com camadas ativas as vertex colors
-  só carregam `base-color` (`TerrainSpec::chunk_tint` zera o banding no
-  bootstrap E nos rebuilds de LOD; desalinhados, chunks vizinhos discutem na
-  fronteira).- O splat fecha a soma dos weights em 1.0 (relva = resto); pesagem
+  (`layers="…"`), que SUBSTITUI o tint — com camadas ativas o `base-color`
+  autoral é IGNORADO: as vertex colors transportam dados de parede/região
+  para `terrain_chunk.wgsl` e o tint global é o `day_tint` day/night do
+  uniform (`TerrainSpec::chunk_tint` zera o banding no bootstrap E nos
+  rebuilds de LOD; desalinhados, chunks vizinhos discutem na fronteira).- O splat fecha a soma dos weights em 1.0 (relva = resto); pesagem
   < 0.004 no shader salta o fetch (branch não-uniforme ⇒ `textureSampleGrad`
   com gradientes calculados UMA vez no topo do fragment).
 - Colliders heightfield por chunk com `collision-resolution` independente

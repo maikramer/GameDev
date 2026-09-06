@@ -261,10 +261,11 @@ impl TerrainSpec {
 
     /// Tint folded into chunk vertex colors: the full height/slope banding
     /// on the legacy single-texture path; with `layers` the splat blend
-    /// replaces the banding and only the authored `base-color` survives
-    /// (as the global multiplier of the blend). The bootstrap and the LOD
-    /// rebuilds must agree on this or neighboring chunks disagree at their
-    /// shared border.
+    /// replaces the banding entirely and the authored `base-color` is
+    /// IGNORED — the vertex colors carry wall/region data for
+    /// `terrain_chunk.wgsl` and the only global tint is the day/night
+    /// `day_tint` uniform. The bootstrap and the LOD rebuilds must agree on
+    /// this or neighboring chunks disagree at their shared border.
     pub fn chunk_tint(&self) -> crate::terrain::mesh::TintParams {
         let mut tint = crate::terrain::mesh::TintParams::from(&self.tint);
         if !self.layers.is_empty() {
