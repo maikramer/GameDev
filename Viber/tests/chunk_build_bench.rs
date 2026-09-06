@@ -55,6 +55,7 @@ fn tint() -> TintParams {
 /// `simple-rpg`: world-size 4000, max-height 200, chunk 64 m, LOD-0 step 1 m.
 fn params(lod_step: usize) -> ChunkMeshParams {
     ChunkMeshParams {
+        lod0_step: lod_step,
         origin: Vec3::new(128.0, 0.0, -256.0),
         size: 64.0,
         lod_step,

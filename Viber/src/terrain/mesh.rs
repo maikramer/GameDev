@@ -147,6 +147,11 @@ pub struct ChunkMeshParams {
     /// resolution. Must be constant per LOD level across the whole terrain so
     /// chunk borders line up.
     pub lod_step: usize,
+    /// Grid step of the terrain's finest (LOD 0) mesh, in meters — the
+    /// spacing of the finest neighbor a chunk border can ever meet. Skirt
+    /// probing sweeps the border span at this step so T-junction cracks
+    /// narrower than this chunk's own `lod_step` still seal.
+    pub lod0_step: usize,
     /// Vertical skirt depth in meters (0 disables skirts).
     pub skirt_depth: f32,
     /// World-space epsilon (meters) for frontier normals. Must be **identical
@@ -652,6 +657,7 @@ mod tests {
             origin,
             size,
             lod_step: step,
+            lod0_step: step,
             skirt_depth: 0.0,
             normal_epsilon: 0.5,
             texture_tile_size: 0.0,

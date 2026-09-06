@@ -65,6 +65,7 @@ fn build_all_chunks(spec: &TerrainSpec, grid: &BrushGrid) -> Vec<((u32, u32), Ch
                 ),
                 size: edge,
                 lod_step: step,
+                lod0_step: step,
                 skirt_depth: spec.skirt_depth_meters(),
                 normal_epsilon: grid.texel(),
                 texture_tile_size: spec.texture_tile_size,
