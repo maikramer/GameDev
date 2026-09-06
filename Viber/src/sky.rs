@@ -2,28 +2,52 @@
 //! clouds, moon, stars, nebula, aurora and meteors — a custom WGSL fragment
 //! shader on a camera-following inverted sphere.
 //!
-//! ARCHITECTURE NOTE — no material uniform: Bevy 0.19 promotes a custom
-//! material's `#[uniform(0)]` to a slot-1 storage buffer that is never
-//! re-uploaded after the first `Added` upload and reads back unrelated
-//! buffer contents (the sky "flickered" on per-frame garbage). Instead,
-//! `viber run` SPECIALIZES the WGSL per world: `SkyConfig` is extracted from
-//! the `<Sky>`/`<DayCycle>`/`<Weather>` elements and the CONFIG const block
-//! of `shaders/sky.wgsl` is rewritten before the renderer loads it. Per-frame
-//! values (clock, twinkle, drift) derive from `Globals` — the engine-updated
-//! view binding the `animate_shader` example uses.
+//! ARCHITECTURE NOTE — duas vias de configuração:
+//!
+//! 1. **Consts especializadas.** `viber run` reescreve o bloco CONFIG de
+//!    `shaders/sky.wgsl` com os valores do `<Sky>`/`<DayCycle>`/`<Weather>`
+//!    do mundo antes de o renderer o carregar (nuvens, estrelas, aurora…).
+//! 2. **Storage per-frame** ([`SkyUniform`]). A hora do mundo NÃO
+//!    pode vir de `globals.time`: `viber.debug.set_clock` (e qualquer
+//!    lógica de jogo que mexa no relógio) escreve `DayCycleState`, que o
+//!    tempo do motor ignora — era por isso que às 23:02 ainda se via o disco
+//!    solar e a hora dourada tinha céu de noite. O sol, a lua e a paleta da
+//!    hora chegam agora do [`crate::worldsys::AtmosphereState`], a mesma que
+//!    alimenta a névoa e o grading.
+//!
+//! POR QUE STORAGE E NÃO UNIFORM (r1): com `#[uniform(0)]` o
+//! `opaque_mesh_pipeline` morre em validação quando coexiste com outro
+//! material cujo group(2) é storage (a água — verifico no mundo /tmp);
+//! com `#[storage(0, read_only)] Handle<ShaderBuffer>` o pipeline é válido.
+//!
+//! REFRESH DO STORAGE: `set_data` atualiza o buffer existente a cada frame
+//! pelo evento `Modified`. Como este caminho já perdeu atualizações sob
+//! carga, a cada 30 frames publica também um `ShaderBuffer` novo (96 B) e
+//! troca o handle no material existente. O evento `Added` força um novo
+//! upload sem criar assets a cada frame; o buffer anterior é libertado
+//! quando deixa de ter handles.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::light::NotShadowCaster;
-use bevy::math::Vec3;
+use bevy::math::{Vec3, Vec4};
 use bevy::pbr::Material;
 use bevy::prelude::*;
 use bevy::render::mesh::PrimitiveTopology;
 use bevy::render::render_resource::AsBindGroup;
+use bevy::render::storage::ShaderBuffer;
 use bevy::shader::ShaderRef;
 
 /// Template WGSL do céu (defaults; `viber run` reescreve o bloco CONFIG com
 /// os valores do mundo antes de o renderer o carregar).
 pub const SKY_WGSL: &str = include_str!("sky.wgsl");
+
+/// Ganho de saída do domo (o WGSL multiplica por isto no fim). **1.0** —
+/// o r7 pôs 400 acreditando que a exposição física da câmara (EV100 ~9.7)
+/// esmagava a paleta; MAS a exposição vive no path PBR do `StandardMaterial`
+/// — o domo é um material CUSTOM e NUNCA a recebe. Com 400 o céu inteiro ia
+/// a TMc=1.0 = o "retângulo de branco" do r7/r8. O FOG (`ambient.rs`) usa a
+/// mesma escala (paleta raw) para se fundir com o horizonte do domo.
+pub const SKY_RADIANCE: f32 = 1.0;
 
 const CONFIG_BEGIN: &str = "// === WORLD CONFIG";
 const CONFIG_END: &str = "// === END WORLD CONFIG ===";
@@ -32,10 +56,52 @@ const CONFIG_END: &str = "// === END WORLD CONFIG ===";
 #[derive(Debug, Component)]
 pub struct SkyDome;
 
-/// Custom sky material — no bindings at all (world config lives in the
-/// specialized WGSL consts, per-frame values in the engine's `Globals`).
+/// Estado per-frame do céu, empacotado para o shader.
+///
+/// **Storage, não uniform** — ver a nota no topo do ficheiro (coexistência
+/// com o material de água no 0.19). O binding WGSL correspondente é
+/// `var<storage, read>`; o struct é só `vec4`s, pelo que o layout std430
+/// não tem surpresas de alinhamento.
+#[derive(Debug, Clone, Copy, bevy::render::render_resource::ShaderType)]
+pub struct SkyUniform {
+    /// `xyz` = direção PARA o sol; `w` = fator dia (1 dia, 0 noite).
+    pub sun: Vec4,
+    /// `xyz` = direção PARA a lua; `w` = fator noite.
+    pub moon: Vec4,
+    /// `rgb` = cor do zénite; `w` = fator hora dourada.
+    pub zenith: Vec4,
+    /// `rgb` = cor do horizonte; `w` = delta de cobertura de nuvens do Weather.
+    pub horizon: Vec4,
+    /// `rgb` = tinta do sol (âmbar rasante → branco alto); `w` = tempo (s).
+    pub sun_tint: Vec4,
+    /// `x`,`y` = vento; `z` = reservado (0); `w` = minuto do dia.
+    pub params: Vec4,
+}
+
+impl Default for SkyUniform {
+    fn default() -> Self {
+        Self {
+            sun: Vec4::new(0.0, 1.0, 0.0, 1.0),
+            moon: Vec4::new(0.0, -1.0, 0.0, 0.0),
+            zenith: Vec4::new(0.085, 0.255, 0.62, 0.0),
+            // w neutral: `horizon.w` é um DELTA somado à cobertura das consts;
+            // o default tem de ser 0 para não alterar o céu antes do 1.º drive.
+            horizon: Vec4::new(0.60, 0.755, 0.90, 0.0),
+            sun_tint: Vec4::new(1.0, 0.96, 0.88, 0.0),
+            // z reservado (o WGSL não lê); w = minuto do dia.
+            params: Vec4::new(0.7, 0.25, 0.0, 480.0),
+        }
+    }
+}
+
+/// Custom sky material: a config do mundo continua nas consts WGSL
+/// especializadas; o que muda a cada frame (hora, sol, lua, nuvens) chega
+/// por este storage buffer.
 #[derive(Debug, Clone, Asset, TypePath, AsBindGroup)]
-pub struct SkyMaterial {}
+pub struct SkyMaterial {
+    #[storage(0, read_only)]
+    pub data: Handle<ShaderBuffer>,
+}
 
 impl Material for SkyMaterial {
     fn fragment_shader() -> ShaderRef {
@@ -184,6 +250,7 @@ fn walk_entities(specs: &[crate::recipes::EntitySpec], config: &mut SkyConfig) {
                         .iter()
                         .find(|(k, _)| k == name)
                         .and_then(|(_, v)| v.trim().parse::<f32>().ok())
+                        .filter(|v| v.is_finite())
                         .unwrap_or(default)
                 };
                 config.sun_elevation = f("sun-elevation", config.sun_elevation);
@@ -229,12 +296,23 @@ fn walk_entities(specs: &[crate::recipes::EntitySpec], config: &mut SkyConfig) {
 /// shader through the specialized WGSL, not through these attributes).
 pub fn build_sky(world: &mut World, meshes: &mut Assets<Mesh>, sky_mats: &mut Assets<SkyMaterial>) {
     let mesh = meshes.add(sky_dome_mesh());
-    let material = sky_mats.add(SkyMaterial {});
+    let material = world.resource_scope(
+        |_world: &mut World, mut buffers: Mut<Assets<ShaderBuffer>>| {
+            sky_mats.add(SkyMaterial {
+                data: buffers.add(new_sky_buffer(SkyUniform::default())),
+            })
+        },
+    );
+    // Raio 850: TEM de caber dentro do far plane da câmara (o default do
+    // `Camera3d` é 1000 m) — com 4000 o rim do domo era clipado pelo far e
+    // ficava a "banda preta no topo" reportada no r1 (em posições longe do
+    // centro, o rim aproximava-se ainda mais). 850 m cobre o conteúdo do
+    // mundo (±250 m) e segue a câmara todos os frames.
     world.spawn((
         Name::new("sky"),
         Mesh3d(mesh),
         MeshMaterial3d::<SkyMaterial>(material),
-        Transform::from_scale(Vec3::splat(4000.0)),
+        Transform::from_scale(Vec3::splat(850.0)),
         Visibility::Visible,
         NotShadowCaster,
         SkyDome,
@@ -283,10 +361,90 @@ pub fn sky_dome_mesh() -> bevy::mesh::Mesh {
     mesh
 }
 
-/// Keep the dome centered on the camera (the world is 8 km wide; the dome
-/// must never be walked out of).
+/// Novo `ShaderBuffer` de 96 bytes com `data` — chamado a cada 30 frames
+/// (ver a nota REFRESH DO STORAGE no topo do ficheiro).
+fn new_sky_buffer(data: SkyUniform) -> ShaderBuffer {
+    let mut buffer = ShaderBuffer::with_size(
+        std::mem::size_of::<SkyUniform>(),
+        RenderAssetUsages::default(),
+    );
+    buffer.set_data(data);
+    buffer
+}
+
+/// Empurra a paleta da hora ([`crate::worldsys::AtmosphereState`] + vento do
+/// `<Weather>` + minuto do relógio) para o storage buffer do domo.
+///
+/// Publica um `SkyMaterial`+`ShaderBuffer` NOVOS SÓ QUANDO O VALOR MUDA
+/// (r8, opção (a) da síntese da lead): a paleta muda devagar, logo isto
+/// publica ~2-5×/s em vez de 60×/s — sem inundar a fila de eventos do
+/// render world (que, saturada, perdia `Modified` e congelava o céu no
+/// último estado — r7/r8). Cada publish é um id NOVO = cache miss no bind
+/// group = upload garantido pelo path `Added` (o que se provou correto no
+/// r4-r6; os frames intermediários ficam com o material anterior, que é
+/// visualmente idêntico dada a dedupe).
+#[allow(clippy::needless_pass_by_value)]
+pub fn sky_material_drive(
+    time: Res<Time>,
+    atmosphere: Res<crate::worldsys::AtmosphereState>,
+    clock: Option<Res<crate::worldsys::DayCycleState>>,
+    weather: Option<Res<crate::worldsys::WeatherState>>,
+    domes: Query<&MeshMaterial3d<SkyMaterial>, With<SkyDome>>,
+    mut materials: ResMut<Assets<SkyMaterial>>,
+    mut buffers: ResMut<Assets<ShaderBuffer>>,
+    mut refresh_tick: Local<u32>,
+) {
+    let minute = clock.map(|c| c.minute_of_day).unwrap_or(720.0);
+    let (wind, clouds) = weather
+        .map(|w| (w.wind, w.clouds))
+        .unwrap_or(([0.7, 0.25], 0.0));
+    let a = *atmosphere;
+    // `<Weather clouds>` é um DELTA sobre a cobertura do `<Sky>` (que vive
+    // nas consts especializadas) — um mundo com tempo fechado enche o céu
+    // sem tocar no XML do céu.
+    let cloud_delta = clouds.clamp(0.0, 1.0) * 0.45;
+    let data = SkyUniform {
+        sun: Vec4::new(a.sun_dir.x, a.sun_dir.y, a.sun_dir.z, a.day),
+        moon: Vec4::new(a.moon_dir.x, a.moon_dir.y, a.moon_dir.z, a.night),
+        zenith: Vec4::new(a.zenith[0], a.zenith[1], a.zenith[2], a.golden),
+        horizon: Vec4::new(a.horizon[0], a.horizon[1], a.horizon[2], cloud_delta),
+        sun_tint: Vec4::new(
+            a.sun_tint[0],
+            a.sun_tint[1],
+            a.sun_tint[2],
+            time.elapsed_secs(),
+        ),
+        params: Vec4::new(wind[0], wind[1], 0.0, minute),
+    };
+    if domes.is_empty() {
+        return;
+    }
+    // CINTO E SUSPENSÓRIOS (r13): a cada frame, `set_data` no buffer atual
+    // (1 `Modified`/frame — o path normal); A CADA 30 frames (~0.5 s),
+    // publicar buffer+handle NOVOS — id novo = evento `Added` = upload
+    // GARANTIDO, recuperando de qualquer tempestade de eventos (boot,
+    // despawns em massa, saves) em ≤0.5 s sem inundar a fila.
+    let refresh = *refresh_tick == 0;
+    *refresh_tick = (*refresh_tick + 1) % 30;
+    let new_buffer = refresh.then(|| buffers.add(new_sky_buffer(data)));
+
+    for handle in &domes {
+        if let Some(mut material) = materials.get_mut(&handle.0)
+            && let Some(mut buffer) = buffers.get_mut(&material.data)
+        {
+            buffer.set_data(data);
+            if let Some(nb) = &new_buffer {
+                material.data = nb.clone();
+            }
+        }
+    }
+}
+
+/// Keep the dome centered on the camera. Filtra por `Camera3d` (a query por
+/// `Camera` apanhava também a câmara 2d da UI e o `single()` falhava em
+/// silêncio — o domo ficava para trás e o rim aparecia no topo do frame).
 pub fn sky_follow_camera(
-    cameras: Query<&GlobalTransform, With<Camera>>,
+    cameras: Query<&GlobalTransform, With<bevy::camera::Camera3d>>,
     mut domes: Query<&mut Transform, With<SkyDome>>,
 ) {
     let Ok(camera) = cameras.single() else {
@@ -315,39 +473,47 @@ mod tests {
         // O corpo do shader sobrevive à substituição.
         assert!(shader.contains("fn fragment"));
         assert!(shader.contains("aurora_ribbons"));
-        assert_eq!(shader.matches(CONFIG_END.as_bytes()).count(), 1);
+        assert_eq!(shader.matches(CONFIG_END).count(), 1);
         // Sem marcadores (template partido), devolve o template intacto.
-        assert_eq!(SkyConfig::default().render_world_shader().contains("const CFG_DRIVE"), true);
+        assert_eq!(
+            SkyConfig::default()
+                .render_world_shader()
+                .contains("const CFG_DRIVE"),
+            true
+        );
     }
 
     /// `from_world` lê `<Sky>`, `<DayCycle>` e `<Weather>` (incl. filhos).
     #[test]
     fn test_sky_config_from_world() {
-        use crate::recipes::{EntityKind, EntitySpec, PhysicsSpec, TransformSpec};
+        use crate::physics::PhysicsSpec;
+        use crate::recipes::{EntityKind, EntitySpec, TransformSpec};
 
         let spec = |kind: EntityKind| EntitySpec {
             name: None,
             tag: None,
             script: None,
-            transform: TransformSpec {
-                translation: [0.0, 0.0, 0.0],
-                euler_deg: None,
-            },
+            destructible: None,
+            transform: TransformSpec::default(),
             physics: PhysicsSpec::default(),
             kind,
             children: Vec::new(),
         };
-        let world = vec![spec(EntityKind::Group), spec(EntityKind::DayCycle {
-            minute_of_day: 1140.0,
-            minutes_per_real_second: 3.0,
-            dawn_minute: 330.0,
-            dusk_minute: 1170.0,
-            ambient_day: 0.26,
-            ambient_night: 0.07,
-            drive_ambient: true,
-            max_sun_elevation: 55.0,
-            sun_azimuth_base: 180.0,
-        })];
+        let world = vec![
+            spec(EntityKind::Group),
+            spec(EntityKind::DayCycle {
+                minute_of_day: 1140.0,
+                minutes_per_real_second: 3.0,
+                dawn_minute: 330.0,
+                dusk_minute: 1170.0,
+                ambient_day: 0.26,
+                ambient_night: 0.07,
+                drive_ambient: true,
+                max_sun_elevation: 55.0,
+                sun_azimuth_base: 180.0,
+                min_sun_elevation: 8.0,
+            }),
+        ];
         let config = SkyConfig::from_world(&world);
         assert!(config.drive);
         assert_eq!(config.clock_start, 1140.0);
