@@ -182,7 +182,7 @@ impl WeaponTrailState {
             };
             for i in 0..n.saturating_sub(1) {
                 let (p0, p1, p2, p3) = (
-                    sample(i.wrapping_sub(1).min(n - 1)),
+                    sample(i.saturating_sub(1)),
                     sample(i),
                     sample(i + 1),
                     sample(i + 2),
