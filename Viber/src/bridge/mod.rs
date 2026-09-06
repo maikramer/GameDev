@@ -295,11 +295,21 @@ fn process_capture_requests(world: &mut World) {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut finished = Vec::new();
+        // Snapshot dos ids ainda `pending`: o closure do `retain` não pode
+        // ler `store.captures` (o deref do guard captura `*store` inteiro e
+        // colide com o borrow mutável de `screenshot_entities`).
+        let pending: Vec<u64> = store
+            .captures
+            .iter()
+            .filter(|(_, info)| info.status == "pending")
+            .map(|(id, _)| *id)
+            .collect();
         store
             .screenshot_entities
-            .retain(|(id, entity)| match store.captures.get(id) {
-                Some(info) if info.status == "pending" => true,
-                _ => {
+            .retain(|(id, entity)| {
+                if pending.contains(id) {
+                    true
+                } else {
                     finished.push(*entity);
                     false
                 }
