@@ -93,12 +93,17 @@ export function start(ctx: MonoBehaviourContext): void {
   loadStarted = true;
   void loadGltfToSceneWithAnimator(ctx.state, MODEL_URL, {
     crossfadeDuration: 0.3,
-  }).then((result) => {
-    group = result.group;
-    animator = result.animator;
-    animator?.play(IDLE_CLIP);
-    idleVariety.start(animator);
-  });
+  })
+    .then((result) => {
+      group = result.group;
+      animator = result.animator;
+      animator?.play(IDLE_CLIP);
+      idleVariety.start(animator);
+    })
+    .catch((err) => {
+      console.warn('[healer] failed to load', MODEL_URL, err);
+      hidePrompt(ctx.state);
+    });
 }
 
 export function update(ctx: MonoBehaviourContext): void {
