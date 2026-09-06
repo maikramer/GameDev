@@ -173,13 +173,16 @@ pub fn enemy_ai(
     mut combat_music: ResMut<crate::music::CombatMusicState>,
     mut sfx: MessageWriter<crate::ambient::SfxEvent>,
     players: Query<&GlobalTransform, With<crate::player::Player>>,
-    mut enemies: Query<(
-        Entity,
-        &mut Transform,
-        &mut EnemyCreature,
-        Option<&Name>,
-        Option<&mut WanderState>,
-    )>,
+    mut enemies: Query<
+        (
+            Entity,
+            &mut Transform,
+            &mut EnemyCreature,
+            Option<&Name>,
+            Option<&mut WanderState>,
+        ),
+        Without<crate::combat::Corpse>,
+    >,
 ) {
     let Some(runtime) = runtime else {
         return; // terrain bootstrap has not published the carved world yet
