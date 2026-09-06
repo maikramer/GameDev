@@ -1909,7 +1909,7 @@ pub fn parse_color(value: &str) -> Option<Color> {
         };
         let bytes: Vec<u8> = match hex.len() {
             3 | 4 => hex.chars().map(expand).collect::<Option<Vec<_>>>()?,
-            6 | 8 => (0..hex.len() / 2)
+            6 | 8 if hex.is_ascii() => (0..hex.len() / 2)
                 .map(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).ok())
                 .collect::<Option<Vec<_>>>()?,
             _ => return None,
@@ -1970,6 +1970,11 @@ mod tests {
         // Nonsense is rejected rather than silently black.
         assert_eq!(parse_color("chartreuse-ish"), None);
         assert_eq!(parse_color("#12345"), None);
+        // Non-ASCII never reaches the byte slicing: a typo with an accented
+        // char must be `None`, not a panic on a cut char boundary.
+        assert_eq!(parse_color("#aáaa"), None);
+        assert_eq!(parse_color("#áaaaaa"), None);
+        assert_eq!(parse_color("#aaaaaá"), None);
     }
 
     #[test]

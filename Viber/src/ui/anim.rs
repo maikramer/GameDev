@@ -57,7 +57,9 @@ impl UiAnim {
             AnimKind::Bob => (2.0, 6.0),
             AnimKind::Shake => (0.4, 3.0),
         };
-        let mut numbers = words.filter_map(|w| w.parse::<f32>().ok());
+        let mut numbers = words
+            .filter_map(|w| w.parse::<f32>().ok())
+            .filter(|n| n.is_finite());
         let period = numbers.next().unwrap_or(default_period).max(1e-3);
         let amount = numbers.next().unwrap_or(default_amount);
         Some(Self {
@@ -122,6 +124,12 @@ mod tests {
         assert!(UiAnim::parse("").is_none());
         // Um período zero ou negativo não pode dividir por zero no passo.
         assert!(UiAnim::parse("spin 0").is_some());
+        // NaN/inf (`1e400` também é inf) caem no omissão — não chegam ao
+        // UiTransform como escala/fase não finita.
+        let clean = UiAnim::parse("pulse 1 nan").expect("pulse");
+        assert!((clean.amount - 0.08).abs() < 1e-6);
+        let clean = UiAnim::parse("spin 1e400").expect("spin");
+        assert!((clean.period - 2.0).abs() < 1e-6);
     }
 
     #[test]

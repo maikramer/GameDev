@@ -192,7 +192,7 @@ pub fn resolve(name: &str) -> Option<Color> {
         Some((hue, shade)) => {
             // `900e0` — shade de 3 dígitos com alpha hex colado.
             let (shade_text, hex_alpha) = match shade.len() {
-                5 if shade[..3].chars().all(|c| c.is_ascii_digit()) => {
+                5 if shade.is_ascii() && shade[..3].chars().all(|c| c.is_ascii_digit()) => {
                     (&shade[..3], Some(&shade[3..]))
                 }
                 _ => (shade, None),
@@ -272,6 +272,10 @@ mod tests {
         assert!(resolve("slate-999").is_none());
         assert!(resolve("chartreuse-500").is_none());
         assert!(resolve("rose-").is_none());
+        // A non-ASCII shade can never reach the byte slicing: `None`, not a
+        // panic on a cut char boundary.
+        assert!(resolve("slate-aaáb").is_none());
+        assert!(resolve("slate-9€a").is_none());
     }
 
     #[test]
