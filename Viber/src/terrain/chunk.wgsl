@@ -18,6 +18,7 @@
 
 #import bevy_pbr::forward_io::{VertexOutput, FragmentOutput}
 #import bevy_pbr::mesh_view_bindings::view
+#import bevy_pbr::pbr_functions::apply_fog
 
 #ifdef BINDLESS
 #import bevy_render::bindless::{bindless_textures_2d, bindless_samplers_filtering}
@@ -38,7 +39,9 @@ const CFG_MOSS: f32 = 0.35;
 // `tints/flats/roughs` its color correction, flat far color and perceptual
 // roughness; `chunk` places the plane: xy = origin XZ, z = edge size,
 // w = index (0..3) of the rock layer for the triplanar walls, -1 = off.
-// `day_tint.rgb` multiplies the final albedo (day/night cycle).
+// `day_tint.rgb` multiplies the final albedo (day/night cycle);
+// `sun_dir.xyz` is the sun TRAVEL direction (where the light goes — the
+// same sun the shadows follow, published with the day-tint steps).
 struct TerrainChunkParams {
     tiles: array<vec4<f32>, 4>,
     tints: array<vec4<f32>, 4>,
@@ -46,6 +49,7 @@ struct TerrainChunkParams {
     roughs: array<vec4<f32>, 4>,
     chunk: vec4<f32>,
     day_tint: vec4<f32>,
+    sun_dir: vec4<f32>,
 };
 
 #ifdef BINDLESS
@@ -273,10 +277,13 @@ fn fragment(
         wall = clamp(in.color.r, 0.0, 1.0);
 #endif
         let tri = smoothstep(CFG_TRI_SLOPE, CFG_TRI_SLOPE + CFG_TRI_SOFT, slope) * region;
-        tri_mix = tri;
         if (tri > 0.001) {
             let rock = i32(params.chunk.w);
             if (rock >= 0) {
+                // Só mistura a normal de parede quando o chunk TEM rock —
+                // sem ela o bump ficava (0,1,0) e a parede lia iluminada
+                // como chão plano (flat/estourada).
+                tri_mix = tri;
                 let uv_zy = vec2<f32>(world.z, world.y);
                 let uv_xy = vec2<f32>(world.x, world.y);
                 let dzy_x = dpdx(uv_zy);
@@ -366,12 +373,34 @@ fn fragment(
     // Lighting: sun + ambient, simple on purpose — the value of this
     // material is the GROUND BLEND, not the PBR stack. Nas paredes a
     // normal ganha o detail bump do luminance (pesado por `tri_mix`).
+    // O sol vem do uniform (o mesmo passo quantizado do day_tint segue a
+    // luz real da cena) — hardcoded nunca batia certo com as sombras dos
+    // props nem com a hora dourada do céu.
     let n = normalize(mix(normal, wall_n, clamp(tri_mix, 0.0, 1.0)));
-    let sun_dir = normalize(vec3<f32>(0.35, -0.8, -0.45));
-    let sun_amount = max(dot(n, -sun_dir), 0.0);
+    let sun_travel = select(
+        normalize(vec3<f32>(0.35, -0.8, -0.45)),
+        normalize(params.sun_dir.xyz),
+        params.sun_dir.w > 0.0,
+    );
+    let sun_amount = max(dot(n, -sun_travel), 0.0);
     let lit = albedo * (0.45 + 0.55 * sun_amount);
 
     var out: FragmentOutput;
-    out.color = vec4<f32>(lit, 1.0);
+    var color = vec4<f32>(lit, 1.0);
+#ifdef DISTANCE_FOG
+    // Fog da câmara (`DistanceFog`): o PBR standard aplica-a DENTRO do
+    // shader do material — sem este bloco o terreno por layers lia o
+    // horizonte a 100% de contraste, as transições de LOD ao longe ficavam
+    // duras e o pop-in de chunks era visível. A ordem é a do
+    // `main_pass_post_lighting_processing`: fog antes do tone mapping.
+    color = apply_fog(
+        view_bindings::fog,
+        color,
+        world,
+        view.world_position.xyz,
+        in.position.xy,
+    );
+#endif
+    out.color = color;
     return out;
 }

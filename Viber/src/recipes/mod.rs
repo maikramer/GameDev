@@ -2352,19 +2352,23 @@ fn finish_terrain(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> {
             "texture" | "texture-url" => spec.texture = Some(value.trim().to_string()),
             "texture-tile-size" => spec.texture_tile_size = values::parse_f32(&value, &kctx)?,
             "layers" => {
-                spec.layers = value
+                let entries: Vec<String> = value
                     .split(|c: char| c == ',' || c.is_whitespace())
                     .map(str::trim)
                     .filter(|s| !s.is_empty())
                     .map(str::to_string)
                     .collect();
-                if spec.layers.len() > crate::terrain::splat::LAYER_COUNT {
+                if entries.len() > crate::terrain::splat::LAYER_COUNT {
                     bail!(
                         "{kctx}: at most {} layers, got {}",
                         crate::terrain::splat::LAYER_COUNT,
-                        spec.layers.len()
+                        entries.len()
                     );
                 }
+                // Canónica (posição = slot, `canonicalize_layers`): pesos do
+                // splat e materiais são indexados por slot DEFAULT — a ordem
+                // escrita como índice trocava texturas em subconjuntos.
+                spec.layers = crate::terrain::splat::canonicalize_layers(&entries);
             }
             "shore-width" => spec.shore_width = values::parse_f32(&value, &kctx)?,
             "splat-texel" => spec.splat_texel = values::parse_f32(&value, &kctx)?,

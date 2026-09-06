@@ -321,7 +321,11 @@ fn fragment(
     let lobe = pow(max(dot(reflect_dir, pbr_input.V), 0.0), 360.0);
     // Ruído de cintilação a frequência alta (célula ~11 cm): a 5.5 as células
     // eram maiores que o lóbulo e o glint saía em manchas brancas contínuas.
-    let sparkle = pow(value_noise(world.xz * 9.0 + normalize(vec2<f32>(CFG_WIND_X, CFG_WIND_Z)) * t * 2.1), 3.0);
+    // `wind="0 0"` é autoral válido e normalize(vec2(0)) = NaN — mesmo guard
+    // do `wave_height` (jitter 1e-4) para o drift do sparkle não envenenar
+    // o glint.
+    let sparkle_dir = normalize(vec2<f32>(CFG_WIND_X, CFG_WIND_Z) + vec2(1e-4, 0.0));
+    let sparkle = pow(value_noise(world.xz * 9.0 + sparkle_dir * t * 2.1), 3.0);
     let glint = lobe * sparkle * 1.3 * glint_strength * glint_color * damp * (1.0 - foam);
     pbr_input.material.emissive = vec4<f32>(glint, 1.0);
 

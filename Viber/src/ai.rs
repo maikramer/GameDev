@@ -3,8 +3,9 @@
 //!
 //! Creatures carry [`EnemyCreature`] (authored stats + current state); the
 //! patrol bookkeeping lives in [`WanderState`], auto-inserted by [`enemy_ai`]
-//! on the first tick. Heights come straight from [`TerrainRuntime::sample`]
-//! every tick (no physics bodies) and facing reuses the player's
+//! on the first tick. Heights come from the rendered-surface sampler
+//! ([`TerrainRuntime::sample_mesh_surface`]) every tick (no physics bodies)
+//! and facing reuses the player's
 //! +Z-forward convention via [`crate::player::facing_rotation`].
 //!
 //! Deaths enter as [`crate::combat::Corpse`] (the single source is
@@ -39,6 +40,11 @@ pub const WANDER_ARRIVE_DIST: f32 = 0.5;
 /// Delay between a creature's death and its respawn (s) — janela de design
 /// ~90-120 s para as pools dinâmicas não secarem (bounties repetíveis).
 pub const RESPAWN_DELAY_SECS: f32 = 100.0;
+/// R2-G6: um respawn que nasceria a menos distância do player é adiado
+/// (camping = nascer a 0 m com chase instantâneo, sentença sem combate).
+pub const RESPAWN_PLAYER_CLEARANCE_M: f32 = 3.5;
+/// Re-agendamento de um respawn adiado por camping (s).
+pub const RESPAWN_CAMPING_RETRY_SECS: f32 = 5.0;
 
 /// Behaviour state of one [`EnemyCreature`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -281,8 +287,11 @@ pub fn enemy_ai(
                     Vec3::new(moved.x, transform.translation.y, moved.y),
                     world_limit,
                 );
+                // SUPERFÍCIE RENDERIZADA (paridade com spawners/knockback): o
+                // sample analítico flutua acima das cordas do mesh nas
+                // cristas — a criatura ficava "dentro" do chão desenhado.
                 transform.translation =
-                    Vec3::new(moved.x, runtime.sample(moved.x, moved.z), moved.z);
+                    Vec3::new(moved.x, runtime.sample_mesh_surface(moved.x, moved.z), moved.z);
                 transform.rotation = crate::player::facing_rotation(dir3);
             }
         } else if matches!(enemy.state, EnemyState::Chase) {
@@ -344,14 +353,14 @@ pub fn queue_creature_respawns(
     >,
 ) {
     for (enemy, transform, scene, animated) in &dead {
-        // Respawn na home (latchada no 1.º tick da IA); o Y assenta no
-        // terreno para não renascer enterrado/voando.
+        // Respawn na home (latchada no 1.º tick da IA); o Y assenta na
+        // superfície renderizada para não renascer enterrado/voando.
         let home = enemy
             .home
             .unwrap_or(Vec2::new(transform.translation.x, transform.translation.z));
         let y = terrain
             .as_ref()
-            .map(|t| t.sample(home.x, home.y))
+            .map(|t| t.sample_mesh_surface(home.x, home.y))
             .unwrap_or(transform.translation.y);
         queue.0.push(RespawnEntry {
             position: Vec3::new(home.x, y, home.y),
@@ -368,14 +377,20 @@ pub fn queue_creature_respawns(
 /// originais quando existem (respawn do MESMO tipo) ou, em alternativa, um
 /// placeholder visual (esfera vermelha).
 ///
+/// Um vencido cujo ponto de nascença esteja a menos de
+/// [`RESPAWN_PLAYER_CLEARANCE_M`] do player é RE-ENFILEIRADO
+/// ([`RESPAWN_CAMPING_RETRY_SECS`] depois, mesma entrada — cena/glTF e
+/// estado intactos): camping no ponto de respawn não vira inimigo a 0 m.
+///
 /// Assets are `Option` on purpose: Bevy 0.19 panics on failed param
 /// validation, and headless worlds carry no render asset stores — there the
 /// creature respawns as a logic entity without the placeholder visual.
-#[allow(clippy::needless_pass_by_value)]
+#[allow(clippy::needless_pass_by_value, clippy::type_complexity)]
 pub fn respawn_spawners(
     mut commands: Commands,
     time: Res<Time>,
     mut queue: ResMut<RespawnQueue>,
+    players: Query<&GlobalTransform, With<crate::player::Player>>,
     meshes: Option<ResMut<Assets<Mesh>>>,
     materials: Option<ResMut<Assets<StandardMaterial>>>,
 ) {
@@ -383,7 +398,24 @@ pub fn respawn_spawners(
         return;
     }
     let (mut meshes, mut materials) = (meshes, materials);
-    for entry in split_due(&mut queue.0, time.elapsed_secs()) {
+    let now = time.elapsed_secs();
+    let player_xz = players
+        .iter()
+        .next()
+        .map(|gt| Vec2::new(gt.translation().x, gt.translation().z));
+    for entry in split_due(&mut queue.0, now) {
+        // R2-G6: player encostado ao ponto de nascença — adia (a entrada
+        // volta à fila inteira, sem perder cena/glTF nem estado).
+        let too_close = player_xz.is_some_and(|p| {
+            Vec2::new(entry.position.x, entry.position.z).distance(p)
+                < RESPAWN_PLAYER_CLEARANCE_M
+        });
+        if too_close {
+            let mut deferred = entry;
+            deferred.respawn_at = now + RESPAWN_CAMPING_RETRY_SECS;
+            queue.0.push(deferred);
+            continue;
+        }
         let mut entity = commands.spawn((
             Name::new(format!(
                 "enemy g{}#{}",
@@ -635,8 +667,11 @@ mod tests {
             dist < 4.5,
             "enemy closed distance toward the player, now {dist:.2} m"
         );
-        // Heights come from the sampler at the exact standing spot.
-        let ground_here = world.resource::<TerrainRuntime>().sample(pos.x, pos.z);
+        // Heights come from the rendered-surface sampler at the exact
+        // standing spot (o mesmo contrato do tick da IA).
+        let ground_here = world
+            .resource::<TerrainRuntime>()
+            .sample_mesh_surface(pos.x, pos.z);
         assert!(
             (pos.y - ground_here).abs() < 1e-2,
             "enemy y {:+} snapped to sampled ground {ground_here:+}",
@@ -794,6 +829,86 @@ mod tests {
         assert_eq!(enemy.state, EnemyState::Wander);
         assert_eq!(transform.translation, Vec3::new(3.0, 1.0, -4.0));
         assert!(name.to_string().contains("g42"), "group id in the name");
+    }
+
+    /// R2-G6: um vencido cujo ponto de respawn está a <3,5 m do player é
+    /// RE-ENFILEIRADO (+5 s) em vez de nascer em cima do herói — e a entrada
+    /// adiada mantém cena/glTF/posição (nada se perde).
+    #[test]
+    fn test_respawn_deferred_when_player_camps_the_point_headless() {
+        let mut app = App::new();
+        // TimePlugin off: o relógio é avançado à mão (mesmo padrão dos
+        // testes acima) para o re-agendamento de +5 s ser determinístico.
+        app.add_plugins(MinimalPlugins.build().disable::<bevy::time::TimePlugin>())
+            .add_plugins(AiPlugin);
+        app.init_resource::<Time>();
+        // Player a 1 m do ponto de respawn (GlobalTransform direto: o teste
+        // não monta o TransformPlugin — a query só lê a global).
+        app.world_mut().spawn((
+            crate::player::Player::default(),
+            Transform::from_xyz(0.0, 0.0, 0.0),
+            GlobalTransform::from(Transform::from_xyz(1.0, 0.0, 0.0)),
+        ));
+        let original = RespawnEntry {
+            position: Vec3::new(0.0, 1.0, 0.0),
+            template_index: 1,
+            group_id: 7,
+            respawn_at: 0.0, // due on the first update
+            scene: None,
+            animated: None,
+        };
+        app.insert_resource(RespawnQueue(vec![original.clone()]));
+
+        app.update();
+        app.update(); // flush dos commands
+
+        // NADA nasceu e a entrada voltou à fila com +5 s.
+        let world = app.world_mut();
+        assert!(
+            world
+                .query::<&EnemyCreature>()
+                .iter(world)
+                .next()
+                .is_none(),
+            "camping: nenhum inimigo nasce a 1 m do player"
+        );
+        let queue = &world.resource::<RespawnQueue>().0;
+        assert_eq!(queue.len(), 1, "entrada re-enfileirada, não descartada");
+        let mut expected = original;
+        expected.respawn_at += RESPAWN_CAMPING_RETRY_SECS;
+        assert_eq!(queue[0], expected, "mesma entrada com respawn_at +5 s");
+
+        // Player sai de perto → o vencido nasce na passada seguinte.
+        let player = world
+            .query::<(bevy::ecs::entity::Entity, &crate::player::Player)>()
+            .iter(world)
+            .next()
+            .map(|(e, _)| e)
+            .expect("player existe");
+        world.entity_mut(player).despawn();
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_secs_f32(
+                RESPAWN_CAMPING_RETRY_SECS + 0.1,
+            ));
+        app.update();
+        app.update(); // flush
+
+        assert!(
+            app.world()
+                .get_resource::<RespawnQueue>()
+                .expect("queue kept")
+                .0
+                .is_empty(),
+            "sem camping: entrada drena"
+        );
+        let world = app.world_mut();
+        let mut enemies = world.query::<(&EnemyCreature, &Transform)>();
+        let (_, transform) = enemies
+            .iter(world)
+            .next()
+            .expect("respawned creature exists");
+        assert_eq!(transform.translation, Vec3::new(0.0, 1.0, 0.0));
     }
 
     /// A morte de uma criatura da FSM Rust (EnemyCreature + Corpse, sem

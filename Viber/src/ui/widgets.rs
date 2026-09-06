@@ -12,9 +12,23 @@
 
 use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
-use bevy::window::CursorIcon;
+use bevy::window::{CursorIcon, PrimaryWindow};
 
 use super::runtime::{UiClasses, UiDisabled, UiStyleDirty};
+
+/// Ordena os extremos de um intervalo e afasta valores não finitos —
+/// [`f32::clamp`] faz `assert!(min <= max)`, por isso um
+/// `<UiSlider min="100" max="10">` (ou um extremo NaN/inf, que contagiaria o
+/// resultado) rebentaria a engine. Os três pontos que clampeiam contra o
+/// intervalo (o parse do XML, o arrasto e `viber.ui.set_value`) partilham
+/// esta normalização; não finito cai no omissão do `<UiSlider>` (0..1) — o
+/// aviso autoral vive no parse, em `tree.rs`.
+pub(crate) fn normalized_range(min: f32, max: f32) -> (f32, f32) {
+    if !min.is_finite() || !max.is_finite() {
+        return (0.0, 1.0);
+    }
+    (min.min(max), max.max(min))
+}
 
 // ── UiCheck ─────────────────────────────────────────────────────────────
 
@@ -107,10 +121,13 @@ impl UiSlider {
     /// stepped value in `min..max`.
     pub fn value_at(&self, fraction: f32) -> f32 {
         let fraction = fraction.clamp(0.0, 1.0);
-        let raw = self.min + fraction * (self.max - self.min);
+        // Defesa em profundidade: o parse já normalizou, mas `clamp` asserta
+        // com um intervalo cru — ordenar aqui nunca custa nada.
+        let (min, max) = normalized_range(self.min, self.max);
+        let raw = min + fraction * (max - min);
         if self.step > 0.0 {
             // Rounding can step off the range; clamp after.
-            ((raw / self.step).round() * self.step).clamp(self.min, self.max)
+            ((raw / self.step).round() * self.step).clamp(min, max)
         } else {
             raw
         }
@@ -355,6 +372,7 @@ pub fn drive_ui_tooltip(
     // `Option`: mundos sem HUD (qa-agua, terrain demo) não inserem
     // `HudAssets` — exigir o resource panica a engine no arranque.
     assets: Option<Res<crate::hud::HudAssets>>,
+    scale: Res<UiScale>,
     mut texts: Query<&mut Text>,
     mut nodes: Query<&mut Node>,
     mut visibility: Query<&mut Visibility>,
@@ -423,20 +441,26 @@ pub fn drive_ui_tooltip(
                     *visibility = Visibility::Inherited;
                 }
             }
-            // Near the pointer (already logical px, window-relative from the
-            // top-left), clamped into the window so it never scrolls off the
-            // edge it is hinting from.
+            // Near the pointer. The cursor arrives in window pixels, but
+            // `Val::Px` is multiplied by `UiScale` — sem a divisão, o tooltip
+            // deriva do cursor sempre que o HUD estiver ampliado (tudo acima
+            // de 720p). Trabalha no espaço AUTORAL (janela ÷ escala,
+            // `scale::ui_viewport`) e clampeia nesse mesmo espaço; o Val::Px
+            // volta a ser multiplicado pela escala ao aplicar.
             if let (Ok(window), Ok(mut node)) = (windows.single(), nodes.get_mut(tip)) {
                 if let Some(cursor) = window.cursor_position() {
+                    let scale = if scale.0 > 1e-3 { scale.0 } else { 1.0 };
+                    let (width, height) =
+                        super::scale::ui_viewport(window.width(), window.height(), scale);
                     node.left = Val::Px(
-                        (cursor.x + 14.0)
+                        (cursor.x / scale + 14.0)
                             .max(0.0)
-                            .min((window.width() - 230.0).max(0.0)),
+                            .min((width - 230.0).max(0.0)),
                     );
                     node.top = Val::Px(
-                        (cursor.y + 18.0)
+                        (cursor.y / scale + 18.0)
                             .max(0.0)
-                            .min((window.height() - 48.0).max(0.0)),
+                            .min((height - 48.0).max(0.0)),
                     );
                 }
             }
@@ -458,28 +482,36 @@ pub fn drive_ui_tooltip(
 #[derive(Debug, Clone, Component)]
 pub struct UiCursorIcon(pub CursorIcon);
 
-/// Sets the window cursor from the hovered element's [`UiCursorIcon`].
+/// Sets the primary window's cursor from the hovered element's [`UiCursorIcon`].
 ///
 /// Any hovered element with a cursor wins; when none does, the cursor falls
-/// back to the system default. Writes only on change — the window component
-/// would otherwise report a change every frame.
+/// back to the system default. A passada re-lê TODOS os elementos com cursor
+/// (não só os `Changed<Interaction>`), por isso um elemento hovered que
+/// despawnou — e leva a sua aresta de `Interaction` atrás — chega aqui como
+/// "nada hovered" em vez de um pointer preso para sempre. Writes only on
+/// change — the window component would otherwise report a change every frame.
 #[allow(clippy::type_complexity)]
 pub fn drive_ui_cursors(
     mut commands: Commands,
-    hovered: Query<(&Interaction, &UiCursorIcon), Changed<Interaction>>,
-    windows: Query<Entity, With<Window>>,
+    cursors: Query<(Entity, &UiCursorIcon)>,
+    interactions: Query<&Interaction>,
+    // A janela PRIMÁRIA, não "a primeira que aparecer": com mais janelas o
+    // cursor tem de seguir o rato do jogador.
+    windows: Query<Entity, (With<Window>, With<PrimaryWindow>)>,
     mut last: Local<Option<CursorIcon>>,
 ) {
-    let mut icon = None;
-    for (interaction, cursor) in &hovered {
-        if *interaction != Interaction::None {
-            icon = Some(cursor.0.clone());
-        }
-    }
+    let icon = cursors
+        .iter()
+        .find(|(entity, _)| {
+            interactions
+                .get(*entity)
+                .is_ok_and(|interaction| *interaction != Interaction::None)
+        })
+        .map(|(_, cursor)| cursor.0.clone());
     if *last == icon {
         return;
     }
-    let Some(window) = windows.iter().next() else {
+    let Ok(window) = windows.single() else {
         return;
     };
     commands
@@ -529,6 +561,21 @@ mod tests {
         offset.max = 20.0;
         offset.value = 15.0;
         assert!((offset.fraction() - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_value_at_survives_an_inverted_range() {
+        // Defesa em profundidade: o parse normaliza os extremos, mas o
+        // `value_at` volta a ordená-los para o `clamp` nunca assertar
+        // (intervalo invertido ou não finito não pode rebentar o arrasto).
+        let mut inverted = slider(0.0);
+        inverted.min = 100.0;
+        inverted.max = 10.0;
+        assert!((inverted.value_at(0.5) - 55.0).abs() < 1e-4);
+        let mut nan = slider(0.0);
+        nan.min = f32::NAN;
+        nan.max = 10.0;
+        assert!((nan.value_at(0.25) - 0.25).abs() < 1e-4, "cai no 0..1");
     }
 
     #[test]

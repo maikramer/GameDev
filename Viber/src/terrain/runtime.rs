@@ -81,9 +81,10 @@ pub struct PendingTerrainTextures {
 ///
 /// The legacy material falls back to its vertex-color tint (terrain) or flat
 /// base color (roads) — a texture-less surface instead of no surface. Layer
-/// slots degrade one step softer: a failed slot is repointed to the grass
-/// texture (the slot the whole ground reads as), so a broken `snow_peak`
-/// costs a monochrome patch, not a hole.
+/// slots degrade one step softer: a failed slot is repointed to the first
+/// OTHER texture of the chunk (leito → gravel quando o chunk o carrega),
+/// nunca a ela própria — o repoint antigo para a dominante era o próprio
+/// slot falhado na maioria dos chunks e caía no branco sólido.
 ///
 /// Sampler ownership does NOT live here: world-tiled textures are registered
 /// with [`crate::textures::WorldTiledTextures`] at `load` time and the
@@ -684,6 +685,16 @@ pub fn bootstrap(world: &mut World) {
         &voxel,
     );
     // Chunks `spawn_chunks` skipped as volumetric are covered here instead.
+    // Material PRÓPRIO double-sided para o caminho standard dos chunks voxel
+    // (sem layers ou VIBER_CHUNK_LAYERS=0): shells que roçam o terreno
+    // deixam folhas finas sub-voxel com triângulos inward-wound — com
+    // culling leem-se como buracos na parede. O caminho de layers já resolve
+    // isto no `specialize` do TerrainChunkMaterial (cull_mode None).
+    let voxel_standard = {
+        let mut m = materials.get(&chunk_standard).cloned().unwrap_or_default();
+        m.double_sided = true;
+        materials.add(m)
+    };
     let voxel_stats = super::voxel::spawn_voxel_chunks(
         world,
         &mut meshes,
@@ -691,7 +702,7 @@ pub fn bootstrap(world: &mut World) {
         &spec,
         &grid,
         &voxel,
-        &chunk_standard,
+        &voxel_standard,
         layer_map.as_ref(),
         lod0_step(&spec) as f32,
         chunk_grid(&spec).0,
@@ -951,21 +962,31 @@ fn spawn_chunk_materials(
     edge: f32,
     rows: u32,
 ) -> ChunkLayerMap {
-    let mut layer_textures: Vec<Handle<Image>> = Vec::new();
-    for entry in spec.layers.iter().take(super::splat::LAYER_COUNT) {
+    // `spec.layers` vem CANÓNICA do parse (`canonicalize_layers`: posição =
+    // slot, buracos = ""). Colocar por slot e não por ordem escrita — sem
+    // isto um subconjunto autoral lia a posição como índice de slot e pintava
+    // texturas trocadas.
+    let mut loaded: Vec<(usize, Handle<Image>)> = Vec::new();
+    let mut first = None::<Handle<Image>>;
+    for (slot, entry) in spec.layers.iter().enumerate().take(super::splat::LAYER_COUNT) {
+        if entry.is_empty() {
+            continue;
+        }
         let path = pool_albedo(entry).unwrap_or_else(|| entry.clone());
-        layer_textures.push(load_world_texture(server, world, &path));
+        let handle = load_world_texture(server, world, &path);
+        first.get_or_insert_with(|| handle.clone());
+        loaded.push((slot, handle));
     }
-    // Slots past the authored list read the grass texture (slot 0): an
-    // 8-layer world renders fine with the four heaviest picks.
-    let fallback = layer_textures
-        .first()
-        .cloned()
-        .unwrap_or_else(|| images.add(solid_white_image()));
-    layer_textures.resize(super::splat::LAYER_COUNT, fallback);
+    // Slots sem textura autoral leem a primeira layer (slot 0): um mundo de
+    // 8 layers renderiza bem com os quatro picks mais pesados.
+    let fallback = first.unwrap_or_else(|| images.add(solid_white_image()));
+    let mut layer_textures = vec![fallback.clone(); super::splat::LAYER_COUNT];
+    for (slot, handle) in loaded {
+        layer_textures[slot] = handle;
+    }
     // O leito é pintado pelo splat independentemente da lista autoral —
     // um mundo que não lista `pebbles` continua com fundo de seixo.
-    if spec.layers.get(SLOT_RIVERBED).map(String::as_str) != Some("pebbles") {
+    if layer_textures[SLOT_RIVERBED] == fallback {
         let path = pool_albedo("pebbles").expect("pebbles is a DEFAULT_LAYERS alias");
         layer_textures[SLOT_RIVERBED] = load_world_texture(server, world, &path);
     }
@@ -1012,17 +1033,28 @@ fn spawn_chunk_materials(
         // Watch EVERY layer of the material: a texture that never lands is
         // repointed instead of holding the material unprepared (and the
         // whole chunk invisible). The riverbed falls back to gravel when the
-        // chunk carries it, everything else to the dominant layer.
+        // chunk carries it, everything else to the dominant layer — MAS
+        // nunca para a textura vigiada própria: quando a falhada É a
+        // dominante, apontar a ela própria caía no branco sólido e pintava
+        // o chunk inteiro (fronteira reta contra os vizinhos vivos).
         for (slot_index, &pool_slot) in slots.iter().enumerate() {
-            let repoint = if pool_slot == SLOT_RIVERBED && slots.contains(&SLOT_GRAVEL) {
+            let texture = layer_textures[pool_slot].clone();
+            let repoint = if pool_slot == SLOT_RIVERBED
+                && slots.contains(&SLOT_GRAVEL)
+                && layer_textures[SLOT_GRAVEL] != texture
+            {
                 layer_textures[SLOT_GRAVEL].clone()
             } else {
-                layer_textures[slots[0]].clone()
+                slots
+                    .iter()
+                    .map(|&s| layer_textures[s].clone())
+                    .find(|t| *t != texture)
+                    .unwrap_or_else(|| texture.clone())
             };
             watched.push(WatchedTexture::Layer {
                 material: material.clone(),
                 slot: slot_index,
-                texture: layer_textures[pool_slot].clone(),
+                texture,
                 repoint,
             });
         }

@@ -75,6 +75,40 @@ pub fn pool_albedo(alias: &str) -> Option<String> {
     }
 }
 
+/// Canonical layer list: position = splat slot ([`DEFAULT_LAYERS`] order).
+///
+/// Os pesos do splat e os materiais de chunk são indexados por slot DEFAULT,
+/// mas a lista autoral vinha na ordem escrita — `layers="sand grass"` trocava
+/// relva↔areia no mundo inteiro e um subconjunto lia a posição autoral como
+/// índice de slot (praias de relva). Aliases conhecidos vão para o slot
+/// deles; caminhos de textura fora do pool preenchem os slots livres pela
+/// ordem escrita; duplicados mantêm a primeira ocorrência. Buracos ficam
+/// como `""` (o spawn trata-os como "sem textura autoral") e a lista volta
+/// aparada pelo fim.
+pub fn canonicalize_layers(entries: &[String]) -> Vec<String> {
+    let mut out = vec![String::new(); LAYER_COUNT];
+    let mut free: Vec<usize> = (0..LAYER_COUNT).collect();
+    for entry in entries {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            continue;
+        }
+        let target = match DEFAULT_LAYERS.iter().position(|a| *a == entry) {
+            Some(i) if out[i].is_empty() => Some(i),
+            Some(_) => None, // alias duplicado: mantém o primeiro
+            None => free.first().copied(),
+        };
+        if let Some(i) = target {
+            out[i] = entry.to_string();
+            free.retain(|&f| f != i);
+        }
+    }
+    while out.last().is_some_and(String::is_empty) {
+        out.pop();
+    }
+    out
+}
+
 // Slot indices — the splat planes pack 4 weights per RGBA channel.
 pub const SLOT_GRASS: usize = 0;
 pub const SLOT_VALE_GRASS: usize = 1;
@@ -521,17 +555,25 @@ pub fn weights_at(
     //
     // As arestas seguem o bioma: nos picos a rocha nasce mais cedo e a neve
     // muito mais baixo; no deserto a neve é empurrada para fora do mapa.
+    // ── Shore: sand on lake/river floors, fading out across the shore band.
+    // (Antes do bloco da neve: a supressão de neve submersa precisa das
+    // mesmas máscaras de profundidade que o leito.)
+    let (sand_mask, mud_band, shallow, bed_floor) = shore_weights(x, z, y, ctx);
+
     let rock0 = (0.30 + climate.rock_bias).clamp(0.05, 0.9);
     let stone = smoothstep(rock0, rock0 + 0.22, slope);
     let snow_h = (p.snow_height + climate.snow_bias).clamp(0.0, 1.5);
     let snow = smoothstep(snow_h - 0.06, snow_h + 0.10, h)
         // A neve agarra-se ao plano; a parede fica rocha nua (BOTW).
         * smoothstep(0.34, 0.16, slope)
-        * (1.0 - stone);
+        * (1.0 - stone)
+        // Submersa a neve derrete: num piso de lago fundo acima da linha de
+        // neve o orçamento ficava NEGATIVO (`budget = 1−stone−snow−bed`) e
+        // `scale = budget/used` invertia os pesos restantes — neve/seixo
+        // sem areia nem lama. Os fatores de alagamento do leito
+        // (`bed_floor`, franja rasa `shallow`) suprimem-na como ao bed.
+        * (1.0 - bed_floor.max(shallow));
     let budget = 1.0 - stone - snow;
-
-    // ── Shore: sand on lake/river floors, fading out across the shore band.
-    let (sand_mask, mud_band, shallow, bed_floor) = shore_weights(x, z, y, ctx);
     // O leito profundo entra em MANCHAS de noise — um tapete uniforme lê-se
     // como anel pintado; as manchas alternam seixo ↔ areia/cascalho como um
     // fundo de rio real. A franja húmida em seco ganha seixos salpicados
@@ -550,7 +592,11 @@ pub fn weights_at(
     // deserto — um rio no deserto tem pedras na mesma.
     let desert = smoothstep(0.40, 0.52, n_sand).max(climate.aridity * 0.75);
     let sand = sand_mask * (1.0 - desert) * (1.0 - bed_total);
-    let desert_w = sand_mask * desert;
+    // Duna NUNCA submersa: o noise de 90 m punha desert_sand (o rosado) no
+    // FUNDO dos lagos — o leito é seixo/areia de rio, não deserto. O
+    // comentário acima já prometia isto para o leito; o termo de noise
+    // violava-o em clima húmido.
+    let desert_w = sand_mask * desert * (1.0 - bed_floor.min(1.0));
     // Mud: shallow water + the wet fringe right above the waterline,
     // dithered so it reads as damp patches instead of a painted ring.
     let mud = (shallow * 0.5 + mud_band * 0.45) * (0.5 + 0.5 * n_mud) * (1.0 - stone);
@@ -590,8 +636,10 @@ pub fn weights_at(
 
     // ── Normalize everything that shares `budget`, grass closes the rest.
     // O leito (seixo+cascalho) também consome orçamento — é um override
-    // shore-like, à frente das manchas.
-    let budget = budget - bed_total;
+    // shore-like, à frente das manchas. Clamp defensivo: overrides podem
+    // somar mais que 1 (franja de lama sobre neve residual) — sem o clamp
+    // `scale` ficava negativo e invertia o `rest`.
+    let budget = (budget - bed_total).max(0.0);
     let mut rest = [sand, desert_w, mud, gravel, forest, dirt, trail, dirt_road];
     let used: f32 = rest.iter().sum();
     let scale = if used > budget && used > 0.0 {
@@ -853,7 +901,17 @@ pub struct ChunkSplat {
 /// Bakes one chunk splat from a full weights grid (per-texel [`LAYER_COUNT`]
 /// weights) plus the per-slot aggregate — the two passes of
 /// [`generate_chunk_splats`] split so tests can drive a single chunk.
-fn pack_chunk_splat(weights: &[[f32; LAYER_COUNT]], size: u32, force_rock: bool) -> ChunkSplat {
+///
+/// `force_rock`/`force_bed` garantem que parede e leito sobrevivem à eleição
+/// top-4: um texel a 100% seixo num chunk de relva lê-se relva depois da
+/// renormalização — os dois overrides existem porque essas camadas são as
+/// que o olho apanha (sob água transparente, na parede a triplanar).
+fn pack_chunk_splat(
+    weights: &[[f32; LAYER_COUNT]],
+    size: u32,
+    force_rock: bool,
+    force_bed: bool,
+) -> ChunkSplat {
     let mut sums = [0.0f32; LAYER_COUNT];
     for w in weights {
         for (slot, &weight) in w.iter().enumerate() {
@@ -869,6 +927,13 @@ fn pack_chunk_splat(weights: &[[f32; LAYER_COUNT]], size: u32, force_rock: bool)
     // gate needs a texture to project (see `TerrainChunkParams::from_slots`).
     if force_rock && !top.contains(&SLOT_MOUNTAIN_STONE) {
         top[3] = SLOT_MOUNTAIN_STONE;
+    }
+    // Rock e bed forçados entram do FIM da tabela (os dois picks de menor
+    // peso) — num chunk de gorge com lago ao pé os dois coexistem em vez
+    // de um apagar o outro.
+    if force_bed && !top.contains(&SLOT_RIVERBED) {
+        let pos = if force_rock && top[3] == SLOT_MOUNTAIN_STONE { 2 } else { 3 };
+        top[pos] = SLOT_RIVERBED;
     }
 
     let mut rgba = vec![0u8; (size * size * 4) as usize];
@@ -954,21 +1019,31 @@ pub fn generate_chunk_splats(
             // Chunks com paredes na máscara GARANTEM a mountain_stone entre
             // os 4 slots — sem ela o índice rock do material ficaria -1 e o
             // gate triplanar não tinha textura nenhuma para projetar.
+            // Grelha 4×4 sobre o chunk INTEIRO (±10% para lá da borda, para
+            // a pedra atravessar a emenda): as 4 sondas antigas duplicavam-se
+            // e concentravam-se na metade min — paredes no terço max nunca
+            // eram apanhadas e liam-se plastilina em faixas alinhadas à
+            // grelha de chunks. Primeiro hit sai (chunks de relva não pagam
+            // as 16 sondas).
             let has_core = cliff.is_some_and(|m| {
-                let half_local = chunk_edge * 0.5;
-                (0..4).any(|k| {
-                    m.is_core_at(Vec2::new(
-                        origin.x + half_local * (if k % 2 == 0 { 0.35 } else { 1.3 }),
-                        origin.y + half_local * (if k < 2 { 0.35 } else { 1.3 }),
-                    ))
-                }) || (0..4).any(|k| {
-                    m.is_core_at(Vec2::new(
-                        origin.x + half_local * (if k % 2 == 0 { 1.3 } else { 0.35 }),
-                        origin.y + half_local * (if k < 2 { 1.3 } else { 0.35 }),
-                    ))
-                })
+                for ix in 0..4 {
+                    for iz in 0..4 {
+                        let fx = -0.1 + 0.4 * ix as f32;
+                        let fz = -0.1 + 0.4 * iz as f32;
+                        if m.is_core_at(Vec2::new(
+                            origin.x + chunk_edge * fx,
+                            origin.y + chunk_edge * fz,
+                        )) {
+                            return true;
+                        }
+                    }
+                }
+                false
             });
-            out.push(pack_chunk_splat(&weights, size, has_core));
+            // Um texel a ≥25% seixo lê-se leito: o chunk tem de carregar a
+            // textura mesmo que o agregado do leito perca a eleição top-4.
+            let has_bed = weights.iter().any(|w| w[SLOT_RIVERBED] >= 0.25);
+            out.push(pack_chunk_splat(&weights, size, has_core, has_bed));
         }
     }
     out
@@ -1276,6 +1351,53 @@ mod tests {
         // Below it: none.
         let w = weights_at(0.0, 0.0, 20.0, 1.0, 50.0, &mut ctx);
         assert!(w[SLOT_SNOW_PEAK] < 1e-4, "low: {w:?}");
+    }
+
+    /// Piso de lago FUNDO acima da linha de neve: a neve submersa derrete —
+    /// sem a supressão o orçamento ficava NEGATIVO e `scale = budget/used`
+    /// invertia os pesos restantes (neve/seixo sem areia nem lama).
+    #[test]
+    fn test_snow_melts_on_flooded_texels() {
+        // Espelho a 40 m: um texel a 38.5 m tem h = 0.77 (> neve 0.75) e
+        // profundidade 1.5 m (leito total) — a combinação que partia o budget.
+        let body = WaterBody {
+            kind: WaterKind::Lake,
+            at: Vec2::new(0.0, 0.0),
+            radius: 10.0,
+            carve_radius: 12.5,
+            water_y: 40.0,
+            stations: Vec::new(),
+            surface_y: Vec::new(),
+            water_width: 0.0,
+            half_width: Vec::new(),
+            cascades: Vec::new(),
+        };
+        let boxes_w: Vec<(Bounds, &WaterBody)> = vec![(water_bounds(&body, 4.0), &body)];
+        let boxes_r: Vec<(Bounds, &RoadPath)> = Vec::new();
+        let mut ctx = TexelCtx {
+            params: &params(),
+            shore: 4.0,
+            water_boxes: &boxes_w,
+            road_boxes: &boxes_r,
+            cliff: None,
+        };
+        let w = weights_at(0.0, 0.0, 38.5, 1.0, 50.0, &mut ctx);
+        assert!(
+            w[SLOT_SNOW_PEAK] < 1e-4,
+            "snow must melt underwater: {:?}",
+            w[SLOT_SNOW_PEAK]
+        );
+        assert!(
+            w.iter().all(|v| *v >= -1e-4),
+            "no negative weights on a flooded snow texel: {w:?}"
+        );
+        let sum: f32 = w.iter().sum();
+        assert!((sum - 1.0).abs() < 1e-3, "weights still close to 1: {sum}");
+        assert!(
+            w[SLOT_RIVERBED] + w[SLOT_GRAVEL] > 0.55,
+            "deep flooded floor reads as bed: {:?}",
+            w
+        );
     }
 
     #[test]

@@ -614,9 +614,12 @@ fn respawn_system(
                 if state.timer <= 0.0 {
                     let death_xz = Vec2::new(transform.translation.x, transform.translation.z);
                     let point = nearest_respawn_point(death_xz);
+                    // SUPERFÍCIE RENDERIZADA (paridade com spawners/knockback):
+                    // o sample analítico flutua acima do mesh nas cristas —
+                    // renascia-se a "pairar" sobre os pontos de respawn.
                     let y = terrain
                         .as_deref()
-                        .map(|t| t.sample(point.x, point.y) + 0.1)
+                        .map(|t| t.sample_mesh_surface(point.x, point.y) + 0.1)
                         .unwrap_or(transform.translation.y);
                     transform.translation = Vec3::new(point.x, y, point.y);
                     health.current = health.max;

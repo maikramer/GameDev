@@ -475,13 +475,19 @@ pub struct SunState {
 
 /// Elevação (graus) do sol para o minuto do dia: sobe `max_elevation` ao
 /// meio-dia e desce abaixo do horizonte à noite.
+///
+/// dawn/dusk degenerados não podem produzir NaN: `dawn==dusk` zera o arco
+/// diurno e `dawn=0`/`dusk=1440` zera o noturno — ambos dividiam por 0 e o
+/// NaN propagava-se ao sol, à luz direcional e ao ambiente. 1 min é o menor
+/// arco com sentido; para além do clamp a semântica é a mesma.
 pub fn sun_elevation(minute: f32, dawn: f32, dusk: f32, max_elevation: f32) -> f32 {
     const NIGHT_HALF_ARC: f32 = 25.0;
+    let day_len = (dusk - dawn).max(1.0);
     if minute >= dawn && minute < dusk {
-        let t = (minute - dawn) / (dusk - dawn);
+        let t = (minute - dawn) / day_len;
         (std::f32::consts::PI * t).sin() * max_elevation
     } else {
-        let dusk_len = 24.0 * 60.0 - dusk + dawn;
+        let dusk_len = (24.0 * 60.0 - dusk + dawn).max(1.0);
         let t = if minute >= dusk {
             (minute - dusk) / dusk_len
         } else {
@@ -492,11 +498,14 @@ pub fn sun_elevation(minute: f32, dawn: f32, dusk: f32, max_elevation: f32) -> f
 }
 
 /// Azimute (graus) do sol: avança 180° durante o dia, 180° durante a noite.
+/// Mesmos clamps de arco do [`sun_elevation`] — dawn/dusk degenerados nunca
+/// dividem por 0.
 pub fn sun_azimuth(minute: f32, dawn: f32, dusk: f32, base: f32) -> f32 {
+    let day_len = (dusk - dawn).max(1.0);
     if minute >= dawn && minute < dusk {
-        base + 180.0 * (minute - dawn) / (dusk - dawn)
+        base + 180.0 * (minute - dawn) / day_len
     } else {
-        let dusk_len = 24.0 * 60.0 - dusk + dawn;
+        let dusk_len = (24.0 * 60.0 - dusk + dawn).max(1.0);
         let t = if minute >= dusk {
             (minute - dusk) / dusk_len
         } else {
@@ -522,6 +531,7 @@ pub fn daycycle_drive(
     ambient: Option<ResMut<GlobalAmbientLight>>,
     sun: Res<SunState>,
     mut ambient_color_ref: Local<[f32; 3]>,
+    mut ambient_color_captured: Local<bool>,
 ) {
     let (Some(mut clock), Some(mut ambient)) = (clock, ambient) else {
         return;
@@ -565,12 +575,13 @@ pub fn daycycle_drive(
     let fill = 2.8 * golden + 0.8 * night;
     ambient.brightness = clock.ambient_reference * (scale * (1.0 + fill)).clamp(0.0, 3.0);
     // Cor do ambiente: esfria para azul-profundo à noite (a cor autoral é
-    // capturada no primeiro tick) — folhagem verde sob luz neutra flutua
-    // como recorte colado; sob azul lê-se noturna e as pools quentes
-    // dominam por contraste.
-    if ambient_color_ref[0] == 0.0 && ambient_color_ref[1] == 0.0 {
+    // capturada UMA vez — flag explícita: a sentinela `== 0.0` recapturava
+    // para sempre quando a cor autoral ERA preta/azul-pura (r=g=0), e o
+    // lerp noturno derivava a cor de cada tick em vez de partir dela).
+    if !*ambient_color_captured {
         let c = ambient.color.to_srgba();
         *ambient_color_ref = [c.red, c.green, c.blue];
+        *ambient_color_captured = true;
     }
     // Golden entra no lerp com peso leve: o split quente/frio existe, mas a
     // base da muralha em sombra não pode ficar turva (r13 — transição do
@@ -945,6 +956,36 @@ mod tests {
         let mid = daylight_factor(300.0, 330.0, 1170.0); // dawn ramp
         assert!((0.0..1.0).contains(&mid));
         assert_eq!(daylight_factor(1231.0, 330.0, 1170.0), 0.0); // after dusk ramp
+    }
+
+    /// dawn/dusk degenerados nunca produzem NaN/inf no arco solar — o NaN
+    /// propagava-se à luz direcional e ao ambiente (ronda 2 de bugs).
+    #[test]
+    fn test_sun_arc_survives_degenerate_dawn_dusk() {
+        for (dawn, dusk) in [(330.0, 330.0), (1170.0, 330.0), (0.0, 1440.0), (1440.0, 0.0)] {
+            for minute in [0.0, 60.0, 330.0, 719.5, 1170.0, 1439.0] {
+                let el = sun_elevation(minute, dawn, dusk, 62.0);
+                let az = sun_azimuth(minute, dawn, dusk, 205.0);
+                assert!(
+                    el.is_finite(),
+                    "elevação finita dawn={dawn} dusk={dusk} m={minute}: {el}"
+                );
+                assert!(
+                    az.is_finite(),
+                    "azimute finito dawn={dawn} dusk={dusk} m={minute}: {az}"
+                );
+            }
+        }
+        // O caso patológico real: dawn=0/dusk=1440 zerava o dusk_len e a
+        // meia-noite do relógio dava 0/0.
+        assert!(sun_elevation(0.0, 0.0, 1440.0, 62.0).is_finite());
+        // `daylight_factor` não divide por (dusk−dawn) — locked para não
+        // regredir para uma versão que divida.
+        for (dawn, dusk) in [(330.0, 330.0), (1170.0, 330.0), (0.0, 1440.0)] {
+            for minute in [0.0, 300.0, 600.0, 1200.0, 1439.0] {
+                assert!(daylight_factor(minute, dawn, dusk).is_finite());
+            }
+        }
     }
 
     /// Lei do repo: mesma seed + mesmo índice → mesmo alvo de chuva.

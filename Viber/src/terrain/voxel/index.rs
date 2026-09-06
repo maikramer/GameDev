@@ -45,6 +45,10 @@ pub struct ModIndex {
     origin_z: f32,
     /// Union of every mod's bounds; empty when there are no mods.
     bounds: Bounds3,
+    /// Per-mod bounds snapshot, parallel to the indices stored in `cells`.
+    /// `column_span_at` marches only the candidates' own Y ranges — a few
+    /// meters around the authored feature — instead of the world-wide union.
+    mod_bounds: Vec<Bounds3>,
 }
 
 impl ModIndex {
@@ -76,11 +80,13 @@ impl ModIndex {
             origin_x: -half,
             origin_z: -half,
             bounds: Bounds3::empty(),
+            mod_bounds: Vec::with_capacity(mods.len()),
         };
 
         for (i, m) in mods.iter().enumerate() {
             let b = m.bounds();
             index.bounds = index.bounds.union(b);
+            index.mod_bounds.push(b);
             let (x0, z0) = index.cell_of(b.min.x, b.min.z);
             let (x1, z1) = index.cell_of(b.max.x, b.max.z);
             for cz in z0..=z1 {
@@ -185,11 +191,16 @@ impl ModIndex {
         if candidates.is_empty() {
             return None;
         }
+        // Only the CANDIDATES' own Y ranges: accumulating the index-wide union
+        // made every column of a volumetric region march the whole world
+        // vertically (a cave at −60 m stretched the surface march by its full
+        // drop) at 0.5 m steps.
         let mut lo = ground;
         let mut hi = ground;
-        for &_i in candidates {
-            lo = lo.min(self.bounds.min.y);
-            hi = hi.max(self.bounds.max.y);
+        for &i in candidates {
+            let b = self.mod_bounds[i as usize];
+            lo = lo.min(b.min.y);
+            hi = hi.max(b.max.y);
         }
         Some((lo, hi))
     }
@@ -334,6 +345,38 @@ mod tests {
         let (lo, hi) = idx.column_span_at(10.0, 10.0, 5.0).expect("volumetric");
         assert!(lo <= 5.0, "span must reach the ground at {lo}");
         assert!(hi >= 30.0, "span must clear the mod top, got {hi}");
+    }
+
+    #[test]
+    fn test_column_span_marches_the_candidates_not_the_world_union() {
+        // A cave 60 m under one hill and a floating shelf over another: the
+        // first column must not march the shelf's altitude and the second must
+        // not march the cave's depth — only the union's Y would do that.
+        let mods = vec![
+            boxed(
+                "cave",
+                Vec3::new(-60.0, -60.0, -60.0),
+                Vec3::new(-40.0, -40.0, -40.0),
+            ),
+            boxed(
+                "shelf",
+                Vec3::new(40.0, 120.0, 40.0),
+                Vec3::new(60.0, 130.0, 60.0),
+            ),
+        ];
+        let idx = ModIndex::build(&mods, 512.0, 64.0);
+        let (_, hi) = idx.column_span_at(-50.0, -50.0, 2.0).expect("cave column");
+        assert!(
+            hi < 2.01,
+            "the cave column marched up to {hi} — that is the world union, \
+             not the candidates"
+        );
+        let (lo, hi) = idx.column_span_at(50.0, 50.0, 2.0).expect("shelf column");
+        assert!(
+            lo > 1.99 && hi > 119.0,
+            "the shelf column spanned [{lo}, {hi}] — the floor is the ground \
+             and the ceiling is the shelf, not the world union"
+        );
     }
 
     #[test]

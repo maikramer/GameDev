@@ -233,6 +233,11 @@ fn collect_entities(
                     });
                 }
                 for layer in &spec.layers {
+                    // Lista canónica com buracos (""): slot sem alias
+                    // autoral — nada a auditar.
+                    if layer.is_empty() {
+                        continue;
+                    }
                     // Alias do pool (`grass`) ou caminho cru de textura — a
                     // mesma resolução do bootstrap (`splat::pool_albedo`).
                     let path =
@@ -406,7 +411,101 @@ fn audit_texture(path: &Path, context: &str, issues: &mut Vec<AuditIssue>) {
     match extension.as_str() {
         "png" => check_magic(path, context, b"\x89PNG\r\n\x1a\n", "PNG", issues),
         "jpg" | "jpeg" => check_magic(path, context, b"\xff\xd8\xff", "JPEG", issues),
+        "ktx2" => audit_ktx2(path, context, issues),
+        "webp" => check_webp(path, context, issues),
+        "hdr" => check_magic(path, context, b"#?", "HDR", issues),
+        // .tga não tem magia fiável (o campo de ID é opcional e a assinatura
+        // opcional vive no FIM do ficheiro) — a extensão basta.
+        "tga" => {}
         _ => {}
+    }
+}
+
+/// Lê só os primeiros `n` bytes (cabeçalho) — o audit não abre texturas
+/// inteiras.
+fn read_header(path: &Path, n: u64) -> Option<Vec<u8>> {
+    use std::io::Read as _;
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut buffer = Vec::new();
+    file.take(n).read_to_end(&mut buffer).ok()?;
+    Some(buffer)
+}
+
+/// KTX2: magia de 12 bytes + cabeçalho de 80; `vkFormat` (u32 LE @12) e
+/// `supercompressionScheme` (u32 LE @44; 0 none / 1 BasisLZ / 2 Zstandard —
+/// discriminantes conferidos na crate `ktx2` 0.5).
+const KTX2_MAGIC: [u8; 12] = [
+    0xAB, 0x4B, 0x54, 0x58, 0x20, 0x32, 0x30, 0xBB, 0x0D, 0x0A, 0x1A, 0x0A,
+];
+/// Família ETC2/EAC crua: VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK (147 = 0x93) até
+/// VK_FORMAT_EAC_R11G11_SNORM_BLOCK (156 = 0x9C) — idem crate `ktx2` 0.5,
+/// enum `Format`. UASTC costuma declarar VK_FORMAT_R8G8B8A8_* (37) e passa.
+const KTX2_ETC2_EAC: std::ops::RangeInclusive<u32> = 147..=156;
+
+/// O `.ktx2` merece sniffing próprio: ETC1S/BasisLZ é FATAL na engine (o
+/// Bevy 0.19 não descomprime BasisLZ — regra "nunca etc1s") e entrava como
+/// falso negativo, ao contrário do análogo GLB (Draco/Basis verificados).
+fn audit_ktx2(path: &Path, context: &str, issues: &mut Vec<AuditIssue>) {
+    let Some(bytes) = read_header(path, 48) else {
+        return;
+    };
+    if bytes.len() < 12 || bytes[..12] != KTX2_MAGIC {
+        issues.push(AuditIssue {
+            severity: Severity::Warning,
+            message: format!(
+                "ktx2 inválido: {} não tem a magia KTX2 (truncado ou não é KTX2?) — {context}",
+                path.display()
+            ),
+        });
+        return;
+    }
+    let vk_format = u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]);
+    // O scheme só se lê com os 48 bytes do cabeçalho presentes.
+    let scheme = (bytes.len() >= 48)
+        .then(|| u32::from_le_bytes([bytes[44], bytes[45], bytes[46], bytes[47]]));
+    let problem = if vk_format == 0 {
+        // VK_FORMAT_UNDEFINED: Basis Universal — o formato real decide-se na
+        // transcodificação; é o caminho do etc1s/BasisLZ.
+        Some(
+            "Basis Universal (vkFormat 0 — ETC1S/BasisLZ) — a engine (Bevy 0.19) não descomprime BasisLZ; reexporta em UASTC (`text3d finish`)"
+                .to_string(),
+        )
+    } else if KTX2_ETC2_EAC.contains(&vk_format) {
+        Some(format!(
+            "ETC2/EAC cru (vkFormat {vk_format}) — desktop não amostra ETC2; reexporta em UASTC (`text3d finish`)"
+        ))
+    } else if scheme == Some(1) {
+        Some(
+            "supercompressão BasisLZ (scheme 1) — a engine (Bevy 0.19) não descomprime BasisLZ; reexporta em UASTC (`text3d finish`)"
+                .to_string(),
+        )
+    } else {
+        None
+    };
+    if let Some(problem) = problem {
+        issues.push(AuditIssue {
+            severity: Severity::Warning,
+            message: format!(
+                "ktx2 não suportado: {} usa {problem} — {context}",
+                path.display()
+            ),
+        });
+    }
+}
+
+/// WebP é um contentor RIFF: "RIFF" + tamanho (4 bytes) + "WEBP" @8.
+fn check_webp(path: &Path, context: &str, issues: &mut Vec<AuditIssue>) {
+    let Some(bytes) = read_header(path, 12) else {
+        return;
+    };
+    if bytes.len() < 12 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WEBP" {
+        issues.push(AuditIssue {
+            severity: Severity::Warning,
+            message: format!(
+                "webp inválido: {} não tem a magia RIFF….WEBP (corrompido ou PNG/JPEG guardado com a extensão errada?) — {context}",
+                path.display()
+            ),
+        });
     }
 }
 
@@ -714,5 +813,87 @@ mod tests {
                 .iter()
                 .all(|i| i.severity == Severity::Missing)
         );
+    }
+
+    fn write_bytes(dir: &tempfile::TempDir, name: &str, bytes: &[u8]) -> PathBuf {
+        let path = dir.path().join(name);
+        std::fs::write(&path, bytes).expect("escrever fixture");
+        path
+    }
+
+    /// Cabeçalho KTX2 mínimo (12 magia + 32 campos + scheme @44 = 48 bytes).
+    fn ktx2_header(vk_format: u32, scheme: u32) -> Vec<u8> {
+        let mut bytes = KTX2_MAGIC.to_vec();
+        bytes.extend_from_slice(&vk_format.to_le_bytes()); // vkFormat @12
+        bytes.extend_from_slice(&1u32.to_le_bytes()); // typeSize
+        bytes.extend_from_slice(&256u32.to_le_bytes()); // pixelWidth
+        bytes.extend_from_slice(&256u32.to_le_bytes()); // pixelHeight
+        bytes.extend_from_slice(&1u32.to_le_bytes()); // pixelDepth
+        bytes.extend_from_slice(&1u32.to_le_bytes()); // layerCount
+        bytes.extend_from_slice(&1u32.to_le_bytes()); // faceCount
+        bytes.extend_from_slice(&1u32.to_le_bytes()); // levelCount
+        bytes.extend_from_slice(&scheme.to_le_bytes()); // supercompressionScheme @44
+        bytes
+    }
+
+    #[test]
+    fn test_ktx2_etc1s_and_etc2_flagged_uastc_passes() {
+        let dir = tempfile::tempdir().expect("tmpdir");
+        // ETC1S/BasisLZ: vkFormat 0 (UNDEFINED — Basis Universal) → warn.
+        let mut issues = Vec::new();
+        audit_texture(
+            &write_bytes(&dir, "etc1s.ktx2", &ktx2_header(0, 1)),
+            "teste",
+            &mut issues,
+        );
+        assert_eq!(issues.len(), 1, "etc1s tem de ser apanhado: {issues:?}");
+        // ETC2 cru (147 = VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK) → warn.
+        let mut issues = Vec::new();
+        audit_texture(
+            &write_bytes(&dir, "etc2.ktx2", &ktx2_header(147, 0)),
+            "teste",
+            &mut issues,
+        );
+        assert_eq!(issues.len(), 1, "ETC2 cru tem de ser apanhado: {issues:?}");
+        // UASTC (37 = VK_FORMAT_R8G8B8A8_UNORM, scheme Zstandard) → limpo.
+        let mut issues = Vec::new();
+        audit_texture(
+            &write_bytes(&dir, "uastc.ktx2", &ktx2_header(37, 2)),
+            "teste",
+            &mut issues,
+        );
+        assert!(issues.is_empty(), "UASTC passa limpo: {issues:?}");
+        // Magia errada (PNG guardado como .ktx2) → warn.
+        let mut issues = Vec::new();
+        audit_texture(
+            &write_bytes(&dir, "falso.ktx2", b"\x89PNG\r\n\x1a\n"),
+            "teste",
+            &mut issues,
+        );
+        assert_eq!(issues.len(), 1, "magia errada tem de ser apanhada");
+    }
+
+    #[test]
+    fn test_webp_and_hdr_magic() {
+        let dir = tempfile::tempdir().expect("tmpdir");
+        let mut webp = b"RIFF\x24\x00\x00\x00".to_vec();
+        webp.extend_from_slice(b"WEBP");
+        let mut issues = Vec::new();
+        audit_texture(&write_bytes(&dir, "ok.webp", &webp), "teste", &mut issues);
+        assert!(issues.is_empty(), "webp válido passa: {issues:?}");
+        let mut issues = Vec::new();
+        audit_texture(
+            &write_bytes(&dir, "falso.webp", b"\x89PNG\r\n\x1a\n"),
+            "teste",
+            &mut issues,
+        );
+        assert_eq!(issues.len(), 1, "webp sem RIFF/WEBP tem de ser apanhado");
+        let mut issues = Vec::new();
+        audit_texture(
+            &write_bytes(&dir, "ok.hdr", b"#?RADIANCE\n\n-Y 4 3\n"),
+            "teste",
+            &mut issues,
+        );
+        assert!(issues.is_empty(), "hdr válido passa: {issues:?}");
     }
 }

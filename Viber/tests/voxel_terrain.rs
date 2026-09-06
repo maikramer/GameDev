@@ -201,6 +201,7 @@ fn test_the_tunnel_actually_meshes_into_geometry() {
                 texture_tile_size: spec.texture_tile_size,
                 tint: spec.chunk_tint(),
                 max_height: spec.max_height,
+                uses_layer_material: true,
             };
             let density = |p: Vec3| field.density(&grid, p);
             if let Some(data) = build_voxel_mesh(&density, &params) {
@@ -262,6 +263,7 @@ fn test_two_runs_of_the_same_world_are_byte_identical() {
         texture_tile_size: spec.texture_tile_size,
         tint: spec.chunk_tint(),
         max_height: spec.max_height,
+        uses_layer_material: true,
     };
     let mesh_a = build_voxel_mesh(&|p| field_a.density(&grid_a, p), &params)
         .expect("chunk meshes (a)");
@@ -293,6 +295,7 @@ fn test_the_tunnel_mesh_has_no_degenerate_triangles() {
         texture_tile_size: spec.texture_tile_size,
         tint: spec.chunk_tint(),
         max_height: spec.max_height,
+        uses_layer_material: true,
     };
     let data = build_voxel_mesh(&|p| field.density(&grid, p), &params)
         .expect("chunk meshes");
@@ -349,6 +352,7 @@ fn test_a_fully_interior_tunnel_chunk_is_watertight() {
                     texture_tile_size: spec.texture_tile_size,
                     tint: spec.chunk_tint(),
                     max_height: spec.max_height,
+                    uses_layer_material: true,
                 };
                 let Some(data) = build_voxel_mesh(&|p| field.density(&grid, p), &params)
                 else {
@@ -473,6 +477,7 @@ fn test_folded_cliff_walls_have_no_holes_and_bounded_flips() {
                     texture_tile_size: spec.texture_tile_size,
                     tint: spec.chunk_tint(),
                     max_height: spec.max_height,
+                    uses_layer_material: true,
                 };
                 let Some(data) = build_voxel_mesh(&|p| field.density(&grid, p), &params) else {
                     continue;

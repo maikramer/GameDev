@@ -307,6 +307,11 @@ pub fn preset(name: &str) -> ResolvedEmitter {
     }
 }
 
+/// Warn 1×/processo: o pedido (`rate × vida-máx`) estourou o teto declarativo
+/// do mesh — partículas extra nascem mas nunca são desenhadas. Dedupe global
+/// (padrão "warn 1x" do repo) porque `resolve` corre por emissor.
+static CAPACITY_WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Apply a world's `particle-emitter` overrides on top of the preset.
 pub fn resolve(spec: &ParticleSpec) -> ResolvedEmitter {
     let mut resolved = preset(&spec.preset);
@@ -328,6 +333,21 @@ pub fn resolve(spec: &ParticleSpec) -> ResolvedEmitter {
     }
     if let Some(radius) = spec.shape_radius {
         resolved.radius = radius.max(0.0);
+    }
+    // Teto mais apertado primeiro: emissores ambiente (teto 1024) só
+    // truncam acima disso, mas o autor precisa de saber do limite do
+    // `<ParticleSystem>` na mesma — a mensagem nomeia os dois.
+    let required =
+        (resolved.emission_rate * resolved.life.1).ceil() as usize + CAPACITY_HEADROOM;
+    if required > EMITTER_MESH_CAP
+        && !CAPACITY_WARNED.swap(true, std::sync::atomic::Ordering::Relaxed)
+    {
+        warn!(
+            "particle '{}': rate×vida-máx pede ~{required} quads e o mesh do emissor tem \
+             teto {EMITTER_MESH_CAP} (<ParticleSystem>) / {AMBIENT_MESH_CAP} (ambiente) — \
+             baixe emission-rate ou start-life-max, senão o render trunca",
+            spec.preset
+        );
     }
     resolved
 }
@@ -364,7 +384,7 @@ impl EmitterSim {
     /// Derivar da posição (como o spawner faz) mantém o determinismo.
     pub fn seeded(spec: &ParticleSpec, position: Vec3) -> Self {
         let resolved = resolve(spec);
-        let capacity = ((resolved.emission_rate * resolved.life.1).ceil() as usize + 16).min(1024);
+        let capacity = capacity_quads(resolved.emission_rate, resolved.life.1, AMBIENT_MESH_CAP);
         let position_seed = (position.x.to_bits() as u64)
             ^ (position.y.to_bits() as u64) << 21
             ^ (position.z.to_bits() as u64) << 42;
@@ -569,9 +589,36 @@ pub fn particle_mesh(capacity: usize) -> bevy::mesh::Mesh {
     mesh
 }
 
-/// Fixed quad budget for one emitter mesh (bounds GPU buffer size).
+// ── capacidade do emissor (UMA fórmula) ─────────────────────────────────
+// O mesh do emissor é de capacidade FIXA (nunca realocado — ver
+// [`write_billboards`]): um sim maior que o mesh desenha só uma fatia das
+// partículas. A fórmula vivia DUPLICADA com folgas/tetos diferentes
+// (`<ParticleSystem>` +8/512 vs emissores ambiente +16/1024) e um XML com
+// emission-rate alto truncava o render de forma diferente consoante o site
+// que spawna o emissor — agora todos passam por aqui, com o teto por site
+// como argumento (os tetos mantêm-se: 512 declarativo, 1024 ambiente).
+
+/// Folga sobre o pico teórico `rate × vida-máx` (partículas nascidas no
+/// mesmo frame em que as mais velhas ainda vivem).
+const CAPACITY_HEADROOM: usize = 16;
+/// Piso do mesh — rate 0 (sim de burst) nunca dá mesh vazio.
+const CAPACITY_FLOOR: usize = 8;
+/// Teto do mesh de um `<ParticleSystem>` declarativo (bounds GPU buffer).
+pub const EMITTER_MESH_CAP: usize = 512;
+/// Teto dos emissores ambiente da engine (foam/mist/chuva — rate alto).
+pub const AMBIENT_MESH_CAP: usize = 1024;
+
+/// Quad budget de um emissor contínuo: `rate × vida-máx` arredondado para
+/// cima + folga, dentro do teto do site. Função pura para teste.
+pub fn capacity_quads(rate: f32, life_max: f32, cap: usize) -> usize {
+    ((rate * life_max).ceil() as usize + CAPACITY_HEADROOM)
+        .max(CAPACITY_FLOOR)
+        .min(cap)
+}
+
+/// `<ParticleSystem>` (teto 512) — assinatura mantida para `recipes::spawn`.
 pub fn emitter_capacity(resolved: &ResolvedEmitter) -> usize {
-    ((resolved.emission_rate * resolved.life.1).ceil() as usize + 8).clamp(8, 512)
+    capacity_quads(resolved.emission_rate, resolved.life.1, EMITTER_MESH_CAP)
 }
 
 // ── sprite radial suave (WS-A) ──────────────────────────────────────────
@@ -1128,5 +1175,30 @@ mod tests {
         let mut bad_spec = fire_spec();
         bad_spec.shape_radius = Some(-3.0);
         assert_eq!(resolve(&bad_spec).radius, 0.0);
+    }
+
+    /// A capacidade do emissor é UMA fórmula partilhada pelos três sites
+    /// (`<ParticleSystem>`, `spawn_looping`, `spawn_looping_in_world`).
+    /// Antes viviam DUAS (`+8`/512 vs `+16`/1024) e o mesmo XML truncava o
+    /// render de forma diferente consoante o caminho que spawna o emissor.
+    #[test]
+    fn test_capacity_quads_is_the_single_shared_formula() {
+        // Fórmula: rate × vida-máx arredondado para cima + folga fixa.
+        assert_eq!(
+            capacity_quads(20.0, 1.0, EMITTER_MESH_CAP),
+            20 + CAPACITY_HEADROOM
+        );
+        // Piso: rate 0 (sim de burst reutiliza `seeded`) nunca dá mesh vazio.
+        assert_eq!(capacity_quads(0.0, 1.0, AMBIENT_MESH_CAP), CAPACITY_HEADROOM);
+        // Tetos POR SITE mantidos: declarativo 512, ambiente 1024.
+        assert_eq!(capacity_quads(10_000.0, 1.0, EMITTER_MESH_CAP), EMITTER_MESH_CAP);
+        assert_eq!(capacity_quads(10_000.0, 1.0, AMBIENT_MESH_CAP), AMBIENT_MESH_CAP);
+        // O rain da engine (500/s × 0.85 s) cabe no teto declarativo — mundos
+        // atuais não disparam o warn de truncamento.
+        assert!(capacity_quads(500.0, 0.85, EMITTER_MESH_CAP) <= EMITTER_MESH_CAP);
+        // A assinatura antiga (usada por `recipes::spawn`) respeita o teto.
+        let mut big = preset("fire");
+        big.emission_rate = 10_000.0;
+        assert_eq!(emitter_capacity(&big), EMITTER_MESH_CAP);
     }
 }

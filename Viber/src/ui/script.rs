@@ -26,7 +26,7 @@ use super::runtime::{
     UiBar, UiClasses, UiClicks, UiCooldown, UiDisabled, UiInlineStyle, UiRegistry, UiStyleDirty,
 };
 use super::style::parse_declarations;
-use super::widgets::{UiCheck, UiFocusedInput, UiInput};
+use super::widgets::{UiCheck, UiFocusedInput, UiInput, normalized_range};
 
 /// A UI mutation queued by a script, applied once per frame.
 #[derive(Debug, Clone)]
@@ -474,6 +474,7 @@ pub fn apply_ui_commands(
     mut inline: Query<&mut UiInlineStyle>,
     mut text: Query<&mut Text>,
     mut visibility: Query<&mut Visibility>,
+    mut fades: Query<&mut super::fade::UiFade>,
     mut widgets: Query<
         AnyOf<(
             &'static mut UiBar,
@@ -555,11 +556,22 @@ pub fn apply_ui_commands(
                 }
                 // A slider clamps the raw number to its own min/max.
                 if let Some(mut slider) = slider {
-                    slider.value = value.clamp(slider.min, slider.max);
+                    // Defesa em profundidade: o parse já normalizou, mas
+                    // `clamp` asserta com um intervalo cru.
+                    let (min, max) = normalized_range(slider.min, slider.max);
+                    slider.value = value.clamp(min, max);
                 }
             }
             UiCommand::SetVisible { visible, .. } => {
-                if let Ok(mut visibility) = visibility.get_mut(entity) {
+                // Um elemento com fade não tem `Visibility` própria estável: o
+                // `drive_ui_fades` repõe Hidden no frame seguinte (um fade sem
+                // bind nasce `shown=false` para sempre), por isso escrever por
+                // cima nunca o faria APARECER. O caminho do fade é o mesmo
+                // interruptor — `shown` — e o alpha caminha sozinho. Com bind,
+                // o binding continua a mandar: o fade é dele.
+                if let Ok(mut fade) = fades.get_mut(entity) {
+                    fade.shown = visible;
+                } else if let Ok(mut visibility) = visibility.get_mut(entity) {
                     *visibility = if visible {
                         Visibility::Inherited
                     } else {

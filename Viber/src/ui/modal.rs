@@ -40,11 +40,14 @@ pub struct UiModal {
 #[derive(Debug, Default, Resource)]
 pub struct UiModalsOpen {
     pub open: Vec<String>,
+    /// Modais SEM `id`: não entram em `open` (não há nome para listar), mas
+    /// roubam input ao gameplay na mesma — contam em [`UiModalsOpen::any`].
+    pub anonymous: usize,
 }
 
 impl UiModalsOpen {
     pub fn any(&self) -> bool {
-        !self.open.is_empty()
+        !self.open.is_empty() || self.anonymous > 0
     }
 
     pub fn is_open(&self, id: &str) -> bool {
@@ -159,6 +162,7 @@ pub fn drive_ui_modals(
     mut modals: Query<(&mut UiModal, &mut Visibility, Option<&UiId>)>,
 ) {
     let escape = typing.0.is_none() && keys.just_pressed(KeyCode::Escape);
+    let mut anonymous = 0usize;
     for (mut modal, mut visibility, id) in &mut modals {
         let toggled = typing.0.is_none() && keys.just_pressed(modal.key);
         // Escape only ever closes: opening every modal with one key would be a
@@ -175,6 +179,9 @@ pub fn drive_ui_modals(
         if *visibility != wanted {
             *visibility = wanted;
         }
+        if id.is_none() && modal.open {
+            anonymous += 1;
+        }
         if let Some(id) = id {
             let listed = open.open.iter().position(|o| *o == id.0);
             match (modal.open, listed) {
@@ -186,6 +193,9 @@ pub fn drive_ui_modals(
             }
         }
     }
+    // Modais sem id não entram em `open`, mas um menu em ecrã inteiro rouba
+    // input ao gameplay seja qual for o id — contam em `any`.
+    open.anonymous = anonymous;
 }
 
 /// Seeds each group's selection from the first page authored in it, so a menu
@@ -213,14 +223,16 @@ pub fn seed_ui_tabs(
     }
 }
 
-/// Applies clicks to tab groups, then syncs button classes and page display.
+/// Applies clicks to tab groups and mirrors the selection into button classes.
+///
+/// O `display` das páginas é sincronizado por [`sync_tab_pages`], DEPOIS do
+/// re-estilo — ver o doc aí em baixo.
 #[allow(clippy::type_complexity)]
 pub fn drive_ui_tabs(
     mut commands: Commands,
     mut tabs: ResMut<UiTabs>,
     clicked: Query<(&Interaction, &UiTabButton), Changed<Interaction>>,
     mut buttons: Query<(Entity, &UiTabButton, &mut UiClasses)>,
-    mut pages: Query<(&UiTabPage, &mut Node)>,
 ) {
     for (interaction, button) in &clicked {
         if *interaction == Interaction::Pressed {
@@ -238,10 +250,23 @@ pub fn drive_ui_tabs(
             commands.entity(entity).insert(UiStyleDirty);
         }
     }
+}
+
+/// Keeps every tab page's `display` in step with its group's selection.
+///
+/// Corre DEPOIS de `apply_ui_styles` (UiSet::Style), no padrão do
+/// `sync_check_ticks`: o re-estilo recalcula o `Node` do zero (`apply_fresh`
+/// repõe `display: Flex` quando o CSS não declara `display`) e desfaria um
+/// `display: none` escrito em UiSet::Script — cada re-estilo global (resize,
+/// classe num ancestral) mostrava as páginas inativas durante 1 frame. A
+/// escrita é idempotente: só toca no nó quando o valor muda.
+///
+/// `display: none` rather than `Visibility::Hidden`: an inactive page must
+/// not take part in layout, or the panel sizes itself to the tallest tab and
+/// every page floats in a too-large box.
+#[allow(clippy::type_complexity)]
+pub fn sync_tab_pages(tabs: Res<UiTabs>, mut pages: Query<(&UiTabPage, &mut Node)>) {
     for (page, mut node) in &mut pages {
-        // `display: none` rather than `Visibility::Hidden`: an inactive page
-        // must not take part in layout, or the panel sizes itself to the
-        // tallest tab and every page floats in a too-large box.
         let wanted = if tabs.selected(&page.group) == Some(page.tab.as_str()) {
             Display::Flex
         } else {
@@ -439,6 +464,7 @@ mod tests {
         world.init_resource::<ButtonInput<KeyCode>>();
         world.insert_resource(UiModalsOpen {
             open: vec!["menu".into()],
+            ..Default::default()
         });
         // Spawned in REVERSE author order on purpose: entity ids are recycled
         // by Bevy, so only `UiOrder` may decide what "the next tab" means.
@@ -536,6 +562,17 @@ mod tests {
         assert!(open.any());
         assert!(open.is_open("menu"));
         assert!(!open.is_open("shop"));
+    }
+
+    #[test]
+    fn test_any_counts_idless_modals() {
+        // Um modal sem `id` não entra em `open`, mas rouba input ao gameplay
+        // na mesma — `any` é o que o espelho `MenusOpen` consulta.
+        let mut open = UiModalsOpen::default();
+        open.anonymous = 1;
+        assert!(open.any(), "um modal sem id também é um menu aberto");
+        open.anonymous = 0;
+        assert!(!open.any());
     }
 
     #[test]

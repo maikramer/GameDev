@@ -28,6 +28,10 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULT_TTL_SECS: u64 = 300;
 /// Intervalo de polling do `claim --wait` (s).
 const WAIT_POLL: Duration = Duration::from_secs(2);
+/// "Restante" reportado quando o lease.json existe mas ainda não tem
+/// conteúdo (outro claim entre o `create_new` e a escrita atómica): curto de
+/// propósito, para o poll do `claim --wait` re-tentar depressa.
+const LEASE_PENDING: Duration = Duration::from_millis(200);
 
 // ---------------------------------------------------------------- paths
 
@@ -282,7 +286,10 @@ impl SessionPaths {
     }
 
     fn try_claim(&self, owner: &str, ttl: Duration) -> Result<ClaimOutcome> {
-        // Lease expirado (ou corrupto = escrita interrompida) → rouba.
+        // Lease expirado → rouba. Ficheiro não-parseável NÃO se remove: com
+        // escrita atómica (`write_atomic` via rename) um lease sem conteúdo
+        // só existe no intervalo entre o `create_new` e a escrita — outro
+        // processo está A MEIO do claim, e apagar era roubar-lho (TOCTOU).
         if let Some(lease) = self.read_lease() {
             let remaining = lease.expires_at_ms.saturating_sub(now_ms());
             if remaining > 0 {
@@ -318,7 +325,15 @@ impl SessionPaths {
                 }
             }
         } else if self.lease_file().exists() {
-            let _ = std::fs::remove_file(self.lease_file());
+            // Presente mas não-parseável (vazio ou JSON quebrado): o dono
+            // legítimo está a meio da escrita (ou o ficheiro está
+            // verdadeiramente corrupto — na dúvida, NUNCA remover aqui).
+            // Busy com retry curto; o chamador tem a lógica de exit 3 e o
+            // `claim --wait` re-tenta quando o conteúdo chegar.
+            return Ok(ClaimOutcome::Busy {
+                owner: "?".into(),
+                remaining: LEASE_PENDING,
+            });
         }
         let lease = Lease {
             owner: owner.to_string(),
@@ -520,14 +535,43 @@ mod tests {
     }
 
     #[test]
-    fn test_corrupt_lease_is_treated_as_free() {
-        let (_dir, paths) = tmp_session("corrupt");
+    fn test_unparseable_lease_is_busy_and_survives() {
+        let (_dir, paths) = tmp_session("unparseable");
         paths.ensure_dir().unwrap();
+        // Ficheiro VAZIO = `create_new` de outro claim a meio (a escrita
+        // atómica ainda não promoveu o conteúdo) — NÃO pode ser roubado:
+        // busy, com o ficheiro intacto para o dono terminar.
+        std::fs::write(paths.lease_file(), "").unwrap();
+        let claim = paths
+            .claim("agente-b", Duration::from_secs(60), None)
+            .expect("claim devolve (sem wait)");
+        assert!(
+            matches!(claim, ClaimOutcome::Busy { .. }),
+            "lease vazio é boot a meio → ocupado, não livre"
+        );
+        assert!(paths.lease_file().exists(), "o claim não apaga o lease");
+        // JSON quebrado (não vazio): com escrita atómica não devia existir,
+        // mas o lado seguro é o mesmo — busy, nunca remoção.
         std::fs::write(paths.lease_file(), "{quebrado").unwrap();
         let claim = paths
-            .claim("agente", Duration::from_secs(60), None)
-            .expect("claim sobre lease corrupto");
-        assert!(matches!(claim, ClaimOutcome::Acquired { .. }));
+            .claim("agente-b", Duration::from_secs(60), None)
+            .expect("claim devolve (sem wait)");
+        assert!(
+            matches!(claim, ClaimOutcome::Busy { .. }),
+            "lease não-parseável → ocupado"
+        );
+        assert!(paths.lease_file().exists());
+        // E o `claim --wait` sai limpo quando o boot a meio termina: o dono
+        // escreve o conteúdo e o wait re-tenta até o lease expirar.
+        std::fs::write(
+            paths.lease_file(),
+            r#"{"owner":"agente-a","pid":1,"expires_at_ms":0}"#,
+        )
+        .unwrap();
+        let stolen = paths
+            .claim("agente-b", Duration::from_secs(60), None)
+            .expect("claim rouba lease parseável expirado");
+        assert!(matches!(stolen, ClaimOutcome::Acquired { .. }));
     }
 
     #[test]

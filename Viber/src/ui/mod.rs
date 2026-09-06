@@ -161,6 +161,11 @@ impl bevy::app::Plugin for UiPlugin {
                     runtime::apply_ui_styles,
                     runtime::sync_ui_bars,
                     runtime::sync_ui_cooldowns,
+                    // Tab pages are owned by the selection, not by the
+                    // cascade: the re-style resets `display` (apply_fresh),
+                    // so their sync runs after it — same reason the check
+                    // ticks and slider fills live below.
+                    modal::sync_tab_pages,
                     // Interactive widgets run after the style pass: they read
                     // fresh Interaction state and write Node data (slider fill,
                     // input mirror) the cascade must not immediately overwrite.

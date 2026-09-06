@@ -407,7 +407,6 @@ pub fn compute_placements(
     };
     let scale_span = spec.scale_min.max(spec.scale_max).max(0.0);
     let test_radius = footprint * scale_span;
-    let axis_span = spec.scale_axis_min.max(spec.scale_axis_max).max(0.0);
     // Anel de pegada: a extensão FÍSICA do prop manda, `avoid-overlaps` não —
     // um degrau a um metro do tronco derruba a árvore independentemente do
     // overlap.
@@ -540,9 +539,15 @@ pub fn compute_placements(
             } else {
                 0
             };
-            // Registra o disco real (escala conhecida) para os grupos seguintes.
+            // Registra o disco REAL da instância (escala conhecida: `scale_u`
+            // × o maior eixo XZ amostrado) para os grupos seguintes. Usar o
+            // produto máximo em ambas as mãos fazia o disco registado exceder
+            // o testado quando `scale-axis-max > 1` — rejeições dependentes
+            // da ordem do XML, contra o contrato "o teste usa footprint ×
+            // scale-max (conservador); o registo usa a escala real".
             if footprint > 0.0 {
-                occupancy.register(pos.x, pos.y, footprint * scale_u * axis_span);
+                occupancy
+                    .register(pos.x, pos.y, footprint * scale_u * axis.x.max(axis.z));
             }
             // Y de assentamento: plantas aquáticas À SUPERFÍCIE da água
             // (VibeGame "in-water: só superfície do lago, Y = waterY"), nunca

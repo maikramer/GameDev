@@ -188,6 +188,19 @@ pub struct CliffBand {
     pub talus_angle: f32,
 }
 
+/// Authored run of the band in meters: `width`, or `height/tan(angle)` when
+/// both are authored. Feeds the probe offsets and the wobble amplitude —
+/// authored numbers, so it never depends on the grid.
+fn authored_run(spec: &CliffSpec, texel: f32) -> f32 {
+    match (spec.height, spec.angle) {
+        (Some(h), Some(a)) if h.is_finite() && h > 0.0 => {
+            let t = a.to_radians().tan().abs().max(1e-2);
+            (h / t).max(min_effective(1.0, texel))
+        }
+        _ => spec.width,
+    }
+}
+
 impl CliffBand {
     /// Longest talus run anywhere on the band.
     pub fn talus_run_max(&self) -> f32 {
@@ -207,6 +220,12 @@ impl CliffBand {
     /// same spacing, same four probes, same side rule, same seeded harmonics.
     /// Worlds keep the walls they were authored with; only the third
     /// dimension is new.
+    ///
+    /// The geometry half (stations, widths, columns) is height-independent
+    /// and resolved once. Every terrain probe lives in
+    /// [`Self::probe_heights`], which `build` runs exactly once — and which
+    /// the bootstrap may run again when a later pass (sharpen) rewrites the
+    /// ground under an already-resolved band.
     pub fn build(spec: &CliffSpec, base: &dyn HeightField, texel: f32) -> Option<Self> {
         if spec.path.len() < 2 || !spec.width.is_finite() || spec.width <= 0.0 {
             return None;
@@ -227,67 +246,9 @@ impl CliffBand {
         // angle at or past 90° is now meaningful — it is an overhang — so the
         // run is taken from the absolute tangent and the lean is applied by
         // the profile.
-        let base_width = match (spec.height, spec.angle) {
-            (Some(h), Some(a)) if h.is_finite() && h > 0.0 => {
-                let t = a.to_radians().tan().abs().max(1e-2);
-                (h / t).max(min_effective(1.0, texel))
-            }
-            _ => spec.width,
-        };
+        let base_width = authored_run(spec, texel);
         if !base_width.is_finite() || base_width <= 0.0 {
             return None;
-        }
-
-        let inner_off = texel * 1.5;
-        let outer_off = base_width + texel * 2.0;
-        let last = stations.len() - 1;
-        let mut normals = Vec::with_capacity(stations.len());
-        let (mut ip, mut op_, mut im, mut om) = (
-            Vec::with_capacity(stations.len()),
-            Vec::with_capacity(stations.len()),
-            Vec::with_capacity(stations.len()),
-            Vec::with_capacity(stations.len()),
-        );
-        for (i, st) in stations.iter().enumerate() {
-            let n = segment_left(&stations, if i == last { i - 1 } else { i });
-            normals.push(n);
-            ip.push(base.sample(st.x + n.x * inner_off, st.y + n.y * inner_off));
-            op_.push(base.sample(st.x + n.x * outer_off, st.y + n.y * outer_off));
-            im.push(base.sample(st.x - n.x * inner_off, st.y - n.y * inner_off));
-            om.push(base.sample(st.x - n.x * outer_off, st.y - n.y * outer_off));
-        }
-
-        let mean = |v: &[f32]| v.iter().sum::<f32>() / v.len().max(1) as f32;
-        let crest_higher_plus = mean(&ip) >= mean(&im);
-        let (mut top_y, mut bot_y, drop_sign) = match spec.side {
-            CliffSide::Left => (ip, op_, 1.0f32),
-            CliffSide::Right => (im, om, -1.0f32),
-            CliffSide::Auto if crest_higher_plus => (ip, om, -1.0f32),
-            CliffSide::Auto => (im, op_, 1.0f32),
-        };
-
-        if let Some(h) = spec.height.filter(|h| h.is_finite() && *h > 0.0) {
-            for i in 0..bot_y.len() {
-                bot_y[i] = bot_y[i].min(top_y[i] - h);
-            }
-        }
-
-        // Crest notches — one-sided dips, scaled by the LOCAL drop.
-        if spec.notches > 0.0 {
-            let (n1p, n2p) = (
-                hash01(spec.seed, 6, 23) * std::f32::consts::TAU,
-                hash01(spec.seed, 7, 29) * std::f32::consts::TAU,
-            );
-            let mut n_arc = 0.0;
-            for i in 0..top_y.len() {
-                if i > 0 {
-                    n_arc += stations[i].distance(stations[i - 1]);
-                }
-                let a = 0.5 + 0.5 * (n_arc * 0.16 + n1p).sin();
-                let b = 0.5 + 0.5 * (n_arc * 0.29 + n2p).sin();
-                let dip = (a * a * 0.7 + b * b * 0.3).powf(1.4);
-                top_y[i] -= spec.notches * (top_y[i] - bot_y[i]).max(0.0) * dip;
-            }
         }
 
         // Band wobble + gullies, exactly as the carve seeds them.
@@ -341,50 +302,121 @@ impl CliffBand {
             Vec::new()
         };
 
-        // Drop normals and the ground the talus apron would rest on.
-        let drop_normal: Vec<Vec2> = normals.iter().map(|n| *n * drop_sign).collect();
-        // Ground the apron dies into, probed past the band AND past the
-        // apron's own run — the carve does the same, and probing too close
-        // would rest the cone on the wall's own foot instead of on the valley.
-        let cot = 1.0 / spec.talus_angle.clamp(5.0, 60.0).to_radians().tan();
-        let toe_ground: Vec<f32> = stations
-            .iter()
-            .enumerate()
-            .map(|(i, st)| {
-                let run = if spec.talus {
-                    ((top_y[i] - bot_y[i]).max(0.0) * cot * 0.55).min(40.0)
-                } else {
-                    0.0
-                };
-                let d = width[i] + run + texel * 2.0;
-                let p = *st + drop_normal[i] * d;
-                base.sample(p.x, p.y)
-            })
-            .collect();
-
-        let talus_run: Vec<f32> = if spec.talus {
-            (0..stations.len())
-                .map(|i| ((top_y[i] - bot_y[i]).max(0.0) * cot * 0.55).min(40.0))
-                .collect()
-        } else {
-            vec![0.0; stations.len()]
-        };
-
-        Some(Self {
+        let mut band = Self {
             stations,
-            drop_normal,
-            top_y,
-            bot_y,
+            drop_normal: Vec::new(),
+            top_y: Vec::new(),
+            bot_y: Vec::new(),
             width,
             arc,
             columns,
             profile: spec.profile,
             seed: spec.seed,
-            toe_ground,
-            talus_run,
+            toe_ground: Vec::new(),
+            talus_run: Vec::new(),
             talus: spec.talus,
             talus_angle: spec.talus_angle,
-        })
+        };
+        band.probe_heights(spec, base, texel);
+        Some(band)
+    }
+
+    /// Re-probes every terrain height this band baked in, against `base` as
+    /// it stands NOW.
+    ///
+    /// `build` resolves a band against the carved grid — but the bootstrap
+    /// builds the bands BEFORE the optional sharpen pass (the cliff mask
+    /// needs their footprints to gate it), and sharpen then rewrites the
+    /// ground inside those very footprints. Walls left resolved against the
+    /// old field floated over or buried under the terraced terrain that the
+    /// meshes and gameplay actually read. Only the height columns are
+    /// re-sampled: stations, widths and columns are height-independent and
+    /// stay exactly as authored.
+    pub fn probe_heights(&mut self, spec: &CliffSpec, base: &dyn HeightField, texel: f32) {
+        let base_width = authored_run(spec, texel);
+        let inner_off = texel * 1.5;
+        let outer_off = base_width + texel * 2.0;
+        let last = self.stations.len() - 1;
+        let mut normals = Vec::with_capacity(self.stations.len());
+        let (mut ip, mut op_, mut im, mut om) = (
+            Vec::with_capacity(self.stations.len()),
+            Vec::with_capacity(self.stations.len()),
+            Vec::with_capacity(self.stations.len()),
+            Vec::with_capacity(self.stations.len()),
+        );
+        for (i, st) in self.stations.iter().enumerate() {
+            let n = segment_left(&self.stations, if i == last { i - 1 } else { i });
+            normals.push(n);
+            ip.push(base.sample(st.x + n.x * inner_off, st.y + n.y * inner_off));
+            op_.push(base.sample(st.x + n.x * outer_off, st.y + n.y * outer_off));
+            im.push(base.sample(st.x - n.x * inner_off, st.y - n.y * inner_off));
+            om.push(base.sample(st.x - n.x * outer_off, st.y - n.y * outer_off));
+        }
+
+        let mean = |v: &[f32]| v.iter().sum::<f32>() / v.len().max(1) as f32;
+        let crest_higher_plus = mean(&ip) >= mean(&im);
+        let (mut top_y, mut bot_y, drop_sign) = match spec.side {
+            CliffSide::Left => (ip, op_, 1.0f32),
+            CliffSide::Right => (im, om, -1.0f32),
+            CliffSide::Auto if crest_higher_plus => (ip, om, -1.0f32),
+            CliffSide::Auto => (im, op_, 1.0f32),
+        };
+
+        if let Some(h) = spec.height.filter(|h| h.is_finite() && *h > 0.0) {
+            for i in 0..bot_y.len() {
+                bot_y[i] = bot_y[i].min(top_y[i] - h);
+            }
+        }
+
+        // Crest notches — one-sided dips, scaled by the LOCAL drop.
+        if spec.notches > 0.0 {
+            let (n1p, n2p) = (
+                hash01(spec.seed, 6, 23) * std::f32::consts::TAU,
+                hash01(spec.seed, 7, 29) * std::f32::consts::TAU,
+            );
+            let mut n_arc = 0.0;
+            for i in 0..top_y.len() {
+                if i > 0 {
+                    n_arc += self.stations[i].distance(self.stations[i - 1]);
+                }
+                let a = 0.5 + 0.5 * (n_arc * 0.16 + n1p).sin();
+                let b = 0.5 + 0.5 * (n_arc * 0.29 + n2p).sin();
+                let dip = (a * a * 0.7 + b * b * 0.3).powf(1.4);
+                top_y[i] -= spec.notches * (top_y[i] - bot_y[i]).max(0.0) * dip;
+            }
+        }
+
+        // Drop normals and the ground the talus apron would rest on.
+        self.drop_normal = normals.iter().map(|n| *n * drop_sign).collect();
+        // Ground the apron dies into, probed past the band AND past the
+        // apron's own run — the carve does the same, and probing too close
+        // would rest the cone on the wall's own foot instead of on the valley.
+        let cot = 1.0 / self.talus_angle.clamp(5.0, 60.0).to_radians().tan();
+        self.toe_ground = self
+            .stations
+            .iter()
+            .enumerate()
+            .map(|(i, st)| {
+                let run = if self.talus {
+                    ((top_y[i] - bot_y[i]).max(0.0) * cot * 0.55).min(40.0)
+                } else {
+                    0.0
+                };
+                let d = self.width[i] + run + texel * 2.0;
+                let p = *st + self.drop_normal[i] * d;
+                base.sample(p.x, p.y)
+            })
+            .collect();
+
+        self.talus_run = if self.talus {
+            (0..self.stations.len())
+                .map(|i| ((top_y[i] - bot_y[i]).max(0.0) * cot * 0.55).min(40.0))
+                .collect()
+        } else {
+            vec![0.0; self.stations.len()]
+        };
+        self.top_y = top_y;
+        self.bot_y = bot_y;
     }
 
     /// Column covering this arc position, if the profile is columnar.
@@ -575,8 +607,17 @@ impl VoxelMod for CliffFaceMod {
             hi = hi.max(c);
         }
         // The undercut reaches back behind the crest, so the box has to as
-        // well — clip it at the crest and the roof loses its back wall.
-        let back = w * (CONCAVE_UNDERCUT + 0.1) + 1.0;
+        // well — clip it at the crest and the roof loses its back wall. The
+        // margin follows the profile's real deepest cut: `concave` bottoms
+        // out around −0.21·w, `overhang` at v³ − LEAN·sin(π·v^0.7) reaches
+        // ≈ −0.51·w (measured in the tests) — a margin sized for `concave`
+        // clipped wide overhang bands and left an uncut flat wall inside the
+        // recess.
+        let lean = match self.profile {
+            CliffProfile::Overhang => OVERHANG_LEAN,
+            _ => CONCAVE_UNDERCUT,
+        };
+        let back = w * (lean + 0.1) + 1.0;
         let lo = lo - self.normal.abs() * back;
         let y_lo = self.bot.0.min(self.bot.1) - 1.0;
         let y_hi = self.top.0.max(self.top.1) + 1.0;
@@ -1010,6 +1051,52 @@ mod tests {
             b.min.x < -0.5,
             "bounds stop at the crest ({}), the undercut has nowhere to live",
             b.min.x
+        );
+    }
+
+    #[test]
+    fn test_overhang_bounds_reach_past_the_deepest_cut_of_the_profile() {
+        // The box has to contain every offset the distance function can
+        // generate: the overhang curve bottoms out at v³ − LEAN·sin(π·v^0.7)
+        // ≈ −0.51·w. A back margin sized for `concave` (0.45·w + 1) clipped
+        // that on wide bands and the recess kept an uncut flat wall.
+        let w = 30.0;
+        let face = CliffFaceMod {
+            a: Vec2::new(0.0, -40.0),
+            b: Vec2::new(0.0, 40.0),
+            normal: Vec2::X,
+            top: (40.0, 40.0),
+            bot: (16.0, 16.0),
+            width: (w, w),
+            arc: 0.0,
+            profile: CliffProfile::Overhang,
+            seed: 7,
+            column: None,
+            over_start: 0.0,
+            over_end: 0.0,
+            label: "overhang".into(),
+        };
+        // The real minimum of the curve, measured — the constant and the
+        // margin in `bounds` are sized against it.
+        let mut deepest = 0.0_f32;
+        for i in 0..=1000 {
+            let v = i as f32 / 1000.0;
+            deepest = deepest.min(profile_offset(v, CliffProfile::Overhang, 4.0, 0.0, 7, None));
+        }
+        assert!(
+            deepest > -OVERHANG_LEAN && deepest < -(OVERHANG_LEAN - 0.05),
+            "the profile's real lean {} has drifted from OVERHANG_LEAN {} — \
+             `bounds` sizes its back margin from the constant",
+            -deepest,
+            OVERHANG_LEAN
+        );
+        let b = face.bounds();
+        assert!(
+            b.min.x < deepest * w,
+            "bounds stop at {} but the face cuts to {}·w — the recess keeps a \
+             wall the profile never removed",
+            b.min.x,
+            deepest
         );
     }
 

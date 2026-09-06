@@ -488,7 +488,9 @@ fn light_budget_system(
         return;
     }
     *throttle = LIGHT_BUDGET_INTERVAL;
-    let Ok(cam) = cameras.single() else {
+    // `iter().next()` e não `single()`: com ≥2 câmaras o `single()` falhava
+    // (mesma semântica do 1.º player do `music_driver`).
+    let Some(cam) = cameras.iter().next() else {
         return;
     };
     let cam_pos = cam.translation();
@@ -534,13 +536,19 @@ fn npc_gesture_system(
     if *throttle > 0.0 {
         return;
     }
+    // Tempo REAL desde a última passada (1 s + overshoot do frame): o `-1.0`
+    // fixo contava um segundo por passada mesmo com frames longos.
+    let elapsed = 1.0 - *throttle;
     *throttle = 1.0;
+    // Timers de NPCs despawnados saem do map — o Local crescia para sempre
+    // (cada respawn de criatura/NPC leakava uma entrada).
+    timers.retain(|entity, _| npcs.contains(*entity));
     for (entity, mut animator) in &mut npcs {
         let entry = timers.entry(entity).or_insert_with(|| {
             // primeiro gesto entre 5 e 12 s (pseudo-aleatório por entidade)
             5.0 + (entity.to_bits() % 7000) as f32 / 1000.0
         });
-        *entry -= 1.0;
+        *entry -= elapsed;
         if *entry > 0.0 {
             continue;
         }
@@ -708,7 +716,8 @@ fn water_ambience_driver(
     mixer: Option<Res<crate::music::AudioMixerSettings>>,
     mut loops: Query<(&WaterAmbienceLoop, &mut PlaybackSettings)>,
 ) {
-    let (Some(runtime), Ok(player)) = (runtime, players.single()) else {
+    // `iter().next()` e não `single()`: ≥2 players não pode matar o áudio.
+    let (Some(runtime), Some(player)) = (runtime, players.iter().next()) else {
         return;
     };
     let pos = player.translation();
@@ -821,7 +830,8 @@ fn rain_emitter_driver(
     let Some(weather) = weather else {
         return;
     };
-    let Ok(player) = players.single() else {
+    // `iter().next()` e não `single()`: ≥2 players não pode matar a chuva.
+    let Some(player) = players.iter().next() else {
         return;
     };
     let anchor = player.translation() + Vec3::Y * RAIN_EMITTER_HEIGHT;
@@ -891,7 +901,7 @@ fn rain_ripple_spawner(
     if intensity <= 0.05 {
         return;
     }
-    let Ok(player) = players.single() else {
+    let Some(player) = players.iter().next() else {
         return;
     };
     let origin = player.translation();
@@ -992,7 +1002,8 @@ fn lantern_driver(
     >,
     mut commands: Commands,
 ) {
-    let Ok(player) = players.single() else {
+    // `iter().next()` e não `single()`: ≥2 players não pode matar a lanterna.
+    let Some(player) = players.iter().next() else {
         return;
     };
     let anchor = player.translation() + Vec3::Y * LANTERN_HEIGHT;

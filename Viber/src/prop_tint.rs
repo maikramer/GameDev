@@ -50,6 +50,20 @@ impl Plugin for PropTintPlugin {
     }
 }
 
+/// Reaplica o tint de dia sobre o albedo ORIGINAL preservando o alpha ATUAL
+/// do material (não o do original): o fade de cadáveres
+/// (`combat::corpse_fade_tick`) desce `base_color.alpha` e um tint com alpha
+/// 1 fazia o corpo morto voltar a opaco no tick seguinte do day/night.
+/// Puro para testes.
+fn tinted_base_color(original: LinearRgba, tint: [f32; 3], current_alpha: f32) -> Color {
+    Color::linear_rgb(
+        original.red * tint[0],
+        original.green * tint[1],
+        original.blue * tint[2],
+    )
+    .with_alpha(current_alpha)
+}
+
 /// Aplica a curva de noite da relva a todos os `StandardMaterial` (glTFs e
 /// primitivas) que não sejam `unlit`/emissivos. Throttle 0,25 s + early-out
 /// quando o factor de dia não mudou — o custo parado é uma subtração.
@@ -103,11 +117,8 @@ fn prop_daynight_tint(
             .originals
             .entry(id)
             .or_insert_with(|| material.base_color.to_linear());
-        material.base_color = Color::linear_rgb(
-            original.red * tint[0],
-            original.green * tint[1],
-            original.blue * tint[2],
-        );
+        let current_alpha = material.base_color.to_linear().alpha;
+        material.base_color = tinted_base_color(original, tint, current_alpha);
     }
     state.last_tint = Some(tint);
 }

@@ -447,7 +447,9 @@ pub fn sky_follow_camera(
     cameras: Query<&GlobalTransform, With<bevy::camera::Camera3d>>,
     mut domes: Query<&mut Transform, With<SkyDome>>,
 ) {
-    let Ok(camera) = cameras.single() else {
+    // `iter().next()` e não `single()`: ≥2 câmaras 3d falhavam o `single()`
+    // e o domo ficava para trás (mesma semântica do 1.º player).
+    let Some(camera) = cameras.iter().next() else {
         return;
     };
     for mut transform in &mut domes {

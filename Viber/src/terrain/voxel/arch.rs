@@ -74,9 +74,13 @@ impl ArchSpec {
         }
         let span_half = self.span * 0.5;
         // Jamb height = total opening minus the rounded crown. A span wider
-        // than the opening is tall turns the arch into a dome — clamp so it
-        // keeps at least a token straight section.
+        // than the opening is tall turns the arch into a dome — two clamps
+        // keep the contract: the jamb keeps at least a token straight section,
+        // and the OPENING is clamped to 3/4 of the height so the crown's apex
+        // (jamb + span half) lands at the authored `height` instead of poking
+        // above it. Legs keep their full authored thickness either way.
         let jamb = (self.height - span_half).max(self.height * 0.25);
+        let span_half_eff = span_half.min(self.height * 0.75);
         // Rock cap above the crown, proportionate to the legs.
         let cap = self.thickness * 0.8;
         let ground = base.sample(self.at.x, self.at.y);
@@ -84,7 +88,7 @@ impl ArchSpec {
         vec![Box::new(ArchMod::new(
             label,
             Vec3::new(self.at.x, ground - 1.0, self.at.y),
-            span_half,
+            span_half_eff,
             jamb,
             self.thickness,
             self.depth,
@@ -131,6 +135,30 @@ mod tests {
         assert!(spec.build(&Flat).is_empty());
         spec.span = f32::NAN;
         assert!(spec.build(&Flat).is_empty());
+    }
+
+    #[test]
+    fn test_a_span_taller_than_the_arch_stays_under_the_authored_height() {
+        // span 10 vs height 6: the naive apex (jamb 1.5 + span half 5) would
+        // poke 6.5 m above the base — above the authored `height`. The
+        // opening is clamped to 3/4 of the height so the crown lands exactly
+        // at 6.
+        let spec = ArchSpec {
+            span: 10.0,
+            height: 6.0,
+            ..ArchSpec::default()
+        };
+        let mods = spec.build(&Flat);
+        let field = super::super::field::VoxelField::new(mods, 256.0, 64.0);
+        // Base sits at ground 10 − 1 = 9; crown apex = 9 + jamb 1.5 + 4.5 = 15.
+        let under_crown = field.density(&Flat, Vec3::new(0.0, 14.7, 0.0));
+        assert!(under_crown > 0.0, "just under the crown must still be air");
+        let above_crown = field.density(&Flat, Vec3::new(0.0, 15.3, 0.0));
+        assert!(
+            above_crown < 0.0,
+            "rock must start at the authored height (apex 15) — the opening \
+             poked above it ({under_crown} at 14.7, {above_crown} at 15.3)"
+        );
     }
 
     #[test]

@@ -1129,7 +1129,13 @@ fn strip_comments(source: &str) -> String {
         out.push_str(&rest[..start]);
         match rest[start + 2..].find("*/") {
             Some(end) => rest = &rest[start + 2 + end + 2..],
-            None => return out,
+            // `/*` sem fecho: em CSS tragaria o resto da folha em silêncio —
+            // aqui o texto sobrevive (menos o `/*`) e o autor leva o aviso.
+            None => {
+                warn!("ui style: `/*` sem `*/` — o resto da folha não foi descartado");
+                out.push_str(&rest[start + 2..]);
+                return out;
+            }
         }
     }
     out.push_str(rest);
@@ -1241,9 +1247,10 @@ pub fn parse_declarations(body: &str, origin: &str) -> StyleProps {
 
 /// Parsers "com aviso": um nome de propriedade CONHECIDO com um valor ilegível
 /// (`width: wide`) não pode cair em silêncio — o autor nunca encontra o erro.
+/// Um valor VAZIO (`width: ;`) salta calado: não há nada a reportar.
 fn parse_measure_in(value: &str, prop: &str) -> Option<Measure> {
     let parsed = parse_measure(value);
-    if parsed.is_none() {
+    if parsed.is_none() && !value.is_empty() {
         warn!("ui style: valor `{value}` ilegível para `{prop}` — declaração saltada");
     }
     parsed
@@ -1251,7 +1258,7 @@ fn parse_measure_in(value: &str, prop: &str) -> Option<Measure> {
 
 fn parse_rect_in(value: &str, prop: &str) -> Option<UiRect> {
     let parsed = parse_rect(value);
-    if parsed.is_none() {
+    if parsed.is_none() && !value.is_empty() {
         warn!("ui style: valor `{value}` ilegível para `{prop}` — declaração saltada");
     }
     parsed
@@ -1259,7 +1266,7 @@ fn parse_rect_in(value: &str, prop: &str) -> Option<UiRect> {
 
 fn parse_color_in(value: &str, prop: &str) -> Option<Color> {
     let parsed = parse_color(value);
-    if parsed.is_none() {
+    if parsed.is_none() && !value.is_empty() {
         warn!("ui style: cor `{value}` ilegível para `{prop}` — declaração saltada");
     }
     parsed
@@ -1267,10 +1274,28 @@ fn parse_color_in(value: &str, prop: &str) -> Option<Color> {
 
 fn parse_number_in(value: &str, prop: &str) -> Option<f32> {
     let parsed = parse_number(value);
-    if parsed.is_none() {
+    if parsed.is_none() && !value.is_empty() {
         warn!("ui style: número `{value}` ilegível para `{prop}` — declaração saltada");
     }
     parsed
+}
+
+fn parse_tracks_in(value: &str, prop: &str) -> Option<Vec<RepeatedGridTrack>> {
+    let parsed = parse_tracks(value);
+    if parsed.is_none() && !value.is_empty() {
+        warn!("ui style: pistas `{value}` ilegíveis para `{prop}` — declaração saltada");
+    }
+    parsed
+}
+
+/// Fallback CSS: uma declaração ilegível é IGNORADA, não é "unset" —
+/// `width: 40%; width: wide` mantém os 40 % (a 2.ª não apaga a 1.ª). O aviso
+/// de valor ilegível já sai dos `parse_*_in`; aqui evita-se escrever o `None`
+/// por cima do valor anterior.
+fn assign<T>(slot: &mut Option<T>, parsed: Option<T>) {
+    if let Some(value) = parsed {
+        *slot = Some(value);
+    }
 }
 
 /// Sets one property; `false` when the name or the value is not understood.
@@ -1292,46 +1317,57 @@ fn apply_declaration(props: &mut StyleProps, name: &str, value: &str) -> bool {
         "align" | "align-items" => props.align_items = parse_align_items(value),
         "align-self" => props.align_self = parse_align_self(value),
         "justify" | "justify-content" => props.justify_content = parse_justify(value),
-        "width" => props.width = parse_measure_in(value, name),
-        "height" => props.height = parse_measure_in(value, name),
-        "min-width" => props.min_width = parse_measure_in(value, name),
-        "min-height" => props.min_height = parse_measure_in(value, name),
-        "max-width" => props.max_width = parse_measure_in(value, name),
-        "max-height" => props.max_height = parse_measure_in(value, name),
-        "top" => props.top = parse_measure_in(value, name),
-        "right" => props.right = parse_measure_in(value, name),
-        "bottom" => props.bottom = parse_measure_in(value, name),
-        "left" => props.left = parse_measure_in(value, name),
-        "padding" => props.padding = parse_rect_in(value, name),
-        "margin" => props.margin = parse_rect_in(value, name),
-        "border-width" => props.border = parse_rect_in(value, name),
+        "width" => assign(&mut props.width, parse_measure_in(value, name)),
+        "height" => assign(&mut props.height, parse_measure_in(value, name)),
+        "min-width" => assign(&mut props.min_width, parse_measure_in(value, name)),
+        "min-height" => assign(&mut props.min_height, parse_measure_in(value, name)),
+        "max-width" => assign(&mut props.max_width, parse_measure_in(value, name)),
+        "max-height" => assign(&mut props.max_height, parse_measure_in(value, name)),
+        "top" => assign(&mut props.top, parse_measure_in(value, name)),
+        "right" => assign(&mut props.right, parse_measure_in(value, name)),
+        "bottom" => assign(&mut props.bottom, parse_measure_in(value, name)),
+        "left" => assign(&mut props.left, parse_measure_in(value, name)),
+        "padding" => assign(&mut props.padding, parse_rect_in(value, name)),
+        "margin" => assign(&mut props.margin, parse_rect_in(value, name)),
+        "border-width" => assign(&mut props.border, parse_rect_in(value, name)),
         "gap" => {
             let gap = parse_measure_in(value, name);
-            props.row_gap = gap.clone();
-            props.column_gap = gap;
+            assign(&mut props.row_gap, gap.clone());
+            assign(&mut props.column_gap, gap);
         }
-        "row-gap" => props.row_gap = parse_measure_in(value, name),
-        "column-gap" => props.column_gap = parse_measure_in(value, name),
-        "aspect" | "aspect-ratio" => props.aspect_ratio = parse_number_in(value, name),
+        "row-gap" => assign(&mut props.row_gap, parse_measure_in(value, name)),
+        "column-gap" => assign(&mut props.column_gap, parse_measure_in(value, name)),
+        "aspect" | "aspect-ratio" => {
+            assign(&mut props.aspect_ratio, parse_number_in(value, name))
+        }
         "overflow" => props.overflow_clip = Some(value == "clip" || value == "hidden"),
         // grid
-        "grid-template-columns" | "grid-cols" => props.grid_template_columns = parse_tracks(value),
-        "grid-template-rows" | "grid-rows" => props.grid_template_rows = parse_tracks(value),
+        "grid-template-columns" | "grid-cols" => {
+            assign(&mut props.grid_template_columns, parse_tracks_in(value, name))
+        }
+        "grid-template-rows" | "grid-rows" => {
+            assign(&mut props.grid_template_rows, parse_tracks_in(value, name))
+        }
         "grid-auto-flow" | "flow" => props.grid_auto_flow = parse_auto_flow(value),
         "grid-column" => props.grid_column = parse_placement(value),
         "grid-row" => props.grid_row = parse_placement(value),
         // paint
-        "background" | "background-color" => props.background = parse_color_in(value, name),
-        "border-color" => props.border_color = parse_color_in(value, name),
+        "background" | "background-color" => {
+            assign(&mut props.background, parse_color_in(value, name))
+        }
+        "border-color" => assign(&mut props.border_color, parse_color_in(value, name)),
         // `border: 1.5 #aabbcc` — width and colour together, like CSS shorthand.
         "border" => return parse_border_shorthand(props, value),
         "radius" | "border-radius" => props.border_radius = parse_radius(value),
         "outline" => props.outline = parse_outline(value),
         "box-shadow" => props.box_shadow = parse_box_shadows(value),
-        "opacity" => props.opacity = parse_number_in(value, name),
+        "opacity" => assign(&mut props.opacity, parse_number_in(value, name)),
         "z" | "z-index" => props.z_index = value.parse().ok(),
-        "rotate" => props.rotate = parse_number_in(value.trim_end_matches("deg"), name),
-        "scale" => props.scale = parse_number_in(value, name),
+        "rotate" => assign(
+            &mut props.rotate,
+            parse_number_in(value.trim_end_matches("deg"), name),
+        ),
+        "scale" => assign(&mut props.scale, parse_number_in(value, name)),
         "translate" => {
             let numbers: Vec<f32> = value.split_whitespace().filter_map(parse_number).collect();
             props.translate = match numbers.len() {
@@ -1343,7 +1379,7 @@ fn apply_declaration(props: &mut StyleProps, name: &str, value: &str) -> bool {
         "cursor" => props.cursor = parse_cursor(value),
         "pointer-events" => props.pointer_none = Some(value.eq_ignore_ascii_case("none")),
         // text
-        "color" => props.color = parse_color_in(value, name),
+        "color" => assign(&mut props.color, parse_color_in(value, name)),
         "font-size" => {
             // Unidades RELATIVAS (`em`, `rem`, `%`) dependem da fonte herdada
             // e só podem ser resolvidas no momento de aplicar — chegam como
@@ -1358,7 +1394,7 @@ fn apply_declaration(props: &mut StyleProps, name: &str, value: &str) -> bool {
             } else if let Some(n) = value.strip_suffix("em").and_then(|n| n.trim().parse().ok()) {
                 props.font_size_em = Some(n);
             } else {
-                props.font_size = parse_measure_in(value, name);
+                assign(&mut props.font_size, parse_measure_in(value, name));
             }
         }
         "font-weight" | "weight" => props.font_weight = parse_font_weight(value),
@@ -2041,6 +2077,46 @@ mod tests {
         assert_eq!(parse_measure("40vw"), Some(Measure::plain(Val::Vw(40.0))));
         // `%` precisa do tamanho do PAI — recusado com warn, declaração nula.
         assert_eq!(parse_measure("calc(10% + 2px)"), None);
+    }
+
+    #[test]
+    fn test_comment_without_close_keeps_the_rest_of_the_sheet() {
+        // Um `/*` sem `*/` não descarta o resto da folha em silêncio: o texto
+        // sobrevive (menos o `/*`) e o autor leva o aviso.
+        let sheet = strip_comments("a { color: #fff } /* parágrafo cortado");
+        assert!(sheet.contains("color: #fff"));
+        assert!(sheet.contains("parágrafo cortado"));
+        assert!(!sheet.contains("/*"));
+        // E o caminho normal continua a remover os comentários fechados.
+        assert_eq!(strip_comments("a /* x */ b"), "a  b");
+        assert_eq!(strip_comments("a /* x */ b /* y */ c"), "a  b  c");
+    }
+
+    #[test]
+    fn test_failed_declaration_keeps_the_previous_fallback() {
+        // Idioma CSS de fallback: a 2.ª declaração ilegível é IGNORADA e não
+        // apaga a 1.ª (`width: wide` não faz unset dos 40 %).
+        let props = parse_declarations("width: 40%; width: wide", "t");
+        assert_eq!(
+            props.width,
+            Some(Measure::plain(Val::Percent(40.0))),
+            "a declaração ilegível não pode apagar a anterior"
+        );
+        // Uma declaração VÁLIDA substitui a anterior (fallback ≠ imutável).
+        let props = parse_declarations("width: 40%; width: 24", "t");
+        assert_eq!(props.width, Some(Measure::plain(Val::Px(24.0))));
+        // Pistas de grelha ilegíveis avisam e mantêm as anteriores.
+        let props = parse_declarations(
+            "grid-template-columns: repeat(4, 1fr); grid-template-columns: wat",
+            "t",
+        );
+        assert!(
+            props.grid_template_columns.is_some(),
+            "as pistas válidas sobrevivem à declaração ilegível"
+        );
+        // Valor vazio salta calado e também não apaga.
+        let props = parse_declarations("width: 40%; width:", "t");
+        assert_eq!(props.width, Some(Measure::plain(Val::Percent(40.0))));
     }
 
     #[test]

@@ -365,7 +365,16 @@ impl bevy::app::Plugin for CombatPlugin {
             (ensure_player_vitals, ensure_creature_vitals, cycle_weapon),
         );
         app.add_systems(Update, player_melee_attack);
-        app.add_systems(Update, swing_track_system);
+        // R2-G9: ambos escrevem o Transform do herói — o doc do estádio 2
+        // promete DEPOIS de `player_movement` (o lunge não disputa a
+        // locomoção) e ANTES da câmara third-person (que segue o herói).
+        // Sem a aresta, a ordem real ficava à sorte do agendador.
+        app.add_systems(
+            Update,
+            swing_track_system
+                .after(crate::player::player_movement)
+                .before(crate::camera::third_person_camera),
+        );
         app.add_systems(Update, hit_stop_system);
         app.add_systems(
             Update,
@@ -761,7 +770,12 @@ pub fn swing_track_system(
                 origin.x + fx.pending.aim.x * step,
                 origin.z + fx.pending.aim.z * step,
             );
-            let y = terrain.as_ref().map(|t| t.sample(x, z)).unwrap_or(origin.y);
+            // SUPERFÍCIE RENDERIZADA (paridade com spawners/knockback): o
+            // sample analítico flutua acima das cordas do mesh nas cristas.
+            let y = terrain
+                .as_ref()
+                .map(|t| t.sample_mesh_surface(x, z))
+                .unwrap_or(origin.y);
             player_transform.translation = Vec3::new(x, y, z);
             fx.pending.lunge_left -= step;
         }

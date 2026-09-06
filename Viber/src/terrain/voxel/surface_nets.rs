@@ -59,15 +59,28 @@ pub struct VoxelChunkParams {
     /// invisible, and the tint is most of what makes it so.
     pub tint: TintParams,
     pub max_height: f32,
+    /// Whether this chunk renders with the layer blend material (`layers`
+    /// worlds) rather than the stock `StandardMaterial`.
+    ///
+    /// It decides what the R channel MEANS. With the layer shader, R is wall
+    /// space (data the fragment reads) and A the cliff factor. With the stock
+    /// PBR material the vertex colour is multiplied as-is, so a wall-space R
+    /// of 0.502 darkened every legacy voxel chunk's red against the flat
+    /// heightfield chunks beside it — a visible step at every flat|volumetric
+    /// boundary. On the legacy path the full tint stays in RGB, exactly what
+    /// `build_chunk_mesh` bakes when it receives no mask.
+    pub uses_layer_material: bool,
 }
 
 impl VoxelChunkParams {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         origin: Vec3,
         voxel_size: f32,
         texture_tile_size: f32,
         tint: TintParams,
         max_height: f32,
+        uses_layer_material: bool,
     ) -> Self {
         Self {
             origin,
@@ -76,6 +89,7 @@ impl VoxelChunkParams {
             texture_tile_size,
             tint,
             max_height,
+            uses_layer_material,
         }
     }
 
@@ -247,16 +261,24 @@ pub fn build_voxel_mesh(
                 normals.push(normal.to_array());
                 uvs.push(Vec2::new(world.x / tile, world.z / tile).to_array());
                 // Same height/slope tint as the heightfield mesher, so the
-                // two meshes read as one surface where they meet. R is then
-                // overwritten with wall space and A with the cliff factor,
-                // exactly as `build_chunk_mesh` does (`mesh.rs:352-357`).
+                // two meshes read as one surface where they meet. When the
+                // chunk renders with the layer blend, R is then overwritten
+                // with wall space and A with the cliff factor, exactly as
+                // `build_chunk_mesh` does (`mesh.rs:352-357`). On the legacy
+                // path the tint stays untouched in RGBA — the stock
+                // StandardMaterial multiplies it, and a wall-space R of
+                // 0.502 read as a red channel stepped half-dark against the
+                // flat chunks beside it.
                 let mut color =
                     tint_vertex_color(world.y, normal.y, params.max_height, &params.tint);
-                // R = wall space (neutral until the cliff mods author it),
-                // A = cliff region factor. A volumetric chunk is rock by
-                // construction, so the shader's triplanar gate is fully open.
-                color[0] = WALL_NEUTRAL;
-                color[3] = 1.0;
+                if params.uses_layer_material {
+                    // R = wall space (neutral until the cliff mods author
+                    // it), A = cliff region factor. A volumetric chunk is
+                    // rock by construction, so the shader's triplanar gate
+                    // is fully open.
+                    color[0] = WALL_NEUTRAL;
+                    color[3] = 1.0;
+                }
                 colors.push(color);
             }
         }
@@ -401,6 +423,7 @@ mod tests {
             texture_tile_size: 8.0,
             tint: TintParams::default(),
             max_height: 100.0,
+            uses_layer_material: true,
         }
     }
 
@@ -594,7 +617,7 @@ mod tests {
         // The boundary between the two meshers must be invisible. Whatever the
         // heightfield mesher would paint at this height and slope, the voxel
         // mesher paints too — except R and A, which carry wall space and the
-        // cliff factor in both paths.
+        // cliff factor in both paths (layer-material worlds).
         let p = params(Vec3::new(0.0, -4.0, 0.0), 8, 1.0);
         let m = build_voxel_mesh(&plane, &p).expect("plane");
         for (i, pos) in m.positions.iter().enumerate() {
@@ -607,6 +630,27 @@ mod tests {
             );
             assert_eq!(got[0], WALL_NEUTRAL, "R carries wall space");
             assert_eq!(got[3], 1.0, "A carries the cliff factor");
+        }
+    }
+
+    #[test]
+    fn test_legacy_vertex_colours_keep_the_full_tint_in_rgb() {
+        // Without `layers` the chunk renders with the stock StandardMaterial,
+        // which MULTIPLIES the vertex colour. A wall-space R of 0.502 darkened
+        // the red channel half-way against the flat heightfield chunks beside
+        // it — the legacy path must bake the plain tint, all four channels,
+        // exactly like `build_chunk_mesh` with no mask.
+        let mut p = params(Vec3::new(0.0, -4.0, 0.0), 8, 1.0);
+        p.uses_layer_material = false;
+        let m = build_voxel_mesh(&plane, &p).expect("plane");
+        assert!(!m.colors.is_empty());
+        for (i, pos) in m.positions.iter().enumerate() {
+            let world = p.origin + Vec3::from(*pos);
+            let expected = tint_vertex_color(world.y, m.normals[i][1], p.max_height, &p.tint);
+            assert_eq!(
+                m.colors[i], expected,
+                "vertex {i} must carry the plain tint on the legacy path"
+            );
         }
     }
 

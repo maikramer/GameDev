@@ -74,14 +74,34 @@ pub fn radial_strength(distance: f32, radius: f32, strength: f32) -> Option<f32>
 // ── sistemas ────────────────────────────────────────────────────────────
 
 /// Aplica e decai o knockback; senta o Y no terreno quando disponível.
+///
+/// - Cadáveres (`Corpse`) ficam de fora: mortos por strike/bomba no MESMO
+///   frame tinham o `Knockback` inserido por cima da animação de morte.
+/// - O HERÓI não leva Y-slam (`translation.y = superfície`): um empurrão a
+///   meio de um salto sentava-o no chão de repente — a locomoção dele trata
+///   do Y sozinha. Criaturas continuam a assentar na superfície renderizada.
+/// - XZ clampado ao disco do [`crate::worldsys::WorldBorderConfig`] (a mesma
+///   matemática de `worldsys::world_border_clamp`): o empurrão não pode
+///   expulsar ninguém do mundo.
+#[allow(clippy::type_complexity)]
 fn knockback_system(
     time: Res<Time>,
     terrain: Option<Res<TerrainRuntime>>,
-    mut knocked: Query<(Entity, &mut Transform, &mut Knockback)>,
+    border: Option<Res<crate::worldsys::WorldBorderConfig>>,
+    mut knocked: Query<
+        (
+            Entity,
+            &mut Transform,
+            &mut Knockback,
+            Option<&crate::player::Player>,
+        ),
+        Without<crate::combat::Corpse>,
+    >,
     mut commands: Commands,
 ) {
     let dt = time.delta_secs();
-    for (entity, mut transform, mut knockback) in &mut knocked {
+    let limit = border.as_deref().map(|b| b.radius - b.margin);
+    for (entity, mut transform, mut knockback, player) in &mut knocked {
         let step = knockback.velocity * dt;
         let mut x = transform.translation.x + step.x;
         let mut z = transform.translation.z + step.z;
@@ -90,15 +110,22 @@ fn knockback_system(
             knockback.velocity = Vec3::ZERO;
             commands.entity(entity).remove::<Knockback>();
         }
+        if let Some(limit) = limit {
+            let dist_sq = x * x + z * z;
+            if dist_sq > limit * limit {
+                let scale = limit / dist_sq.sqrt();
+                x *= scale;
+                z *= scale;
+            }
+        }
         if let Some(terrain) = terrain.as_deref() {
             // SUPERFÍCIE RENDERIZADA (igual ao assentamento dos spawners): o
             // `sample` analítico diverge do mesh perto de carves (lagoas,
             // estradas, pads) — cada knockback sentava o atingido 1-2 m
             // ABAIXO do chão desenhado e ele "afundava" no primeiro empurrão.
-            let y = terrain.sample_mesh_surface(x, z);
-            transform.translation.y = y;
-            let _ = &mut x;
-            let _ = &mut z;
+            if player.is_none() {
+                transform.translation.y = terrain.sample_mesh_surface(x, z);
+            }
         }
         transform.translation.x = x;
         transform.translation.z = z;
@@ -172,5 +199,106 @@ mod tests {
         let edge = radial_strength(6.0, 6.0, 10.0).unwrap();
         assert!((edge - 4.0).abs() < 1e-4, "40% na borda");
         assert!(radial_strength(7.0, 6.0, 10.0).is_none());
+    }
+
+    /// App headless mínima com o plugin (relógio avançado à mão, como em
+    /// `ai.rs`) — devolve o id a partir do nome dado ao spawn.
+    fn fx_app() -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins.build().disable::<bevy::time::TimePlugin>());
+        app.add_plugins(PhysicsFxPlugin);
+        app.init_resource::<Time>();
+        app
+    }
+
+    /// R2-G7: cadáveres (`Corpse`) não são empurrados pelo knockback —
+    /// o strike/bomba inseria `Knockback` em mortos do mesmo frame.
+    #[test]
+    fn test_knockback_skips_corpses_headless() {
+        let mut app = fx_app();
+        let alive = app
+            .world_mut()
+            .spawn((Transform::from_xyz(0.0, 0.0, 0.0), Knockback { velocity: Vec3::X * 2.0 }))
+            .id();
+        let dead = app
+            .world_mut()
+            .spawn((
+                Transform::from_xyz(0.0, 0.0, 0.0),
+                Knockback { velocity: Vec3::X * 2.0 },
+                crate::combat::Corpse {
+                    timer: crate::combat::CORPSE_LIFETIME,
+                },
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_millis(100));
+        app.update();
+        let alive_x = app.world().get::<Transform>(alive).unwrap().translation.x;
+        let dead_x = app.world().get::<Transform>(dead).unwrap().translation.x;
+        assert!(alive_x > 0.0, "vivo desloca: {alive_x}");
+        assert_eq!(dead_x, 0.0, "cadáver fica no lugar: {dead_x}");
+    }
+
+    /// R2-G5a: o HERÓI não leva Y-slam — o Y entra e sai intacto (o salto a
+    /// meio não é sentado no chão pelo empurrão). XZ continua a deslocar.
+    #[test]
+    fn test_knockback_keeps_player_y_headless() {
+        let mut app = fx_app();
+        let hero = app
+            .world_mut()
+            .spawn((
+                crate::player::Player::default(),
+                Transform::from_xyz(0.0, 3.5, 0.0),
+                Knockback { velocity: Vec3::X * 2.0 },
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_millis(100));
+        app.update();
+        let t = app.world().get::<Transform>(hero).unwrap().translation;
+        assert!((t.y - 3.5).abs() < 1e-5, "Y do herói intocado: {}", t.y);
+        assert!(t.x > 0.0, "XZ desloca na mesma: {t:?}");
+    }
+
+    /// R2-G5b: o deslocamento do knockback é clampado ao disco do
+    /// WorldBorder (mesma matemática de `worldsys::world_border_clamp`).
+    #[test]
+    fn test_knockback_clamps_to_world_border_headless() {
+        let mut app = fx_app();
+        app.insert_resource(crate::worldsys::WorldBorderConfig {
+            radius: 100.0,
+            warn_seconds: 5.0,
+            margin: 10.0,
+        });
+        // 1 empurrão forte: (90,0) + X·2·1 s = 92 — o limite é 90
+        // (radius − margin): fica em 90.
+        let id = app
+            .world_mut()
+            .spawn((Transform::from_xyz(90.0, 0.0, 0.0), Knockback { velocity: Vec3::X * 2.0 }))
+            .id();
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_secs_f32(1.0));
+        app.update();
+        let t = app.world().get::<Transform>(id).unwrap().translation;
+        let dist = (t.x * t.x + t.z * t.z).sqrt();
+        assert!(
+            (dist - 90.0).abs() < 1e-3,
+            "clampado ao disco (limit 90): dist={dist}"
+        );
+        // Dentro do disco: o empurrão aplica-se sem clamp. Relógio avançado
+        // por update (sem TimePlugin o delta é o que aqui se der).
+        let inner = app
+            .world_mut()
+            .spawn((Transform::from_xyz(0.0, 0.0, 0.0), Knockback { velocity: Vec3::X * 2.0 }))
+            .id();
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_millis(100));
+        app.update();
+        let t = app.world().get::<Transform>(inner).unwrap().translation;
+        assert!(t.x > 0.0, "sem clamp dentro do disco: {t:?}");
     }
 }

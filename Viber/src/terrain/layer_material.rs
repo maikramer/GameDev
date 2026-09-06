@@ -1,6 +1,6 @@
-//! Terrain chunk material — the ground blend ([`super::splat`]) as a WGSL
-//! [`MaterialExtension`] on top of [`StandardMaterial`] (`ExtendedMaterial`),
-//! for the terrain chunks built by [`super::runtime`].
+//! Terrain chunk material — the ground blend ([`super::splat`]) as a
+//! bindless [`bevy::pbr::Material`] PRÓPRIO (não `ExtendedMaterial` — ver o
+//! aviso de crash abaixo) for the terrain chunks built by [`super::runtime`].
 //!
 //! Every chunk carries its OWN material: the four pool textures with the
 //! highest aggregate weight in that chunk + one RGBA8 splat plane baked per
@@ -15,11 +15,15 @@
 //! `shaders/terrain_chunk.wgsl` before the renderer loads it (the Bevy 0.19
 //! slot-1 storage promotion never re-uploads custom material uniforms).
 //!
-//! The base `StandardMaterial` stays untextured and white: the extension
-//! fragment reads the chunk's splat plane + 4 layer albedos and overwrites
-//! the base color before the stock `apply_pbr_lighting` runs, so lighting,
-//! shadows and fog remain the normal PBR path. `base-color` (folded into
-//! chunk vertex colors by the bootstrap) still works as a global multiplier.
+//! Lighting é SIMPLES DE PROPÓSITO: o fragment devolve
+//! `albedo × (0.45 + 0.55·sol)` — o terreno NÃO recebe sombras projetadas
+//! nem luzes pontuais da cena (aceite: o valor do material é o ground
+//! blend). A direção do sol e o day/night tint vêm do uniform
+//! (`terrain_daynight_tint` publica o `AtmosphereState.sun_dir` no mesmo
+//! passo quantizado) e a fog da câmara é aplicada no shader
+//! (`apply_fog` sob `DISTANCE_FOG`) — sem ela o horizonte lia-se a 100%
+//! de contraste. `base-color` autoral NÃO é lido neste caminho (as vertex
+//! colors transportam dados de parede/região, não tint).
 
 use bevy::asset::Asset;
 use bevy::math::Vec4;
@@ -145,6 +149,10 @@ pub struct TerrainChunkParams {
     pub chunk: Vec4,
     /// `rgb` = dia/noite tint do terreno (day factor 1 = branco).
     pub day_tint: Vec4,
+    /// `xyz` = direção de VIAGEM da luz do sol (para onde viaja; o mesmo
+    /// sol que as sombras seguem, publicado no passo quantizado do day
+    /// tint), `w` = 1 quando o sistema já publicou um sol real.
+    pub sun_dir: Vec4,
 }
 
 impl TerrainChunkParams {
@@ -176,6 +184,9 @@ impl TerrainChunkParams {
             roughs: pick(|s| s.rough),
             chunk: Vec4::new(origin[0], origin[1], edge, rock),
             day_tint: Vec4::ONE,
+            // Default até o primeiro publish do `terrain_daynight_tint` —
+            // o mesmo vetor que o shader hardcoded usava antes do uniform.
+            sun_dir: Vec4::new(0.35, -0.8, -0.45, 0.0),
         }
     }
 }
@@ -355,9 +366,13 @@ pub fn terrain_day_tint(day: f32) -> [f32; 3] {
 }
 
 /// Aplica [`terrain_day_tint`] ao `base_color` dos materiais de chunk (e do
-/// fallback standard), seguindo o `<DayCycle>` do mundo.
+/// fallback standard), seguindo o `<DayCycle>` do mundo — e publica no
+/// MESMO passo a direção do sol (`AtmosphereState.sun_dir`, convertida
+/// para a direção de viagem) para a luz do terreno bater certo com as
+/// sombras e a hora dourada do céu.
 pub fn terrain_daynight_tint(
     clock: Option<Res<crate::worldsys::DayCycleState>>,
+    atmosphere: Option<Res<crate::worldsys::AtmosphereState>>,
     chunks: Option<Res<super::runtime::TerrainChunkMaterials>>,
     mut chunk_materials: ResMut<Assets<TerrainChunkMaterial>>,
     mut standards: ResMut<Assets<StandardMaterial>>,
@@ -375,6 +390,12 @@ pub fn terrain_daynight_tint(
         .unwrap_or(1.0);
     let tint = terrain_day_tint(day);
     let tinted = Color::linear_rgb(tint[0], tint[1], tint[2]);
+    // Direção PARA o sol → direção de VIAGEM (negar). Sem atmosphere ainda,
+    // mantém o default do `from_slots` (w = 0 e o shader fica no fallback).
+    let sun_travel = atmosphere
+        .as_deref()
+        .map(|a| -a.sun_dir.normalize_or_zero())
+        .unwrap_or(Vec3::ZERO);
 
     let Some(chunks) = chunks else { return };
     if let Some(layers) = &chunks.layer {
@@ -386,9 +407,17 @@ pub fn terrain_daynight_tint(
         if last_step.is_none_or(|prev| (step - prev).abs() > 1e-4) {
             *last_step = Some(step);
             let tinted4 = Vec4::new(tint[0], tint[1], tint[2], 1.0);
+            let sun4 = if sun_travel != Vec3::ZERO {
+                Vec4::new(sun_travel.x, sun_travel.y, sun_travel.z, 1.0)
+            } else {
+                Vec4::ZERO
+            };
             for handle in layers.materials.values() {
                 if let Some(mut material) = chunk_materials.get_mut(handle) {
                     material.params.day_tint = tinted4;
+                    if sun4.w > 0.0 {
+                        material.params.sun_dir = sun4;
+                    }
                 }
             }
         }
@@ -448,7 +477,6 @@ mod tests {
     }
 
     /// GUARDA DE CRASH — não relaxar sem reler o bloco de `TerrainChunkMaterial`.
-    ///
     /// O material TEM de ser bindless e o WGSL tem de ter o ramo `BINDLESS`
     /// que lê as texturas das binding arrays partilhadas. Um material custom
     /// não-bindless com uma binding de textura segfaulta o driver NVIDIA
@@ -493,6 +521,34 @@ mod tests {
             wgsl.contains("var<storage> material_indices"),
             "a tabela de índices bindless está no binding 0"
         );
+    }
+
+    /// As cópias do shader de chunk em disco (`worlds/shaders/`,
+    /// `assets/shaders/` — reescritas pelo `viber run` a cada arranque) não
+    /// podem ficar presas a overlays de debug antigos: um T5 esquecido na
+    /// cópia da raiz escrevia a splat CRUA como cor final (blocos rosa/verde
+    /// dos pesos) nos mundos cujo asset root resolve para ela.
+    #[test]
+    fn test_shader_disk_copies_have_no_debug_overlays() {
+        const DEBUG_MARKERS: [&str; 2] = [
+            "out.color = vec4<f32>(s.rgb, 1.0);", // splat crua como cor final
+            "T5:",
+        ];
+        for copy in ["assets/shaders/terrain_chunk.wgsl", "worlds/shaders/terrain_chunk.wgsl"]
+        {
+            let Ok(source) = std::fs::read_to_string(copy) else {
+                // A cópia ainda não existe (nunca houve um run que a
+                // escrevesse) — nada a guardar.
+                continue;
+            };
+            for marker in DEBUG_MARKERS {
+                assert!(
+                    !source.contains(marker),
+                    "{copy} ficou presa a um overlay de debug ({marker:?}); regenera a \
+                     partir de src/terrain/chunk.wgsl"
+                );
+            }
+        }
     }
 
     /// O gate triplanar deriva do `cliff-angle`: 50° → slope 1−cos(50°) ≈

@@ -131,6 +131,12 @@ pub fn drive_ui_fades(
     mut commands: Commands,
     time: Res<Time>,
     data: Res<UiData>,
+    // Warn 1× por binding desconhecido (padrão do `UiBindWarnings`): um
+    // elemento com fade está EXCLUÍDO da query do `apply_ui_bindings` —
+    // togglar a `Visibility` dele em duro partiria o dissolve — pelo que o
+    // aviso de binding errado só pode viver aqui. Sem isto, um typo no `bind`
+    // deixava o elemento no sítio para sempre e calado.
+    mut warned: Local<std::collections::HashSet<String>>,
     mut fades: Query<(
         Entity,
         Option<&UiBind>,
@@ -142,10 +148,13 @@ pub fn drive_ui_fades(
     let dt = time.delta_secs();
     for (entity, bind, mut fade, mut visibility, already_dirty) in &mut fades {
         if let Some(bind) = bind {
-            // An unknown binding is already reported by `apply_ui_bindings`;
-            // here it simply leaves the element where it is.
-            if let Some(value) = data.get(&bind.0) {
-                fade.shown = value.truthy;
+            match data.get(&bind.0) {
+                Some(value) => fade.shown = value.truthy,
+                None => {
+                    if warned.insert(bind.0.clone()) {
+                        warn!("ui: unknown binding `{}` — fade left untouched", bind.0);
+                    }
+                }
             }
         }
         let before = fade.alpha;

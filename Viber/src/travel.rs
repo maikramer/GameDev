@@ -446,6 +446,10 @@ fn travel_menu_system(
     named: Query<(&Name, &GlobalTransform)>,
     nota: Res<NotaLog>,
     mut state: ResMut<TravelMenuState>,
+    // Espelho "painel aberto rouba input": sem isto, com o painel de viagem
+    // aberto o player ANDAVA (W/S navegavam E moviam) e o [J] que confirma a
+    // viagem disparava o melee — `MenusOpen.any()` é a porta do input.
+    mut menus: ResMut<crate::menus::MenusOpen>,
     mut fade: ResMut<TravelFade>,
     terrain: Option<Res<crate::terrain::runtime::TerrainRuntime>>,
     mut q_menu: Query<&mut Visibility, With<TravelMenu>>,
@@ -470,6 +474,10 @@ fn travel_menu_system(
     if state.open && !near_campfire {
         state.open = false;
     }
+    // Espelho ao MenusOpen logo após os dois caminhos de fecho acima
+    // (toggle [G] e saída por distância) — o [J] de confirmação fecha mais
+    // abaixo e re-espelha outra vez.
+    menus.travel = state.open;
     for mut visibility in q_menu.iter_mut() {
         let wanted = if state.open {
             Visibility::Visible
@@ -516,7 +524,13 @@ fn travel_menu_system(
             if let Some(pos) = target {
                 let x = pos.x + 2.0;
                 let z = pos.z + 2.0;
-                let y = terrain.as_ref().map(|t| t.sample(x, z)).unwrap_or(pos.y);
+                // SUPERFÍCIE RENDERIZADA (paridade com os spawners/knockback):
+                // o sample analítico flutua acima das cordas do mesh nas
+                // cristas — chegava-se do fast-travel a "pairar".
+                let y = terrain
+                    .as_ref()
+                    .map(|t| t.sample_mesh_surface(x, z))
+                    .unwrap_or(pos.y);
                 fade.phase = TravelFadePhase::Out;
                 fade.timer = TRAVEL_FADE_OUT;
                 fade.target = Some(Vec3::new(x, y + 0.1, z));
@@ -526,6 +540,9 @@ fn travel_menu_system(
                 });
                 toasts.write(ScriptToast(format!("A viajar para {label}…")));
                 state.open = false;
+                // Confirmação fecha o painel: re-espelha (senão o input
+                // ficava roubado para sempre).
+                menus.travel = false;
             }
         }
     }
@@ -773,9 +790,10 @@ fn quest_debug_landmark(
     };
     let x = target.1.x + 2.0;
     let z = target.1.z + 2.0;
+    // Paridade de assentamento: superfície renderizada (ver teleport [J]).
     let y = terrain
         .as_ref()
-        .map(|t| t.sample(x, z))
+        .map(|t| t.sample_mesh_surface(x, z))
         .unwrap_or(target.1.y);
     transform.translation = Vec3::new(x, y + 0.1, z);
     toasts.write(ScriptToast(format!("QA: teleport ao marco {}", target.0)));

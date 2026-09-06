@@ -34,7 +34,7 @@ use super::runtime::{
 };
 use super::style::Measure;
 use super::style::parse_declarations;
-use super::widgets::{UiCheck, UiInput, UiSlider, UiTooltipText};
+use super::widgets::{UiCheck, UiInput, UiSlider, UiTooltipText, normalized_range};
 use crate::xml::XmlNode;
 
 /// Tags this module knows how to build (lowercased).
@@ -271,6 +271,14 @@ pub fn build_ui_tree(
             entity.insert((Button, Interaction::default()));
         }
         "uimodal" => {
+            if attr(node, "id").is_none() {
+                // Abre à mesma, mas fica fora do registry: `viber.ui.open`
+                // não o alcança e o gameplay não o consegue interrogar.
+                warn!(
+                    "ui: <{}> sem `id` — não é endereçável por `viber.ui.open`/`is_open`",
+                    node.tag
+                );
+            }
             entity.insert((
                 UiModal {
                     key: parse_key(attr(node, "key").unwrap_or("f1")),
@@ -405,11 +413,21 @@ fn build_cooldown(world: &mut World, node: &XmlNode, slot: Entity) {
 fn build_slider(world: &mut World, node: &XmlNode, track: Entity) {
     let min = attr_f32(node, "min").unwrap_or(0.0);
     let max = attr_f32(node, "max").unwrap_or(1.0);
-    let (min, max) = if min.is_finite() && max.is_finite() {
-        (min.min(max), min.max(max))
-    } else {
-        (0.0, 1.0)
-    };
+    // `f32::clamp` asserta `min <= max`: um intervalo invertido
+    // (`min="100" max="10"`) ou não finito rebentava a engine no load.
+    // Avisa e normaliza — o autor vê o erro no log e o mundo abre na mesma.
+    if !min.is_finite() || !max.is_finite() {
+        warn!(
+            "ui: <{}> slider com min/max não finito — a usar o omissão 0..1",
+            node.tag
+        );
+    } else if max < min {
+        warn!(
+            "ui: <{}> slider com min {min} > max {max} — intervalo invertido, extremos trocados",
+            node.tag
+        );
+    }
+    let (min, max) = normalized_range(min, max);
     let value = attr_f32(node, "value").unwrap_or(max);
     let vertical = attr(node, "direction").is_some_and(|d| d.eq_ignore_ascii_case("vertical"));
     let mut fill_classes = UiClasses::parse(attr(node, "fill-class").unwrap_or_default());
@@ -789,6 +807,30 @@ mod tests {
         assert!(is_ui_tag("UiPanel"));
         assert!(is_ui_tag("uibar"));
         assert!(!is_ui_tag("HealthBar"));
+    }
+
+    #[test]
+    fn test_slider_with_inverted_or_non_finite_range_normalizes_instead_of_panicking() {
+        // `f32::clamp` asserta `min <= max`: `<UiSlider min="100" max="10">`
+        // panica no load do mundo. O parse avisa e ordena os extremos.
+        let mut app = tree_app();
+        let mut inverted = test_node("uislider", "inverted");
+        inverted.attrs.push(("min".into(), "100".into()));
+        inverted.attrs.push(("max".into(), "10".into()));
+        inverted.attrs.push(("value".into(), "120".into()));
+        let entity = build_test_node(&mut app, &inverted);
+        let slider = app.world().get::<UiSlider>(entity).unwrap();
+        assert_eq!((slider.min, slider.max), (10.0, 100.0));
+        assert_eq!(slider.value, 100.0, "o valor autorado cai no intervalo");
+
+        // Não finito cai nos omissões (0..1) em vez de contagiar o intervalo.
+        let mut nan = test_node("uislider", "nan");
+        nan.attrs.push(("min".into(), "NaN".into()));
+        nan.attrs.push(("value".into(), "0.5".into()));
+        let entity = build_test_node(&mut app, &nan);
+        let slider = app.world().get::<UiSlider>(entity).unwrap();
+        assert_eq!((slider.min, slider.max), (0.0, 1.0));
+        assert!((slider.value - 0.5).abs() < 1e-6);
     }
 
     /// Every element in a shipped world file, flattened.

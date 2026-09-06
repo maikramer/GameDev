@@ -60,6 +60,13 @@ pub struct VoxelSpawnStats {
 ///
 /// Driving from the terrain grid makes the tiling exact: a volumetric chunk is
 /// covered by whole boxes, a flat chunk by none.
+///
+/// `voxel_size` is the WANTED cell size: boxes per edge are rounded up and the
+/// actual box extent is derived from `chunk_edge` so a row of boxes ends
+/// exactly on the border. `material` is the standard-material fallback for
+/// chunks without a per-chunk layer entry — it must be double-sided
+/// (`cull_mode: None`; surface nets leaves a few inward-wound triangles along
+/// sub-voxel thin shells), which is how the bootstrap builds it.
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_voxel_chunks(
     world: &mut World,
@@ -77,17 +84,31 @@ pub fn spawn_voxel_chunks(
     if field.is_flat() || !(chunk_edge.is_finite() && chunk_edge > 0.0) {
         return stats;
     }
-    let extent = VOXEL_CHUNK_CELLS as f32 * voxel_size;
-    if !(extent.is_finite() && extent > 0.0) {
+    let wanted = VOXEL_CHUNK_CELLS as f32 * voxel_size;
+    if !(wanted.is_finite() && wanted > 0.0) {
         return stats;
     }
     // Boxes per terrain-chunk edge, rounded up so a chunk is always covered.
-    let per_edge = (chunk_edge / extent).ceil().max(1.0) as i32;
+    // When the wanted box does not divide the edge exactly (edge 96 at a 2 m
+    // step wants 64 m boxes → 2 boxes = 128 m), the row would overrun the
+    // chunk border and spill into the neighbour — z-fighting a flat chunk's
+    // heightfield or interpenetrating a volumetric one. Derive the box extent
+    // FROM the chunk edge instead: whole boxes per row that tile the chunk
+    // exactly. When it does divide (the default 64 m chunk at a 1 m step),
+    // the extent comes out identical.
+    let per_edge = (chunk_edge / wanted).ceil().max(1.0) as i32;
+    let extent = chunk_edge / per_edge as f32;
+    let voxel_size = extent / VOXEL_CHUNK_CELLS as f32;
     let mods_y = field.index().bounds();
     // `chunk_tint` is what the heightfield mesher uses: with `layers` active it
     // zeroes the banding so the splat owns the look, and the voxel path has to
     // make the same choice or the two disagree at every boundary.
     let tint = spec.chunk_tint();
+    // Same per-world choice the heightfield mesher makes about R: in a
+    // `layers` world R carries wall space for the chunk shader, on the legacy
+    // path the vertex colour is the plain tint the StandardMaterial
+    // multiplies.
+    let uses_layer_material = !spec.layers.is_empty();
 
     let half = spec.world_size * 0.5;
     let rows = (spec.world_size / chunk_edge).ceil().max(1.0) as i32;
@@ -138,6 +159,7 @@ pub fn spawn_voxel_chunks(
                             texture_tile_size: spec.texture_tile_size,
                             tint: tint.clone(),
                             max_height: spec.max_height,
+                            uses_layer_material,
                         };
                         let density = |p: Vec3| field.density(grid, p);
                         let Some(data) = build_voxel_mesh(&density, &params) else {
@@ -361,6 +383,97 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A chunk edge the wanted box does not divide must not let the box row
+    /// overrun the chunk: `ceil(96/64) = 2` boxes of 64 m span 128 m, spilling
+    /// 32 m into the neighbour — z-fight with a flat chunk, interpenetration
+    /// with a volumetric one. The row has to be re-derived from the edge
+    /// instead (48 m boxes tile 96 m exactly), and the default 64 m / 1 m
+    /// world must stay byte-identical.
+    #[test]
+    fn test_an_edge_that_does_not_divide_the_box_keeps_the_row_inside() {
+        let mut h = harness();
+        let grid = flat_grid(256.0, 10.0, 100.0);
+        let spec = TerrainSpec {
+            world_size: 256.0,
+            ..TerrainSpec::default()
+        };
+        let field = shelf_field(256.0);
+        spawn_voxel_chunks(
+            &mut h.world,
+            &mut h.meshes,
+            h.parent,
+            &spec,
+            &grid,
+            &field,
+            &h.material,
+            None,
+            2.0, // wanted 64 m boxes against a 96 m edge
+            96.0,
+        );
+
+        let boxes: Vec<(Vec3, f32)> = h
+            .world
+            .query::<&VoxelChunk>()
+            .iter(&h.world)
+            .map(|c| (c.origin, c.extent))
+            .collect();
+        assert!(!boxes.is_empty(), "nothing spawned");
+        let half = 128.0_f32;
+        for (origin, extent) in &boxes {
+            let cx = ((origin.x + half) / 96.0).floor() as i32;
+            let cz = ((origin.z + half) / 96.0).floor() as i32;
+            let x0 = -half + cx as f32 * 96.0;
+            let z0 = -half + cz as f32 * 96.0;
+            assert!(
+                origin.x >= x0 - 0.01
+                    && origin.x + extent <= x0 + 96.0 + 0.01
+                    && origin.z >= z0 - 0.01
+                    && origin.z + extent <= z0 + 96.0 + 0.01,
+                "box {origin:?} extent {extent} overruns its chunk ({x0}, {z0})"
+            );
+            // Rows tile the chunk exactly: origins sit on the derived lattice.
+            assert!(
+                ((origin.x - x0) / extent).fract().abs() < 1e-4,
+                "box {origin:?} is not on the {extent} m lattice of its chunk"
+            );
+        }
+    }
+
+    /// The default world (64 m chunks, 1 m step) must be untouched by the
+    /// extent derivation: 2 boxes of 32 m, exactly as before.
+    #[test]
+    fn test_the_default_chunk_edge_keeps_its_32m_boxes() {
+        let mut h = harness();
+        let grid = flat_grid(256.0, 10.0, 100.0);
+        let spec = TerrainSpec {
+            world_size: 256.0,
+            ..TerrainSpec::default()
+        };
+        spawn_voxel_chunks(
+            &mut h.world,
+            &mut h.meshes,
+            h.parent,
+            &spec,
+            &grid,
+            &shelf_field(256.0),
+            &h.material,
+            None,
+            1.0,
+            64.0,
+        );
+        let extents: Vec<f32> = h
+            .world
+            .query::<&VoxelChunk>()
+            .iter(&h.world)
+            .map(|c| c.extent)
+            .collect();
+        assert!(!extents.is_empty());
+        assert!(
+            extents.iter().all(|e| *e == 32.0),
+            "default extent changed: {extents:?}"
+        );
     }
 
     #[test]

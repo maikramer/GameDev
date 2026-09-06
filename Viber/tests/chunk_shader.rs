@@ -14,7 +14,7 @@
 use naga::valid::{Capabilities, ValidationFlags};
 
 /// Explicit minimal stubs for the `#import`s the chunk shader uses.
-const IMPORTS: [(&str, &str); 4] = [
+const IMPORTS: [(&str, &str); 5] = [
     (
         "#import bevy_pbr::forward_io::{VertexOutput, FragmentOutput}",
         "struct VertexOutput {\n\
@@ -29,7 +29,22 @@ const IMPORTS: [(&str, &str); 4] = [
     (
         "#import bevy_pbr::mesh_view_bindings::view",
         "struct View { world_position: vec4<f32>, };\n\
-         @group(1) @binding(0) var<uniform> view: View;",
+         @group(1) @binding(0) var<uniform> view: View;\n\
+         // apply_fog lê `view_bindings::fog` — mesmo módulo fake.\n\
+         struct FogStub { color: vec4<f32>, };\n\
+         @group(1) @binding(1) var<uniform> fog: FogStub;",
+    ),
+    (
+        "#import bevy_pbr::pbr_functions::apply_fog",
+        "fn apply_fog(\n\
+         \x20   fog_params: FogStub,\n\
+         \x20   input_color: vec4<f32>,\n\
+         \x20   fragment_world_position: vec3<f32>,\n\
+         \x20   view_world_position: vec3<f32>,\n\
+         \x20   frag_coord_xy: vec2<f32>,\n\
+         ) -> vec4<f32> {\n\
+         \x20   return input_color;\n\
+         }",
     ),
     (
         "#import bevy_render::bindless::{bindless_textures_2d, bindless_samplers_filtering}",

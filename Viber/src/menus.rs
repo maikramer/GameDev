@@ -97,11 +97,16 @@ pub fn shop_catalog() -> Vec<(&'static str, i32, &'static str, u32)> {
 pub struct MenusOpen {
     pub modal: bool,
     pub shop: bool,
+    /// Painel de viagem rápida [G] (`travel::TravelMenuState.open` — o
+    /// espelho vive no `travel_menu_system`). Sem este campo, com o painel
+    /// aberto o player andava (W/S navegavam E moviam) e o [J] que confirma
+    /// a viagem disparava o melee.
+    pub travel: bool,
 }
 
 impl MenusOpen {
     pub fn any(&self) -> bool {
-        self.modal || self.shop
+        self.modal || self.shop || self.travel
     }
 }
 
@@ -741,5 +746,21 @@ mod tests {
     fn test_toast_constants_sane() {
         assert!((1..=6).contains(&TOAST_CAP));
         assert!((2.0..=5.0).contains(&TOAST_LIFETIME));
+    }
+
+    /// R2-G2: o painel de viagem rápida [G] conta como menu aberto —
+    /// `any()` é a porta de input de movimento/melee/hotbar.
+    #[test]
+    fn test_menus_open_any_includes_travel_panel() {
+        let mut menus = MenusOpen::default();
+        assert!(!menus.any(), "tudo fechado = input livre");
+        menus.travel = true;
+        assert!(menus.any(), "painel de viagem rouba o input");
+        menus.travel = false;
+        menus.modal = true;
+        assert!(menus.any());
+        menus.modal = false;
+        menus.shop = true;
+        assert!(menus.any());
     }
 }

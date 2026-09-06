@@ -359,6 +359,11 @@ fn ping(_params: In<Option<Value>>, _world: &mut World) -> BrpResult {
     Ok(json!({
         "pong": true,
         "version": env!("CARGO_PKG_VERSION"),
+        // Identidade do processo: o `session up` compara-a com o pid do filho
+        // que spawnou — dois `session up` em corrida escolhem a mesma primeira
+        // porta livre, e sem isto o perdedor registava no engine.json a porta
+        // da engine do vencedor.
+        "pid": std::process::id(),
     }))
 }
 

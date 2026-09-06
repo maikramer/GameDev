@@ -233,6 +233,17 @@ pub fn apply_save(
     mixer.sfx = game.volumes.2.clamp(0.0, 1.0);
 }
 
+/// `XpLevel` que o load deve aplicar ao herói (R2-G4): nível e `last_next`
+/// vêm do save, para o `level_up_detector` (que compara `xp.next` ao
+/// `last_next`) ler o load como "já visto" em vez de fanfarrar um level-up
+/// espúrio com o nível errado. Puro para testes.
+pub fn saved_xp_level(game: &SaveGame) -> crate::vitals::XpLevel {
+    crate::vitals::XpLevel {
+        level: game.level,
+        last_next: game.xp.1,
+    }
+}
+
 /// Opções e gravação: linhas ↑↓, volumes ←→, [J] grava, [L] carrega — e os
 /// mesmos dois efeitos disparados pelos botões do menu declarativo
 /// (`viber.ui.action("save"|"load", "")`).
@@ -261,6 +272,7 @@ fn options_system(
             &mut Transform,
             &mut Player,
             Option<&mut crate::skills::LevelState>,
+            Option<&mut crate::vitals::XpLevel>,
         ),
         With<Player>,
     >,
@@ -311,7 +323,7 @@ fn options_system(
         // nos defaults ((100,100),(0,100), origem) SOBRESCREVIA um save bom.
         // Trata como falha: toast + SFX de erro, sem tocar no disco.
         let hero_state = heroes.single_mut().ok().map(
-            |(hp, xp, t, _player, level)| {
+            |(hp, xp, t, _player, level, _xp_level)| {
                 (
                     (hp.current, hp.max),
                     (xp.current, xp.next),
@@ -372,7 +384,8 @@ fn options_system(
                     &mut tree,
                     &mut stats,
                 );
-                if let Ok((mut hp, mut xp, mut transform, mut player, level)) = heroes.single_mut()
+                if let Ok((mut hp, mut xp, mut transform, mut player, level, xp_level)) =
+                    heroes.single_mut()
                 {
                     // Passivas do save aplicadas ao herói (HP máx + speed)
                     // antes de o estado guardado sobrepor tudo.
@@ -389,6 +402,18 @@ fn options_system(
                     }
                     if let Some(mut level) = level {
                         level.level = game.level;
+                    }
+                    // R2-G4: sincronizar o XpLevel com o save — o load muda
+                    // `Xp` (Changed<Xp>) e o level_up_detector compara
+                    // `xp.next` ao `last_next` visto; dessincronizado,
+                    // fanfarra um level-up ESPÚRIO com o nível errado no
+                    // load. Escrita DIRETA (não Commands): visível ao
+                    // detector no mesmo frame. Sem XpLevel (praticamente
+                    // impossível — existe desde o 1.º sighting do herói),
+                    // o detector insere baseline silencioso com o next do
+                    // save: também não fanfarra.
+                    if let Some(mut xp_level) = xp_level {
+                        *xp_level = saved_xp_level(&game);
                     }
                 }
                 // Carregar um save com xp.next maior não pode creditar
@@ -414,6 +439,27 @@ fn options_system(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// R2-G4: o XpLevel sincronizado do save mantém o level_up_detector
+    /// silencioso — `xp.next` (aplicado pelo load) == `last_next` (do save).
+    #[test]
+    fn test_saved_xp_level_keeps_detector_silent() {
+        let game = SaveGame {
+            level: 4,
+            xp: (12, 338),
+            ..Default::default()
+        };
+        let synced = saved_xp_level(&game);
+        assert_eq!(synced.level, 4);
+        assert_eq!(synced.last_next, 338);
+        // Detector a seguir ao load: next (338) == last_next (338) → sem
+        // cadeia a contar, sem fanfarra.
+        assert_eq!(crate::vitals::levels_between(synced.last_next, 338), 0);
+        // O estado dessincronizado que fanfarrava: last_next velho (baseline
+        // 100) contra o next do save contava 3 níveis inexistentes.
+        assert_eq!(crate::vitals::levels_between(100, 338), 3);
+    }
+
     #[test]
     fn test_save_roundtrip_preserves_state() {
         let mut vault = Vault::default();

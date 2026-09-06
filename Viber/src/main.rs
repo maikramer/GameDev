@@ -986,28 +986,33 @@ fn run_session(command: SessionCommand) -> Result<std::process::ExitCode> {
 /// spawna `viber run <mundo> --no-cargo --bridge <porta>` destacado com log
 /// em ficheiro e espera o bridge responder. No fim liberta o lease.
 /// Primeira porta livre a partir de `start`: nem o SO a tem ocupada, nem
-/// outra sessão a reclamou no seu `engine.json`. A varrida começa num
-/// offset aleatório do segundo: dois `session up` em corrida escolheriam
-/// ambos a MESMA primeira porta livre (a sonda bind solta-se antes de
-/// qualquer engine nascer) e o perdedor ficava a falar com o mundo do
-/// vencedor — com offset aleatório a colisão cai de 1 para 1/64.
+/// outra sessão a reclamou no seu `engine.json`. A ordem é DETERMINÍSTICA
+/// (`start..start+span`) — é o contrato documentado no help do CLI e o que o
+/// fluxo de QA assume (`VIBER_BRIDGE_PORT=15702 viber debug …` só bate certo
+/// se a engine partilhada estiver na primeira porta livre).
 ///
-/// Sem isto, `viber session up` usava sempre 15702 e a segunda sessão (outro
-/// mundo) subia com o bridge morto — o cliente falava com a engine errada.
+/// A corrida original (dois `session up` simultâneos escolhem a MESMA
+/// primeira porta livre — a sonda bind solta-se antes de qualquer engine
+/// nascer — e o perdedor ficava a falar com o mundo do vencedor) já não se
+/// resolve com offset aleatório: resolve-a o `session up` confirmando, pelo
+/// pid que o `viber.ping` devolve, que a engine que responde é a QUE ELE
+/// spawnou — em caso negativo tenta a porta livre seguinte (ver `session_up`).
 fn free_bridge_port(start: u16) -> Result<u16> {
+    // Pré-filtro barato (TCP, 250 ms) antes do probe HTTP caro (~2 s por
+    // órfão) — mesmo padrão do `session_port` no cliente.
     let taken: Vec<u16> = viber::session::SessionPaths::all()
         .iter()
         .filter_map(|(_, paths)| paths.engine_info())
+        .filter(|engine| bridge::client::port_alive(engine.port))
         .filter(|engine| probe_engine(engine.port))
         .map(|engine| engine.port)
         .collect();
     let span = 64u16;
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.subsec_nanos() as usize)
-        .unwrap_or(0);
-    for i in 0..span {
-        let port = start + ((nanos + i as usize) % span as usize) as u16;
+    for offset in 0..span {
+        // `start` pode estar perto do teto u16 — portas aí acima não existem.
+        let Some(port) = start.checked_add(offset) else {
+            break;
+        };
         if taken.contains(&port) {
             continue;
         }
@@ -1019,6 +1024,16 @@ fn free_bridge_port(start: u16) -> Result<u16> {
         "nenhuma porta livre entre {start} e {}",
         start.saturating_add(span - 1)
     )
+}
+
+/// O pid que a engine na porta devolve no `viber.ping` — `None` se a porta
+/// não responde (boot a meio, porta morta, listener wedged) ou se o bridge
+/// não se identifica (binário mais velho que o ping com pid).
+fn bridge_ping_pid(port: u16) -> Option<u32> {
+    let pong = BridgeClient::localhost(port).probe().ok()?;
+    pong.get("pid")
+        .and_then(Value::as_u64)
+        .map(|pid| pid as u32)
 }
 
 /// Estado de todas as sessões — o mapa que um agente paralelo precisa antes
@@ -1051,6 +1066,16 @@ fn session_list() -> Result<()> {
     Ok(())
 }
 
+/// Sobe a engine partilhada do mundo: reclama o lease durante o boot,
+/// spawna `viber run <mundo> --no-cargo --bridge <porta>` destacado com log
+/// em ficheiro e espera o bridge responder. No fim liberta o lease.
+/// Confirma, pelo pid que o `viber.ping` devolve, que a engine que responde
+/// é A QUE ESTE PROCESSO SPAWNOU — dois `session up` em corrida escolhem a
+/// mesma primeira porta livre; sem a confirmação, o perdedor registava no
+/// engine.json a porta da engine do vencedor (e falava com o mundo errado).
+/// Em corrida perdida (ou bridge que não responde — listener wedged a barrar
+/// o bind), mata o próprio filho e tenta a porta livre seguinte, até
+/// 3 tentativas. Com `--port` explícito não há próxima porta: uma tentativa.
 fn session_up(world: Option<&Path>, port: Option<u16>) -> Result<()> {
     let (paths, world_abs) = session_paths(world.map(PathBuf::from).as_ref())?;
     // Claim curto só para serializar boot — falha se outro agente está em QA.
@@ -1072,70 +1097,100 @@ fn session_up(world: Option<&Path>, port: Option<u16>) -> Result<()> {
             }
             eprintln!("viber session: engine anterior morta — a substituir");
         }
-        let port = match port {
-            Some(port) => port,
-            None => free_bridge_port(viber::bridge::DEFAULT_BRIDGE_PORT)?,
-        };
-        let log = paths.log_file();
-        if let Some(parent) = log.parent() {
-            std::fs::create_dir_all(parent)?;
+        // Com porta explícita não há "próxima porta" para tentar em corrida.
+        let attempts = if port.is_some() { 1 } else { 3 };
+        for attempt in 1..=attempts {
+            // Renova o claim de boot — 3 tentativas × 90 s excederiam o TTL.
+            paths.touch(Some("session-up"), std::time::Duration::from_secs(120))?;
+            let attempt_port = match port {
+                Some(port) => port,
+                None => free_bridge_port(viber::bridge::DEFAULT_BRIDGE_PORT)?,
+            };
+            let log = paths.log_file();
+            if let Some(parent) = log.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let log_file = std::fs::File::create(&log)
+                .with_context(|| format!("a criar log {}", log.display()))?;
+            let exe = std::env::current_exe()?;
+            println!(
+                "viber session: a arrancar {} --bridge {} (log: {})",
+                world_abs.display(),
+                attempt_port,
+                log.display()
+            );
+            let mut child = std::process::Command::new(exe)
+                .arg("run")
+                .arg(&world_abs)
+                .arg("--no-cargo")
+                .arg("--bridge")
+                .arg(attempt_port.to_string())
+                .stdin(std::process::Stdio::null())
+                .stdout(log_file.try_clone()?)
+                .stderr(log_file)
+                .spawn()
+                .context("a spawnar a engine partilhada")?;
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
+            let mut timed_out = false;
+            loop {
+                if let Ok(Some(status)) = child.try_wait() {
+                    paths.clear_engine();
+                    bail!(
+                        "engine saiu durante o boot ({status}) — veja o log {}",
+                        log.display()
+                    );
+                }
+                // O ping identifica a engine (pid do processo): só registamos
+                // o engine.json quando a que responde é O NOSSO filho. Custo
+                // zero no caminho feliz — é o MESMO ping que o wait já pagava.
+                if let Some(pid) = bridge_ping_pid(attempt_port) {
+                    if pid == child.id() {
+                        paths.write_engine(&viber::session::EngineInfo {
+                            pid: child.id(),
+                            port: attempt_port,
+                            world: world_abs.display().to_string(),
+                            started_at_ms: std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_millis() as u64)
+                                .unwrap_or(0),
+                            log: log.display().to_string(),
+                        })?;
+                        println!(
+                            "viber session: engine viva em :{attempt_port} (pid {}) — `viber session claim` antes de usar",
+                            child.id()
+                        );
+                        return Ok(());
+                    }
+                    // Outra engine responde nessa porta — a nossa não conseguiu
+                    // o bind e fica viva com a janela aberta: matar e tentar a
+                    // porta livre seguinte.
+                    eprintln!(
+                        "viber session: porta {attempt_port} disputada (engine pid {pid} respondeu ao ping) — tentativa {attempt}/{attempts}"
+                    );
+                    break;
+                }
+                if std::time::Instant::now() > deadline {
+                    timed_out = true;
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_secs(1));
+            }
+            let _ = child.kill();
+            let _ = child.wait();
+            paths.clear_engine();
+            if timed_out {
+                // Pode ser um listener wedged (TCP aceita, ping nunca chega) a
+                // barrar o bind do NOSSO bridge — nova porta em vez de
+                // desistir à primeira.
+                eprintln!(
+                    "viber session: bridge em :{attempt_port} não respondeu em 90 s — tentativa {attempt}/{attempts}"
+                );
+            }
         }
-        let log_file = std::fs::File::create(&log)
-            .with_context(|| format!("a criar log {}", log.display()))?;
-        let exe = std::env::current_exe()?;
-        println!(
-            "viber session: a arrancar {} --bridge {} (log: {})",
-            world_abs.display(),
-            port,
-            log.display()
-        );
-        let mut child = std::process::Command::new(exe)
-            .arg("run")
-            .arg(&world_abs)
-            .arg("--no-cargo")
-            .arg("--bridge")
-            .arg(port.to_string())
-            .stdin(std::process::Stdio::null())
-            .stdout(log_file.try_clone()?)
-            .stderr(log_file)
-            .spawn()
-            .context("a spawnar a engine partilhada")?;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
-        loop {
-            if let Ok(Some(status)) = child.try_wait() {
-                paths.clear_engine();
-                bail!(
-                    "engine saiu durante o boot ({status}) — veja o log {}",
-                    log.display()
-                );
-            }
-            if probe_engine(port) {
-                paths.write_engine(&viber::session::EngineInfo {
-                    pid: child.id(),
-                    port,
-                    world: world_abs.display().to_string(),
-                    started_at_ms: std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_millis() as u64)
-                        .unwrap_or(0),
-                    log: log.display().to_string(),
-                })?;
-                println!(
-                    "viber session: engine viva em :{port} (pid {}) — `viber session claim` antes de usar",
-                    child.id()
-                );
-                return Ok(());
-            }
-            if std::time::Instant::now() > deadline {
-                let _ = child.kill();
-                paths.clear_engine();
-                bail!(
-                    "bridge em :{port} não respondeu em 90 s — veja o log {}",
-                    log.display()
-                );
-            }
-            std::thread::sleep(std::time::Duration::from_secs(1));
-        }
+        bail!(
+            "bridge não arrancou em {attempts} tentativa(s) — veja o log {} (porta disputada por outra engine ou boot falhado)",
+            paths.log_file().display()
+        )
     })();
     let _ = paths.release(Some("session-up"));
     result
@@ -1158,16 +1213,40 @@ fn session_down(world: Option<&Path>) -> Result<()> {
         return Ok(());
     };
     // Identidade antes do sinal: um PID reutilizado pode ser um processo
-    // inocente. O cmdline da engine é o binário `viber` (spawn via
-    // `current_exe()`), portanto tem de o conter. Se o processo já morreu, o
-    // /proc nem existe — mantemos o fluxo antigo de limpar os metadados.
+    // inocente (`tail -f` do log da engine, um editor com o caminho aberto)
+    // — procurar "viber" como SUBSTRING do cmdline inteiro batia neles.
+    // Compara o argv[0] (primeiro componente antes do NUL) com o executável
+    // atual canónico; fallback: basename exatamente "viber" (a engine é
+    // sempre spawnada via `current_exe()` no `session up`). Se o /proc nem
+    // existe, o processo já morreu — mantemos o fluxo antigo de limpar os
+    // metadados.
     let cmdline = Path::new("/proc")
         .join(engine.pid.to_string())
         .join("cmdline");
-    if let Ok(command) = std::fs::read_to_string(&cmdline) {
-        if !command.contains("viber") {
+    if let Ok(raw) = std::fs::read(&cmdline) {
+        let argv0 = raw
+            .split(|byte| *byte == 0)
+            .next()
+            .map(String::from_utf8_lossy)
+            .unwrap_or_default()
+            .into_owned();
+        let our_exe = std::env::current_exe()
+            .ok()
+            .and_then(|exe| std::fs::canonicalize(exe).ok());
+        let is_engine = match our_exe
+            .as_deref()
+            .map(|exe| std::fs::canonicalize(&argv0).map(|arg| arg == exe))
+        {
+            // argv[0] absoluto e resolvível: tem de ser O NOSSO binário.
+            Some(Ok(same_exe)) => same_exe,
+            // argv[0] relativo, apagado desde o spawn, ou current_exe falhou:
+            // o basename exato "viber" chega (um inocente com o caminho da
+            // engine em qualquer outro argumento já não conta).
+            _ => Path::new(&argv0).file_name().is_some_and(|name| name == "viber"),
+        };
+        if !is_engine {
             bail!(
-                "pid {} não parece uma engine viber (PID reutilizado?) — engine.json mantido; limpe à mão se confirmar",
+                "pid {} não parece uma engine viber (argv[0] `{argv0}`; PID reutilizado?) — engine.json mantido; limpe à mão se confirmar",
                 engine.pid
             );
         }

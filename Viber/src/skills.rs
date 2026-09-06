@@ -542,7 +542,13 @@ pub fn abilities_system(
         // dashava PARA TRÁS (mesma correção do melee, `combat::hero_forward`).
         let forward = crate::combat::hero_forward(global) * DASH_DISTANCE;
         let (x, z) = (pos.x + forward.x, pos.z + forward.z);
-        let y = terrain.as_ref().map(|t| t.sample(x, z)).unwrap_or(pos.y);
+        // SUPERFÍCIE RENDERIZADA (paridade com spawners/knockback): o sample
+        // analítico flutua acima das cordas do mesh nas cristas — o dash
+        // aterrava a "pairar" 1-2 m.
+        let y = terrain
+            .as_ref()
+            .map(|t| t.sample_mesh_surface(x, z))
+            .unwrap_or(pos.y);
         transform.translation = Vec3::new(x, y, z);
         commands.entity(entity).insert(Invulnerable {
             timer: DASH_IFRAMES,
@@ -848,6 +854,11 @@ fn bomb_step_system(
                 }
             }
         }
+        // R2-G7: os mortos neste frame têm `Corpse` PENDENTE nos commands (a
+        // query de cima ainda não os filtra) — o knockback radial em baixo
+        // não volta a empurrá-los (cadáver a ser arrastado e Y-slamado
+        // durante a animação de morte).
+        let killed_ids: Vec<Entity> = kills.iter().map(|(e, _, _)| *e).collect();
         for (target, script, position) in kills {
             kill_creature(
                 &mut commands,
@@ -881,8 +892,12 @@ fn bomb_step_system(
             BOMB_RING_RADIUS,
             Color::srgb(1.0, 0.75, 0.45),
         );
-        // knockback radial (loop 10): empurra as criaturas sobreviventes
+        // knockback radial (loop 10): empurra as criaturas SOBREVIVENTES —
+        // os abates deste frame (Corpse pendente) ficam de fora (R2-G7).
         for (target, t, _health, _script, _recoil) in creatures.iter_mut() {
+            if killed_ids.contains(&target) {
+                continue;
+            }
             let delta = t.translation() - center;
             let distance = delta.length();
             if let Some(strength) =
@@ -916,20 +931,27 @@ fn level_system(
         return;
     };
     if xp.next > previous {
-        let gained = 1 + (xp.next - previous) / 100;
-        match levels.get_mut(entity) {
-            Ok((_, mut level)) => {
-                level.level += gained;
-                level.points += gained;
+        // Rampa REAL do vitals (+50 %: 100→150→225→338…) — a fórmula antiga
+        // `1 + delta/100` assumia +100/nível e sobre-creditava pontos à
+        // medida que o nível subia (225→338 é UM nível, a fórmula dava 2).
+        // Cadeias que não batem exato (save antigo por cima) devolvem 0:
+        // ressincroniza sem creditar nada.
+        let gained = crate::vitals::levels_between(previous, xp.next);
+        if gained > 0 {
+            match levels.get_mut(entity) {
+                Ok((_, mut level)) => {
+                    level.level += gained;
+                    level.points += gained;
+                }
+                Err(_) => {
+                    commands.entity(entity).insert(LevelState {
+                        level: gained,
+                        points: gained,
+                    });
+                }
             }
-            Err(_) => {
-                commands.entity(entity).insert(LevelState {
-                    level: gained,
-                    points: gained,
-                });
-            }
+            tree.points += gained;
         }
-        tree.points += gained;
     }
     progress.previous_next = Some(xp.next);
 }
@@ -993,5 +1015,42 @@ mod tests {
         assert!((radial_damage(0.0, 6.0, 90.0).unwrap() - 90.0).abs() < 1e-4);
         assert!((radial_damage(6.0, 6.0, 90.0).unwrap() - 45.0).abs() < 1e-4);
         assert!(radial_damage(7.0, 6.0, 90.0).is_none());
+    }
+
+    /// R2-G1: o crédito de níveis/pontos segue a rampa REAL do vitals
+    /// (+50 %) — a fórmula antiga `1 + delta/100` dava 2 pontos no salto
+    /// único 225→338 (que é UM nível).
+    #[test]
+    fn test_level_system_credits_levels_by_real_ramp() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(SkillsPlugin);
+        let hero = app
+            .world_mut()
+            .spawn((
+                Player::default(),
+                Xp {
+                    current: 0,
+                    next: 225,
+                },
+                LevelState {
+                    level: 5,
+                    points: 0,
+                },
+            ))
+            .id();
+        app.update(); // baseline silencioso do LevelProgress (previous = 225)
+
+        // 300/225 faz EXATAMENTE um salto de rampa (225→338).
+        app.world_mut().get_mut::<Xp>(hero).unwrap().current = 300;
+        app.update();
+        let level = app.world().get::<LevelState>(hero).unwrap();
+        assert_eq!(level.level, 6, "225→338 é UM nível, não dois");
+        assert_eq!(level.points, 1, "um ponto de skill por nível real");
+        assert_eq!(app.world().resource::<SkillTree>().points, 1);
+        // E o next foi consumido: novo frame sem ganho não re-credita.
+        app.update();
+        let level = app.world().get::<LevelState>(hero).unwrap();
+        assert_eq!(level.points, 1, "sem re-credito no frame seguinte");
     }
 }

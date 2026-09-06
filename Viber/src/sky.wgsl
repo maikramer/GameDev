@@ -232,7 +232,11 @@ fn aurora_ribbons(dir: vec3<f32>, time: f32, night: f32, pixel: f32) -> vec3<f32
     let drift = vec2(time * 0.008, 0.0);
     let wave = fbm(dir.xz * 2.0 + drift, pixel * 2.0);
     let altitude = 0.30 + wave * 0.25;
-    let curtain = exp(-pow((dir.y - altitude) * 12.0, 2.0));
+    // pow() with a negative base is UB in WGSL (log2(neg) = NaN): dir.y below
+    // the wave-driven altitude is the common case, so square the value
+    // directly instead — same curtain, no poisoned sky when night > 0.
+    let d = (dir.y - altitude) * 12.0;
+    let curtain = exp(-d * d);
     let strands = fbm(vec2(dir.x * 17.0 + wave * 3.0, dir.z * 2.0) + drift, pixel * 17.0);
     let mask = curtain * smoothstep(0.44, 0.74, strands);
     let tint = mix(vec3(0.08, 0.65, 0.30), vec3(0.25, 0.22, 0.60), smoothstep(altitude, altitude + 0.13, dir.y));
