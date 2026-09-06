@@ -92,7 +92,7 @@
     collider="shape: trimesh; mesh-url: /assets/meshes/props/stone_pillar_collision.glb; mesh-anchor: base">
     <GLTFLoader role="visual" url="/assets/meshes/props/stone_pillar_lod0.glb" lod1-url="/assets/meshes/props/stone_pillar_lod1.glb" lod2-url="/assets/meshes/props/stone_pillar_lod2.glb"></GLTFLoader>
   </GameObject>
-  <GameObject place="at: -216 56">
+  <GameObject name="swamp-sunken-graves" place="at: -216 56">
     <ParticleSystem
       preset="smoke"
       transform="pos: 0 0.6 0"
