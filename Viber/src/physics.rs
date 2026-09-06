@@ -1020,17 +1020,20 @@ pub fn stream_terrain_colliders(
                 if let Some(collider) =
                     chunk_heightfield(&runtime.grid, center, spec.chunk_size, resolution)
                 {
+                    // try_insert: o cull do LOD pode despawnar o chunk no
+                    // mesmo frame — panico de "Entity despawned" virava
+                    // queda da engine.
                     commands
                         .entity(entity)
-                        .insert((collider, RigidBody::Fixed, TerrainCollider));
+                        .try_insert((collider, RigidBody::Fixed, TerrainCollider));
                 }
             }
             (true, d) if d > drop_beyond => {
                 commands
                     .entity(entity)
-                    .remove::<Collider>()
-                    .remove::<RigidBody>()
-                    .remove::<TerrainCollider>();
+                    .try_remove::<Collider>()
+                    .try_remove::<RigidBody>()
+                    .try_remove::<TerrainCollider>();
             }
             _ => {}
         }
@@ -1077,17 +1080,22 @@ pub fn stream_voxel_colliders(
         match (has_collider.is_some(), distance) {
             (false, d) if d <= keep_within => {
                 if let Some(collider) = chunk_voxels(&runtime, chunk) {
+                    // try_* e não insert/remove: no caminho 100% voxel as
+                    // caixas MORREM sob os pés deste sistema (o LOD troca
+                    // despacha as caixas velhas de uma coluna no mesmo
+                    // frame) — aplicar num despawnado era um panic de
+                    // engine, agora é um warn inofensivo.
                     commands
                         .entity(entity)
-                        .insert((collider, RigidBody::Fixed, VoxelCollider));
+                        .try_insert((collider, RigidBody::Fixed, VoxelCollider));
                 }
             }
             (true, d) if d > drop_beyond => {
                 commands
                     .entity(entity)
-                    .remove::<Collider>()
-                    .remove::<RigidBody>()
-                    .remove::<VoxelCollider>();
+                    .try_remove::<Collider>()
+                    .try_remove::<RigidBody>()
+                    .try_remove::<VoxelCollider>();
             }
             _ => {}
         }
