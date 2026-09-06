@@ -502,7 +502,7 @@ export function updateSkillBar(state: State, player: number, dt: number): void {
   if (!isGamePaused() && player > 0 && !isDead(player)) {
     for (const s of SKILLS) {
       const down = isKeyDown(s.keyCode);
-      if (down && !pressed[s.keyCode] && cd[s.id] <= 0) {
+      if (down && !pressed[s.keyCode] && cd[s.id] <= 0 && !pending) {
         cast(s, state, player);
       }
       pressed[s.keyCode] = down;
