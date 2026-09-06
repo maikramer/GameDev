@@ -16,8 +16,10 @@
 //!    orphan-task bug (`finish_chunk_build_tasks`); small heightfield grids
 //!    build in well under a frame, so inline + budget eliminates the whole
 //!    bug class.
-//! 4. **Cull** — chunks beyond `render_distance` are despawned and respawned
-//!    (at LOD 0) when the camera approaches, matching VibeGame behavior.
+//! 4. **Cull** — chunks beyond `render_distance` (measured to the chunk's XZ
+//!    AABB, not its center) are despawned and respawned — at the LOD their
+//!    distance implies — when the camera approaches, matching VibeGame
+//!    behavior.
 //!
 //! Works headless: only `Assets<Mesh>` and the camera transform are needed;
 //! `analyze` never runs this (no Update schedule).
@@ -236,7 +238,11 @@ fn update_chunk_lods(
     for (entity, transform, mut chunk, mut mesh) in chunks.iter_mut() {
         let tr = transform.translation;
         let dist = Vec2::new(tr.x, tr.z).distance(cam_xz);
-        if dist > render_distance {
+        // O raio de render compara com a distância à AABB do chunk no plano
+        // XZ, não ao centro: chunks com metade do quadrado ainda visíveis
+        // eram despawnados mal o centro passava o raio (num chunk de 64 m, o
+        // canto mais próximo fica a 45 m do centro).
+        if chunk_aabb_distance(dist, edge) > render_distance {
             state.chunks.remove(&chunk.coords);
             commands.entity(entity).despawn();
             continue;
@@ -274,11 +280,12 @@ fn update_chunk_lods(
     if layer_map.is_none() && standard_material.is_none() {
         return;
     }
-    // Só as células da grelha cujo centro pode caber no raio de render — o
-    // scan era `0..rows` duplo (O(rows²)) por pass; os limites dão a mesma
-    // selecção (o teste exato de distância ao centro mantém-se abaixo) sem
-    // percorrer o mundo inteiro. Casts saturam fora do mundo (negativo → 0,
-    // infinito → `rows - 1`), e um intervalo vazio simplesmente não itera.
+    // Só as células da grelha cuja AABB pode caber no raio de render — o
+    // scan era `0..rows` duplo (O(rows²)) por pass; os limites (computados
+    // das bordas das células) dão a mesma selecção (o teste exato de
+    // distância à AABB mantém-se abaixo) sem percorrer o mundo inteiro.
+    // Casts saturam fora do mundo (negativo → 0, infinito → `rows - 1`), e
+    // um intervalo vazio simplesmente não itera.
     let clamp_coord = |axis: f32| -> u32 {
         (((axis - render_distance + half) / edge).floor().max(0.0) as u32).min(rows - 1)
     };
@@ -312,10 +319,20 @@ fn update_chunk_lods(
                 -half + cx as f32 * edge + edge * 0.5,
                 -half + cz as f32 * edge + edge * 0.5,
             );
-            if center.distance(cam_xz) > render_distance {
+            // Mesma métrica do cull: a AABB do chunk é que conta para o
+            // raio de render.
+            let dist = center.distance(cam_xz);
+            if chunk_aabb_distance(dist, edge) > render_distance {
                 continue;
             }
-            let Some(data) = rebuild(grid, spec, coords, edge, 0, cliff_mask_opt) else {
+            // Respawn já no LOD que a distância pede — o mesmo caminho cru
+            // do passe de seleção, SEM histerese (um chunk novo não tem
+            // histórico para a histerese decidir). Construir sempre em LOD 0
+            // queimava o orçamento de builds/frame de que os chunks próximos
+            // precisam; a re-seleção para o LOD certo só chegava em passes
+            // seguintes (gate de 6 m).
+            let lod = raw_lod(dist, spec.lod_distance(), max_lod);
+            let Some(data) = rebuild(grid, spec, coords, edge, lod, cliff_mask_opt) else {
                 continue;
             };
             let handle = meshes.add(to_bevy_mesh(&data));
@@ -349,8 +366,8 @@ fn update_chunk_lods(
             let entity = entity.id();
             commands.entity(entity).insert(TerrainChunk {
                 coords,
-                lod: 0,
-                built_lod: 0,
+                lod,
+                built_lod: lod,
             });
             state.chunks.insert(coords, entity);
             budget -= 1;
@@ -379,6 +396,7 @@ fn rebuild(
         origin,
         size: edge,
         lod_step: step,
+        lod0_step: lod0_step(spec),
         skirt_depth: spec.skirt_depth_meters(),
         normal_epsilon: grid.texel(),
         texture_tile_size: spec.texture_tile_size,
@@ -388,6 +406,28 @@ fn rebuild(
         cliff_angle: spec.cliff_angle,
     };
     build_chunk_mesh(grid, &params, cliff).ok().flatten()
+}
+
+/// Distância da câmara à AABB XZ do chunk: `max(0, dist_centro − meia-edge)`.
+/// Chunks são quadrados axis-aligned — 0 com a câmara dentro do quadrado;
+/// fora, a folga até à borda mais próxima. Cull e respawn partilham a
+/// métrica para nenhum dos dois ignorar um chunk cujo corpo ainda cabe no
+/// raio de render.
+fn chunk_aabb_distance(dist_center: f32, edge: f32) -> f32 {
+    (dist_center - edge * 0.5).max(0.0)
+}
+
+/// LOD cru para uma distância — o esquema plano `2^lod` de
+/// `bevy_mesh_terrain`, antes da histerese. O passe de seleção alimenta com
+/// isto a decisão de troca; o respawn usa-o diretamente (um chunk novo não tem
+/// histórico para a histerese decidir).
+fn raw_lod(dist: f32, lod_distance: f32, max_lod: u8) -> u8 {
+    if lod_distance <= 0.0 || !dist.is_finite() {
+        return 0;
+    }
+    (((dist / lod_distance).log2() + 1.0)
+        .floor()
+        .clamp(0.0, f32::from(max_lod))) as u8
 }
 
 /// LOD selection with hysteresis: boundaries sit at `lod_distance * 2^(l-1)`;
@@ -400,12 +440,7 @@ pub(crate) fn select_lod(
     max_lod: u8,
     margin: f32,
 ) -> u8 {
-    if lod_distance <= 0.0 || !dist.is_finite() {
-        return 0;
-    }
-    let raw = (((dist / lod_distance).log2() + 1.0)
-        .floor()
-        .clamp(0.0, f32::from(max_lod))) as u8;
+    let raw = raw_lod(dist, lod_distance, max_lod);
     if raw == current {
         return current;
     }
@@ -506,6 +541,89 @@ mod tests {
             levels: 3,
             ..TerrainSpec::default()
         }
+    }
+
+    /// App mínimo com o runtime real, 4 chunks bootstrap-style (grelha 2×2,
+    /// edge 16, centros em (±8, ±8)) e raio de render fixo — base dos testes
+    /// de cull/respawn. A câmara é criada por cada teste.
+    fn lod_app(render_distance: f32) -> bevy::app::App {
+        let mut app = bevy::app::App::new();
+        app.add_plugins(bevy::MinimalPlugins)
+            .add_plugins(bevy::transform::TransformPlugin)
+            .add_plugins(TerrainPlugin);
+        app.init_resource::<Assets<Mesh>>();
+        app.init_resource::<Assets<StandardMaterial>>();
+
+        let mut spec = spec();
+        spec.render_distance = Some(render_distance);
+        let map = HeightMapU16 {
+            width: 33,
+            depth: 33,
+            data: (0..33 * 33).map(|i| (i % 1000) as u16).collect(),
+        };
+        let grid = BrushGrid::from_height_map(&map, spec.world_size, spec.max_height, 1.0)
+            .expect("grid from heightmap");
+        app.insert_resource(TerrainRuntime {
+            spec: spec.clone(),
+            grid: Arc::new(grid),
+            water: Vec::new(),
+            roads: Vec::new(),
+            pads: Vec::new(),
+            voxel: Arc::new(crate::terrain::voxel::VoxelField::default()),
+        });
+
+        let root = app
+            .world_mut()
+            .spawn((
+                Name::new("terrain"),
+                Transform::default(),
+                Visibility::Inherited,
+            ))
+            .id();
+        let material = app
+            .world_mut()
+            .resource_mut::<Assets<StandardMaterial>>()
+            .add(StandardMaterial::default());
+        let edge = chunk_edge(&spec);
+        let half = spec.world_size * 0.5;
+        let mesh0 = app
+            .world_mut()
+            .resource_mut::<Assets<Mesh>>()
+            .add(Mesh::from(bevy::math::primitives::Cuboid::new(
+                1.0, 1.0, 1.0,
+            )));
+        for cz in 0..2u32 {
+            for cx in 0..2u32 {
+                let center = Vec3::new(
+                    -half + cx as f32 * edge + edge * 0.5,
+                    0.0,
+                    -half + cz as f32 * edge + edge * 0.5,
+                );
+                app.world_mut().spawn((
+                    Name::new(chunk_name(UVec2::new(cx, cz))),
+                    Transform::from_translation(center),
+                    Visibility::Inherited,
+                    Mesh3d(mesh0.clone()),
+                    MeshMaterial3d(material.clone()),
+                    ChildOf(root),
+                ));
+            }
+        }
+        app
+    }
+
+    /// Move a câmara (única) e corre dois updates: o 1.º sincroniza
+    /// Transform → GlobalTransform (PostUpdate), o 2.º corre o passe de LOD
+    /// contra a posição nova.
+    fn move_camera(app: &mut bevy::app::App, x: f32, z: f32) {
+        let mut cam = app
+            .world_mut()
+            .query::<(&Camera3d, &mut Transform)>()
+            .single_mut(app.world_mut())
+            .expect("one camera");
+        cam.1.translation = Vec3::new(x, 20.0, z);
+        app.update();
+        app.update();
     }
 
     #[test]
@@ -715,7 +833,86 @@ mod tests {
         app.update();
         app.update();
         assert_eq!(count(&mut app), 4, "chunks respawned near the camera");
-        assert_eq!(lod(&mut app), vec![0, 0, 0, 0]);
+        // O respawn constrói já no LOD cru da distância ao centro (sem
+        // histerese — chunk novo não tem histórico): os três chunks a 11-25 m
+        // ficam em LOD 0; o canto oposto, a 33,9 m do centro da câmara
+        // (16, 16), passa a fronteira de 32 m e re-entra em LOD 1.
+        assert_eq!(lod(&mut app), vec![0, 0, 0, 1]);
+    }
+
+    /// Cull pela AABB do chunk: com a câmara a `render_distance < dist_centro
+    /// < render_distance + meia-edge`, o corpo do chunk ainda entra no raio
+    /// e NÃO é despawnado (o métrico antigo, ao centro, despawnava-o —
+    /// popping à frente do horizonte). O simétrico — AABB fora do raio —
+    /// continua a ser culled.
+    #[test]
+    fn test_cull_uses_chunk_aabb_distance() {
+        let mut app = lod_app(20.0);
+        // edge 16 → meia-edge 8. Câmara a 24 m do centro do chunk (1,1)
+        // (centro em (8, 8)): AABB = 24 − 8 = 16 ≤ 20 → fica. Os outros três
+        // chunks ficam com a AABB fora do raio (≥ 20.8 m).
+        app.world_mut().spawn((
+            Camera3d::default(),
+            Transform::from_xyz(32.0, 20.0, 8.0),
+            GlobalTransform::default(),
+        ));
+        app.update();
+        app.update();
+        {
+            let state = app.world().resource::<ChunkLodState>();
+            assert_eq!(
+                state.tracked_chunks(),
+                1,
+                "só o (1,1) fica: AABB 16 m dentro do raio 20 (o centro, 24 m, já saía)"
+            );
+            assert!(
+                state.chunk_entity(UVec2::new(1, 1)).is_some(),
+                "chunk parcialmente visível não é culled pelo centro"
+            );
+        }
+
+        // Simétrico: câmara a 31 m do centro → AABB = 31 − 8 = 23 > 20 →
+        // culled (movimento > gate de 6 m para o passe correr).
+        move_camera(&mut app, 39.0, 8.0);
+        let state = app.world().resource::<ChunkLodState>();
+        assert_eq!(state.tracked_chunks(), 0, "AABB fora do raio: culled");
+        let mut q = app.world_mut().query::<(&Mesh3d, &TerrainChunk)>();
+        assert_eq!(q.iter(app.world()).count(), 0);
+    }
+
+    /// Respawn no LOD que a distância pede: chunks que re-entram no raio a
+    /// 70-88 m do centro (AABB 62-79 m, raio 80) constroem-se já no LOD cru
+    /// da distância — floor(log2(dist/32) + 1) = 2, o max_lod do spec — e
+    /// não sempre em LOD 0. O orçamento de 4 builds/frame cobre os quatro.
+    #[test]
+    fn test_respawn_builds_at_distance_implied_lod() {
+        let mut app = lod_app(80.0);
+        // Câmara longe: tudo culled (AABB ≈ 484-500 m > 80).
+        app.world_mut().spawn((
+            Camera3d::default(),
+            Transform::from_xyz(500.0, 20.0, 8.0),
+            GlobalTransform::default(),
+        ));
+        app.update();
+        app.update();
+        assert_eq!(
+            app.world().resource::<ChunkLodState>().tracked_chunks(),
+            0,
+            "câmara longe: tudo culled"
+        );
+
+        // Re-entrada: o (1,1) fica a 70 m do centro (LOD cru 2); os restantes
+        // a 72-88 m, mesmo escalão. Antes do fix, todos reconstruíam em LOD 0
+        // e a re-seleção para o LOD 2 só chegava num passe seguinte.
+        move_camera(&mut app, 78.0, 8.0);
+        let mut q = app.world_mut().query::<(&TerrainChunk, &Mesh3d)>();
+        let mut lods: Vec<u8> = q.iter(app.world()).map(|(c, _)| c.built_lod).collect();
+        lods.sort_unstable();
+        assert_eq!(
+            lods,
+            vec![2, 2, 2, 2],
+            "respawn constrói já no LOD 2 da distância, não em LOD 0"
+        );
     }
 
     #[test]
