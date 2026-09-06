@@ -1313,7 +1313,7 @@ async function runBootstrap(): Promise<void> {
   // Dev cheats (vite DEV only): grant items/gold via the debug surface for testing.
   //   __VIBEGAME__.debug.callAction('give', 'potion', 3)
   //   __VIBEGAME__.debug.callAction('gold', 500)
-  registerDebugAction(state, 'grip', () => {
+  registerDebugAction(state, 'grip-editor', () => {
     setGripEditorActive(!isGripEditorActive());
     return isGripEditorActive();
   });
