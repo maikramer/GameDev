@@ -19,7 +19,8 @@ import {
   canCraftBomb,
 } from '../game/city-amenities.ts';
 
-const RANGE_SQ = 3.4 * 3.4;
+const RANGE = 3.4;
+const RANGE_SQ = RANGE * RANGE;
 
 let kPressed = false;
 
@@ -28,6 +29,7 @@ export function start(ctx: MonoBehaviourContext): void {
   registerInteractionTarget(ctx.state, ctx.entity, {
     label: `Forjar bomba (${BOMB_CRAFT_STONE} pedra + ${BOMB_CRAFT_WOOD} madeira)`,
     key: 'K',
+    range: RANGE,
   });
 }
 
