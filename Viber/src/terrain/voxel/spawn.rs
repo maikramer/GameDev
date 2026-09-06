@@ -160,6 +160,8 @@ pub fn spawn_voxel_chunks(
                             tint: tint.clone(),
                             max_height: spec.max_height,
                             uses_layer_material,
+                            seal_faces: [false; 4],
+                            seal_depth: 0.0,
                         };
                         let density = |p: Vec3| field.density(grid, p);
                         let Some(data) = build_voxel_mesh(&density, &params) else {
@@ -200,6 +202,313 @@ pub fn spawn_voxel_chunks(
                     }
                 }
             }
+        }
+    }
+    stats
+}
+
+// ── Colunas voxel com ladder de LOD ─────────────────────────────────────────
+//
+// O caminho 100% volumétrico trata CADA célula da grelha de chunks como uma
+// COLUNA voxel: o `TerrainChunk` deixa de ter mesh próprio e passa a ser o
+// pai de uma pilha de caixas surface-nets. O ladder reutiliza a semântica do
+// heightfield (select + histerese + budget + cull no `plugin.rs`); o que
+// muda é o que um LOD constrói:
+
+/// Geometria de UM LOD de uma coluna: `per_edge` caixas por borda de chunk,
+/// cada uma com `cells` células por eixo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VoxelLodShape {
+    pub cells: usize,
+    pub per_edge: i32,
+}
+
+/// Escolhe o tiling de caixas de uma coluna ao `lod`.
+///
+/// O ladder duplica a célula a cada nível — LOD 0 renderiza ao passo LOD-0
+/// (`resolution`), comprando a mesma redução 4×/16× de triângulos do ladder
+/// heightfield. `cells × célula × per_edge` tem de ladrilhar a borda do
+/// chunk: procura-se um tiling exato a 32/16/8 células e, não havendo, UMA
+/// caixa cobrindo a borda inteira (o mesher aceita qualquer tamanho de
+/// célula; os LODs grossos ficam baratos pelo `cells`, não por caixas
+/// parciais). Determinístico e global: dois vizinhos ao mesmo LOD derivam
+/// SEMPRE o mesmo shape — é isso que mantém as costuras deles fechadas por
+/// coincidência de vértices.
+pub fn lod_shape(lod0_cell: f32, chunk_edge: f32, lod: u8) -> VoxelLodShape {
+    if !(lod0_cell.is_finite() && lod0_cell > 0.0) || !(chunk_edge.is_finite() && chunk_edge > 0.0)
+    {
+        return VoxelLodShape {
+            cells: VOXEL_CHUNK_CELLS,
+            per_edge: 1,
+        };
+    }
+    let target = lod0_cell * (1u32 << lod) as f32;
+    for cells in [32usize, 16, 8] {
+        let wanted = cells as f32 * target;
+        let per_edge = (chunk_edge / wanted).ceil().max(1.0) as i32;
+        let extent = chunk_edge / per_edge as f32;
+        let actual = extent / cells as f32;
+        if ((actual - target) / target).abs() <= 0.05 {
+            return VoxelLodShape { cells, per_edge };
+        }
+    }
+    let cells = ((chunk_edge / target).round() as usize).clamp(4, VOXEL_CHUNK_CELLS);
+    VoxelLodShape { cells, per_edge: 1 }
+}
+
+/// Uma caixa surface-nets de uma coluna, pronta para meshar.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VoxelBoxSpec {
+    /// Coordenada da caixa na grelha lógica da coluna (nome/identidade).
+    pub pos: IVec3,
+    /// Posição mundial do canto mínimo.
+    pub origin: Vec3,
+    /// Aresta em metros (cúbica; as caixas ladrilham a coluna exatamente).
+    pub extent: f32,
+    /// Células por eixo.
+    pub cells: usize,
+    /// Aresta de uma célula em metros.
+    pub voxel_size: f32,
+    /// Faces na fronteira da coluna a selar, `[-X, +X, -Z, +Z]`.
+    pub seal: [bool; 4],
+}
+
+/// Profundidade do selo de fronteira de coluna: a mesma conta do
+/// `runtime::volumetric_seal` — quatro células cobrem o pior desacordo do
+/// surface nets com o vizinho, piso de 2 m.
+pub fn seal_depth(voxel_size: f32) -> f32 {
+    (voxel_size.max(0.0) * 4.0).max(2.0)
+}
+
+/// As caixas que renderizam UMA coluna ao `lod` dado.
+///
+/// A pilha vertical é o envelope do chunk: o intervalo de alturas da grelha
+/// (`range_over`, O(1)) mais o alcance dos mods — o resto é céu ou bedrock
+/// provados (`region_state`) e nunca chega a ser amostrado.
+pub fn column_boxes(
+    spec: &TerrainSpec,
+    grid: &BrushGrid,
+    field: &VoxelField,
+    chunk_edge: f32,
+    lod0_cell: f32,
+    lod: u8,
+    coords: UVec2,
+) -> Vec<VoxelBoxSpec> {
+    let shape = lod_shape(lod0_cell, chunk_edge, lod);
+    let extent = chunk_edge / shape.per_edge as f32;
+    let voxel_size = extent / shape.cells as f32;
+    let half = spec.world_size * 0.5;
+    let x0 = -half + coords.x as f32 * chunk_edge;
+    let z0 = -half + coords.y as f32 * chunk_edge;
+    let mods_y = field.index().bounds();
+    let (gmin, gmax) = grid
+        .range_over(x0, z0, x0 + chunk_edge, z0 + chunk_edge)
+        .unwrap_or((0.0, spec.max_height));
+    let y_lo = gmin.min(mods_y.min.y) - 1.0;
+    let y_hi = gmax.max(mods_y.max.y) + 1.0;
+    let iy0 = (y_lo / extent).floor() as i32;
+    let iy1 = (y_hi / extent).ceil() as i32;
+
+    let mut boxes = Vec::new();
+    for iz in 0..shape.per_edge {
+        for ix in 0..shape.per_edge {
+            for iy in iy0..iy1 {
+                let origin = Vec3::new(
+                    x0 + ix as f32 * extent,
+                    iy as f32 * extent,
+                    z0 + iz as f32 * extent,
+                );
+                let bounds = Bounds3::from_corners(origin, origin + Vec3::splat(extent));
+                if field.region_state(grid, &bounds).is_some() {
+                    continue;
+                }
+                boxes.push(VoxelBoxSpec {
+                    pos: IVec3::new(coords.x as i32 * shape.per_edge + ix, iy, coords.y as i32 * shape.per_edge + iz),
+                    origin,
+                    extent,
+                    cells: shape.cells,
+                    voxel_size,
+                    seal: [
+                        ix == 0,
+                        ix == shape.per_edge - 1,
+                        iz == 0,
+                        iz == shape.per_edge - 1,
+                    ],
+                });
+            }
+        }
+    }
+    boxes
+}
+
+/// Mesa UMA caixa da coluna (SDF → surface nets → buffers).
+pub fn build_box_mesh(
+    spec: &TerrainSpec,
+    grid: &BrushGrid,
+    field: &VoxelField,
+    b: &VoxelBoxSpec,
+) -> Option<super::super::mesh::ChunkMeshData> {
+    let params = VoxelChunkParams {
+        origin: b.origin,
+        cells: b.cells,
+        voxel_size: b.voxel_size,
+        texture_tile_size: spec.texture_tile_size,
+        tint: spec.chunk_tint(),
+        max_height: spec.max_height,
+        uses_layer_material: !spec.layers.is_empty(),
+        seal_faces: b.seal,
+        seal_depth: seal_depth(b.voxel_size),
+    };
+    let density = |p: Vec3| field.density(grid, p);
+    build_voxel_mesh(&density, &params)
+}
+
+/// Spawna a entidade de UMA caixa voxel (filha da coluna). `visible = false`
+/// para caixas em construção (staged) — entram visíveis só no swap da
+/// coluna completa, para nunca desenhar metade de um LOD ao lado do outro.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn spawn_box_entity(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    parent: Entity,
+    b: &VoxelBoxSpec,
+    data: super::super::mesh::ChunkMeshData,
+    material: &super::super::runtime::ChunkMaterialHandle,
+    visible: bool,
+) -> Entity {
+    let handle = meshes.add(super::super::runtime::to_bevy_mesh(&data));
+    let mut entity = commands.spawn((
+        Name::new(format!(
+            "voxel chunk {}-{}-{}",
+            b.pos.x, b.pos.y, b.pos.z
+        )),
+        VoxelChunk {
+            coords: b.pos,
+            origin: b.origin,
+            extent: b.extent,
+            voxel_size: b.voxel_size,
+        },
+        // Surface-nets positions are origin-relative on all three axes.
+        Transform::from_translation(b.origin),
+        if visible {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        },
+        Mesh3d(handle),
+        ChildOf(parent),
+    ));
+    match material {
+        super::super::runtime::ChunkMaterialHandle::Layer(material) => {
+            entity.insert(MeshMaterial3d(material.clone()));
+        }
+        super::super::runtime::ChunkMaterialHandle::Standard(material) => {
+            entity.insert(MeshMaterial3d(material.clone()));
+        }
+    }
+    entity.id()
+}
+
+/// Spawna uma COLUNA inteira: a entidade `TerrainChunk` (o nome `chunk
+/// cz-cx` é o contrato de adoção/profiler) mais as caixas de `boxes` já
+/// visíveis. Devolve `(entidade, caixas meshadas)`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn spawn_column(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    parent: Entity,
+    coords: UVec2,
+    lod: u8,
+    material: &super::super::runtime::ChunkMaterialHandle,
+    boxes: &[VoxelBoxSpec],
+    grid: &BrushGrid,
+    field: &VoxelField,
+    spec: &TerrainSpec,
+) -> (Entity, usize) {
+    let column = commands
+        .spawn((
+            Name::new(super::super::plugin::chunk_name(coords)),
+            Transform::default(),
+            Visibility::Inherited,
+            ChildOf(parent),
+            super::super::plugin::TerrainChunk {
+                coords,
+                lod,
+                built_lod: lod,
+            },
+        ))
+        .id();
+    let mut meshed = 0;
+    for b in boxes {
+        if let Some(data) = build_box_mesh(spec, grid, field, b) {
+            spawn_box_entity(commands, meshes, column, b, data, material, true);
+            meshed += 1;
+        }
+    }
+    (column, meshed)
+}
+
+/// Bootstrap do caminho 100% voxel: spawna as colunas dentro do raio de
+/// render ao LOD que a distância da câmara pede (o plugin cuida do resto —
+/// respawn à aproximação e refinamento com histerese). Sem câmara (testes
+/// headless) tudo nasce em LOD 0, como no heightfield.
+pub fn spawn_voxel_columns(
+    world: &mut World,
+    meshes: &mut Assets<Mesh>,
+    parent: Entity,
+    spec: &TerrainSpec,
+    grid: &BrushGrid,
+    field: &VoxelField,
+    camera_xz: Option<Vec2>,
+    standard: Handle<StandardMaterial>,
+    layer_map: Option<&super::super::runtime::ChunkLayerMap>,
+) -> VoxelSpawnStats {
+    let mut stats = VoxelSpawnStats::default();
+    let edge = super::super::plugin::chunk_edge(spec);
+    if !(edge.is_finite() && edge > 0.0) {
+        return stats;
+    }
+    let lod0_cell = super::super::plugin::lod0_step(spec) as f32;
+    let max_lod = super::super::plugin::max_lod_for(spec, edge);
+    let rows = (spec.world_size / edge).ceil().max(1.0) as u32;
+    let half = spec.world_size * 0.5;
+
+    let mut commands = world.commands();
+    for cz in 0..rows {
+        for cx in 0..rows {
+            let center = Vec2::new(
+                -half + cx as f32 * edge + edge * 0.5,
+                -half + cz as f32 * edge + edge * 0.5,
+            );
+            let distance = camera_xz.map(|cam| cam.distance(center));
+            if let Some(distance) = distance
+                && distance > spec.effective_render_distance()
+            {
+                continue;
+            }
+            let lod = distance
+                .map(|d| super::super::plugin::raw_lod(d, spec.lod_distance(), max_lod))
+                .unwrap_or(0);
+            let coords = UVec2::new(cx, cz);
+            let boxes = column_boxes(spec, grid, field, edge, lod0_cell, lod, coords);
+            stats.chunks += 1;
+            let material = layer_map
+                .and_then(|m| m.get(cx, cz).cloned())
+                .map(super::super::runtime::ChunkMaterialHandle::Layer)
+                .unwrap_or_else(|| super::super::runtime::ChunkMaterialHandle::Standard(standard.clone()));
+            let (_, built) = spawn_column(
+                &mut commands,
+                meshes,
+                parent,
+                coords,
+                lod,
+                &material,
+                &boxes,
+                grid,
+                field,
+                spec,
+            );
+            stats.meshed += built;
         }
     }
     stats

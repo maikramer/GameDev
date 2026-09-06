@@ -327,25 +327,35 @@ impl TerrainRuntime {
 
     /// Height of the *rendered* surface at a world XZ position.
     ///
-    /// Volumetric columns mesh straight from the field (surface nets tracks
-    /// the zero crossing to sub-voxel accuracy), so the analytic top IS the
-    /// drawn surface there and the bisected [`VoxelField::surface_top`] is
-    /// the answer. The lattice reproduction below only matches the heightfield
-    /// chunk triangulation, which is what flat chunks actually draw.
+    /// No caminho 100% voxel (default) a superfície desenhada É o nível zero
+    /// do SDF em toda a coluna — o surface nets segue o campo com precisão
+    /// sub-voxel e o LOD só muda o tamanho da célula — por isso o
+    /// [`VoxelField::surface_top`] bisseccionado é a resposta, sempre. O
+    /// caminho de lattice abaixo (flag `VIBER_HF_TERRAIN=1`) reproduz a
+    /// triangulação dos chunks HEIGHTFIELD, que é o que as células flat
+    /// desenham nesse modo.
     ///
-    /// Chunk meshes draw flat triangles between vertices spaced `lod0_step`
-    /// apart, so the smoothed analytic sample between two vertices can sit
-    /// above the visible surface on ridges — spawned trees floated with the
-    /// root flare in the air. This reproduces the chunk lattice (anchored at
-    /// `-world_size/2`, spacing [`lod0_step`]) and its triangulation
-    /// (`build_chunk_mesh`: triangles a/c/b and b/c/d per cell), keeping props
-    /// flush with what is actually drawn. On a lattice vertex the result
-    /// equals [`BrushGrid::sample`]. Queries that need the ground UNDER a
-    /// ceiling (cave interior, arch opening) use [`Self::surface_below`].
+    /// Chunk meshes heightfield draw flat triangles between vertices spaced
+    /// `lod0_step` apart, so the smoothed analytic sample between two vertices
+    /// can sit above the visible surface on ridges — spawned trees floated
+    /// with the root flare in the air. This reproduces the chunk lattice
+    /// (anchored at `-world_size/2`, spacing [`lod0_step`]) and its
+    /// triangulation (`build_chunk_mesh`: triangles a/c/b and b/c/d per
+    /// cell), keeping props flush with what is actually drawn. On a lattice
+    /// vertex the result equals [`BrushGrid::sample`]. Queries that need the
+    /// ground UNDER a ceiling (cave interior, arch opening) use
+    /// [`Self::surface_below`].
     pub fn sample_mesh_surface(&self, x: f32, z: f32) -> f32 {
-        if !self.voxel.is_flat() {
+        if !self.voxel.is_flat() || !super::hf_terrain_fallback() {
             return self.voxel.surface_top(&*self.grid, x, z);
         }
+        self.lattice_surface(x, z)
+    }
+
+    /// The heightfield-lattice surface: the chord interpolation of the grid
+    /// over the rendered triangulation. Only meaningful when heightfield
+    /// chunks actually draw the ground (`VIBER_HF_TERRAIN=1`).
+    fn lattice_surface(&self, x: f32, z: f32) -> f32 {
         let step = lod0_step(&self.spec) as f32;
         let half = self.spec.world_size * 0.5;
         let gx = (x + half) / step;
@@ -679,53 +689,90 @@ pub fn bootstrap(world: &mut World) {
     }
     let voxel = VoxelField::new(voxel_mods, spec.world_size, spec.chunk_size);
 
-    let chunk_standard = spawn_chunks(
-        world,
-        &mut meshes,
-        &mut materials,
-        asset_server.as_ref(),
-        root,
-        &spec,
-        &grid,
-        camera_xz,
-        &mut watched,
-        layer_map.as_ref(),
-        if spec.layers.is_empty() {
-            None
-        } else {
-            Some(&cliff_mask)
-        },
-        &voxel,
-    );
-    // Chunks `spawn_chunks` skipped as volumetric are covered here instead.
-    // Material PRÓPRIO double-sided para o caminho standard dos chunks voxel
-    // (sem layers ou VIBER_CHUNK_LAYERS=0): shells que roçam o terreno
-    // deixam folhas finas sub-voxel com triângulos inward-wound — com
-    // culling leem-se como buracos na parede. O caminho de layers já resolve
-    // isto no `specialize` do TerrainChunkMaterial (cull_mode None).
-    let voxel_standard = {
-        let mut m = materials.get(&chunk_standard).cloned().unwrap_or_default();
-        m.double_sided = true;
-        materials.add(m)
-    };
-    let voxel_stats = super::voxel::spawn_voxel_chunks(
-        world,
-        &mut meshes,
-        root,
-        &spec,
-        &grid,
-        &voxel,
-        &voxel_standard,
-        layer_map.as_ref(),
-        lod0_step(&spec) as f32,
-        chunk_grid(&spec).0,
-    );
-    if voxel_stats.meshed > 0 {
-        info!(
-            "terrain: {} voxel chunks meshed ({} proven uniform, {} empty)",
-            voxel_stats.meshed, voxel_stats.skipped_uniform, voxel_stats.empty
+    let (chunk_standard, _voxel_standard) = if super::hf_terrain_fallback() {
+        // Caminho HÍBRIDO legado (VIBER_HF_TERRAIN=1): chunks heightfield
+        // para as células flat + caixas voxel só onde há features 3D.
+        let chunk_standard = spawn_chunks(
+            world,
+            &mut meshes,
+            &mut materials,
+            asset_server.as_ref(),
+            root,
+            &spec,
+            &grid,
+            camera_xz,
+            &mut watched,
+            layer_map.as_ref(),
+            if spec.layers.is_empty() {
+                None
+            } else {
+                Some(&cliff_mask)
+            },
+            &voxel,
         );
-    }
+        // Chunks `spawn_chunks` skipped as volumetric are covered here instead.
+        // Material PRÓPRIO double-sided para o caminho standard dos chunks voxel
+        // (sem layers ou VIBER_CHUNK_LAYERS=0): shells que roçam o terreno
+        // deixam folhas finas sub-voxel com triângulos inward-wound — com
+        // culling leem-se como buracos na parede. O caminho de layers já resolve
+        // isto no `specialize` do TerrainChunkMaterial (cull_mode None).
+        let voxel_standard = {
+            let mut m = materials.get(&chunk_standard).cloned().unwrap_or_default();
+            m.double_sided = true;
+            materials.add(m)
+        };
+        let voxel_stats = super::voxel::spawn_voxel_chunks(
+            world,
+            &mut meshes,
+            root,
+            &spec,
+            &grid,
+            &voxel,
+            &voxel_standard,
+            layer_map.as_ref(),
+            lod0_step(&spec) as f32,
+            chunk_grid(&spec).0,
+        );
+        if voxel_stats.meshed > 0 {
+            info!(
+                "terrain: {} voxel chunks meshed ({} proven uniform, {} empty)",
+                voxel_stats.meshed, voxel_stats.skipped_uniform, voxel_stats.empty
+            );
+        }
+        (chunk_standard, voxel_standard)
+    } else {
+        // Caminho 100% VOLUMÉTRICO (default): toda a grelha sai do campo
+        // voxel por surface nets, com ladder de LOD por coluna. O heightfield
+        // sobrevive só como DADO (termo-base do SDF, carve, máscaras).
+        let voxel_standard = {
+            let handle = terrain_standard_material(
+                world,
+                &mut materials,
+                asset_server.as_ref(),
+                &spec,
+                &mut watched,
+            );
+            let mut m = materials.get(&handle).cloned().unwrap_or_default();
+            m.double_sided = true;
+            materials.add(m)
+        };
+        let stats = super::voxel::spawn_voxel_columns(
+            world,
+            &mut meshes,
+            root,
+            &spec,
+            &grid,
+            &voxel,
+            camera_xz,
+            voxel_standard.clone(),
+            layer_map.as_ref(),
+        );
+        info!(
+            "terrain: {} colunas voxel ({} caixas) — 100% volumétrico",
+            stats.chunks, stats.meshed
+        );
+        (voxel_standard.clone(), voxel_standard)
+    };
     spawn_water(
         world,
         &mut meshes,
@@ -805,6 +852,39 @@ fn chunk_grid(spec: &TerrainSpec) -> (f32, u32) {
     (edge, rows)
 }
 
+/// O material standard legado dos chunks (o fallback quando o mundo não tem
+/// `layers`): branco — o `base-color` autoral já vai nas vertex colors pelo
+/// `tint_vertex_color`, e o PBR multiplica. A textura opcional do `<Terrain>`
+/// carrega aqui (e fica vigiada).
+fn terrain_standard_material(
+    world: &mut World,
+    materials: &mut Assets<StandardMaterial>,
+    asset_server: Option<&AssetServer>,
+    spec: &TerrainSpec,
+    watched: &mut Vec<WatchedTexture>,
+) -> Handle<StandardMaterial> {
+    let mut material = StandardMaterial {
+        base_color: Color::WHITE,
+        metallic: 0.0,
+        perceptual_roughness: 0.95,
+        ..StandardMaterial::default()
+    };
+    let mut texture_handle = None;
+    if let (Some(server), Some(texture)) = (asset_server, spec.texture.as_deref()) {
+        let handle = load_world_texture(server, world, texture);
+        texture_handle = Some(handle.clone());
+        material.base_color_texture = Some(handle);
+    }
+    let terrain_material = materials.add(material);
+    if let Some(texture) = texture_handle {
+        watched.push(WatchedTexture::Standard {
+            material: terrain_material.clone(),
+            texture,
+        });
+    }
+    terrain_material
+}
+
 /// Spawns the terrain's chunk meshes.
 ///
 /// Each chunk is built at the LOD its distance from `camera_xz` implies — the
@@ -840,28 +920,7 @@ fn spawn_chunks(
     let rows = (spec.world_size / edge).ceil().max(1.0) as u32;
     let epsilon = grid.texel();
 
-    let mut material = StandardMaterial {
-        // White: the authored `base-color` is already folded into the chunk
-        // vertex colours by `tint_vertex_color`, and the PBR shader multiplies
-        // those in. Putting it here as well would square it.
-        base_color: Color::WHITE,
-        metallic: 0.0,
-        perceptual_roughness: 0.95,
-        ..StandardMaterial::default()
-    };
-    let mut texture_handle = None;
-    if let (Some(server), Some(texture)) = (asset_server, spec.texture.as_deref()) {
-        let handle = load_world_texture(server, world, texture);
-        texture_handle = Some(handle.clone());
-        material.base_color_texture = Some(handle);
-    }
-    let terrain_material = materials.add(material);
-    if let Some(texture) = texture_handle {
-        watched.push(WatchedTexture::Standard {
-            material: terrain_material.clone(),
-            texture,
-        });
-    }
+    let terrain_material = terrain_standard_material(world, materials, asset_server, spec, watched);
     // Com as camadas ativas o banding morre nas vertex colors (o splat
     // substitui o tint); no caminho legado ele continua inteiro.
     let chunk_tint = spec.chunk_tint();
@@ -1499,14 +1558,14 @@ mod tests {
     }
 
     #[test]
-    fn test_sample_mesh_surface_matches_rendered_lattice() {
+    fn test_lattice_surface_matches_rendered_chords() {
         // Peak flank h(x) = 40 − (x−7.5)²/8 on a 1 m/texel grid (16 texels
         // over 15 m): the invariant that matters is the RENDERED surface —
-        // chunk meshes draw flat triangles between vertices, so between two
-        // vertices sample_mesh_surface must equal the linear chord of the
-        // vertex heights (where the analytic sample may differ; anchoring
-        // props to the chord is what keeps them flush with the mesh). On the
-        // vertices both agree exactly.
+        // heightfield chunk meshes draw flat triangles between vertices, so
+        // between two vertices the lattice query must equal the linear chord
+        // of the vertex heights. On the vertices both agree exactly. (Só é
+        // caminho vivo com VIBER_HF_TERRAIN=1; no default voxel
+        // `sample_mesh_surface` devolve o topo do campo.)
         let max_h = 65.535;
         let height = |x: usize| 40.0 - (x as f32 - 7.5).powi(2) / 8.0;
         let raw: Vec<u16> = (0..16usize)
@@ -1528,7 +1587,7 @@ mod tests {
         };
         for i in 0..16 {
             let x = i as f32 - 7.5;
-            let mesh = runtime.sample_mesh_surface(x, 0.0);
+            let mesh = runtime.lattice_surface(x, 0.0);
             let analytic = runtime.sample(x, 0.0);
             assert!(
                 (mesh - analytic).abs() < 1e-2,
@@ -1537,12 +1596,48 @@ mod tests {
         }
         // Mid-cell: exactly the chord between the two vertex heights, even
         // where the smoothed analytic sample disagrees.
-        let mesh = runtime.sample_mesh_surface(-7.0, 0.0);
+        let mesh = runtime.lattice_surface(-7.0, 0.0);
         let chord = (runtime.sample(-7.5, 0.0) + runtime.sample(-6.5, 0.0)) * 0.5;
         assert!(
             (mesh - chord).abs() < 1e-3,
             "mid-cell {mesh} must be the vertex chord {chord}"
         );
+    }
+
+    /// No caminho 100% voxel (default, sem VIBER_HF_TERRAIN) a superfície
+    /// "meshada" É o zero do SDF — numa coluna sem mods isso coincide com a
+    /// amostra da grelha, que é exatamente o que os props esperam.
+    #[test]
+    fn test_sample_mesh_surface_is_the_field_top_in_voxel_mode() {
+        let max_h = 50.0;
+        let n = 33usize;
+        let raw: Vec<u16> = (0..n * n)
+            .map(|i| {
+                let x = (i % n) as f32 / (n - 1) as f32;
+                ((10.0 + 5.0 * x) / max_h * 65535.0).round() as u16
+            })
+            .collect();
+        let grid = BrushGrid::new(raw, n, n, 16.0, max_h, 1.0).expect("grid");
+        let runtime = TerrainRuntime {
+            spec: TerrainSpec {
+                world_size: 32.0,
+                ..Default::default()
+            },
+            grid: Arc::new(grid),
+            water: Vec::new(),
+            roads: Vec::new(),
+            pads: Vec::new(),
+            voxel: Arc::new(VoxelField::default()),
+        };
+        for i in 0..8 {
+            let x = -14.0 + 4.0 * i as f32;
+            let top = runtime.sample_mesh_surface(x, 0.0);
+            let analytic = runtime.sample(x, 0.0);
+            assert!(
+                (top - analytic).abs() < 1e-4,
+                "voxel mode: surface {top} must equal the field top {analytic} at x={x}"
+            );
+        }
     }
 
     /// End-to-end smoke: PendingTerrain (procedural terrain + all features)

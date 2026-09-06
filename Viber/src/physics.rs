@@ -987,6 +987,12 @@ pub fn stream_terrain_colliders(
     >,
 ) {
     let Some(runtime) = runtime else { return };
+    // Caminho 100% voxel (default): as colunas não têm mesh heightfield — os
+    // colliders de terreno saem TODOS das caixas `VoxelChunk`
+    // (`stream_voxel_colliders`), que passaram a cobrir a grelha inteira.
+    if !crate::terrain::hf_terrain_fallback() {
+        return;
+    }
     let Ok(camera) = cameras.single() else { return };
     let camera_xz = {
         let t = camera.translation();

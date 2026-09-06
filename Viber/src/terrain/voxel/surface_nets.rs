@@ -70,6 +70,22 @@ pub struct VoxelChunkParams {
     /// boundary. On the legacy path the full tint stays in RGB, exactly what
     /// `build_chunk_mesh` bakes when it receives no mask.
     pub uses_layer_material: bool,
+    /// Which of the box's four VERTICAL faces sit on a column boundary and
+    /// must grow a downward seal skirt, in `[-X, +X, -Z, +Z]` order.
+    ///
+    /// Boxes of the same LOD close their seams by vertex coincidence, and a
+    /// column's interior box tiling is covered box-to-box — but a column at a
+    /// FINER LOD than its neighbour disagrees with that neighbour's coarse
+    /// polyline by up to a coarse cell, and the gap shows the sky through at
+    /// grazing angles. The seal hangs a vertical wall from every mesh edge on
+    /// those faces: the same bargain the heightfield mesher's skirts make
+    /// (`ChunkMeshParams::skirt_depth`). Sealed walls are buried in solid
+    /// ground whenever the neighbour agrees, so "always seal" costs nothing
+    /// visible.
+    pub seal_faces: [bool; 4],
+    /// Depth (meters) of the column-boundary seals. `0` disables them even
+    /// when [`VoxelChunkParams::seal_faces`] is set.
+    pub seal_depth: f32,
 }
 
 impl VoxelChunkParams {
@@ -89,6 +105,8 @@ impl VoxelChunkParams {
             tint,
             max_height,
             uses_layer_material,
+            seal_faces: [false; 4],
+            seal_depth: 0.0,
         }
     }
 
@@ -399,6 +417,17 @@ pub fn build_voxel_mesh(
         return None;
     }
 
+    if params.seal_faces.iter().any(|&face| face) && params.seal_depth > 0.0 {
+        append_column_seals(
+            params,
+            &mut positions,
+            &mut normals,
+            &mut uvs,
+            &mut colors,
+            &mut indices,
+        );
+    }
+
     Some(ChunkMeshData {
         positions,
         normals,
@@ -406,6 +435,103 @@ pub fn build_voxel_mesh(
         colors,
         indices,
     })
+}
+
+/// Outward horizontal normal of each sealed face, `[−X, +X, −Z, +Z]` order.
+const SEAL_FACE_NORMALS: [Vec3; 4] = [Vec3::NEG_X, Vec3::X, Vec3::NEG_Z, Vec3::Z];
+
+/// Hangs a downward skirt from every mesh edge that lies on one of the box's
+/// sealed faces (see [`VoxelChunkParams::seal_faces`]).
+///
+/// A border edge is one whose BOTH endpoints sit within ¾ voxel of the face
+/// plane: surface-nets vertices of the border cells and of the overlap layer
+/// cluster around the half-cell mark, while the first interior cell sits a
+/// full cell and a half in — the cut separates exactly the boundary ring.
+/// Skirt vertices duplicate their source (colour, uv) but carry the face's
+/// horizontal outward normal, so the wall shades as a wall; on the layers
+/// path the vertex ALPHA is zeroed like the heightfield skirts, so the sliver
+/// never picks up the triplanar rock. Winding is normalised per edge so the
+/// quads face outward even though the voxel material renders double-sided.
+fn append_column_seals(
+    params: &VoxelChunkParams,
+    positions: &mut Vec<[f32; 3]>,
+    normals: &mut Vec<[f32; 3]>,
+    uvs: &mut Vec<[f32; 2]>,
+    colors: &mut Vec<[f32; 4]>,
+    indices: &mut Vec<u32>,
+) {
+    let extent = params.extent();
+    let eps = params.voxel_size * 0.75;
+    // (face index, plane coordinate on that axis).
+    let faces = [(0usize, 0.0f32), (0, extent), (2, 0.0), (2, extent)];
+
+    // Unique edges of the surface, collected BEFORE any skirt triangle lands.
+    let mut edges: std::collections::HashSet<(u32, u32)> = std::collections::HashSet::new();
+    for tri in indices.chunks_exact(3) {
+        for k in 0..3 {
+            let a = tri[k];
+            let b = tri[(k + 1) % 3];
+            edges.insert((a.min(b), a.max(b)));
+        }
+    }
+
+    // One dropped copy per source vertex, shared between faces and edges.
+    let mut dropped: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+    let drop_of = |v: u32,
+                       positions: &mut Vec<[f32; 3]>,
+                       normals: &mut Vec<[f32; 3]>,
+                       uvs: &mut Vec<[f32; 2]>,
+                       colors: &mut Vec<[f32; 4]>,
+                       dropped: &mut std::collections::HashMap<u32, u32>,
+                       at: Vec3,
+                       out: Vec3,
+                       layers: bool|
+     -> u32 {
+        *dropped.entry(v).or_insert_with(|| {
+            let mut color = colors[v as usize];
+            if layers {
+                color[3] = 0.0;
+            }
+            let id = positions.len() as u32;
+            positions.push([at.x, at.y - params.seal_depth, at.z]);
+            normals.push(out.to_array());
+            uvs.push(uvs[v as usize]);
+            colors.push(color);
+            id
+        })
+    };
+
+    // O par é (EIXO, plano); o ordinal da face (que indexa `seal_faces`)
+    // é a posição no array — [−X, +X, −Z, +Z]. Confundir os dois era
+    // consultar `seal_faces[eixo]` e nunca selar +X/+Z.
+    for (ordinal, &(face, plane)) in faces
+        .iter()
+        .enumerate()
+        .filter(|&(o, _)| params.seal_faces[o])
+    {
+        let out = SEAL_FACE_NORMALS[ordinal];
+        for &(a, b) in &edges {
+            let pa = Vec3::from(positions[a as usize]);
+            let pb = Vec3::from(positions[b as usize]);
+            if (pa[face] - plane).abs() > eps || (pb[face] - plane).abs() > eps {
+                continue;
+            }
+            // Orient the top edge so (b − a) × (−Y) agrees with the outward
+            // normal, then the two triangles below wound outward.
+            let (a, b) = if (pb - pa).cross(Vec3::NEG_Y).dot(out) < 0.0 {
+                (b, a)
+            } else {
+                (a, b)
+            };
+            let a2 = drop_of(
+                a, positions, normals, uvs, colors, &mut dropped, pa, out, params.uses_layer_material,
+            );
+            let b2 = drop_of(
+                b, positions, normals, uvs, colors, &mut dropped, pb, out, params.uses_layer_material,
+            );
+            indices.extend_from_slice(&[a, b, b2, a, b2, a2]);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -421,6 +547,8 @@ mod tests {
             tint: TintParams::default(),
             max_height: 100.0,
             uses_layer_material: true,
+            seal_faces: [false; 4],
+            seal_depth: 0.0,
         }
     }
 
@@ -666,5 +794,93 @@ mod tests {
         assert!(build_voxel_mesh(&sphere, &params(Vec3::ZERO, 0, 1.0)).is_none());
         assert!(build_voxel_mesh(&sphere, &params(Vec3::ZERO, 8, 0.0)).is_none());
         assert!(build_voxel_mesh(&sphere, &params(Vec3::ZERO, 8, f32::NAN)).is_none());
+    }
+
+    #[test]
+    fn test_seal_hangs_border_edges_down_without_touching_the_interior() {
+        let base = params(Vec3::new(0.0, -4.0, 0.0), 8, 1.0);
+        let surface = build_voxel_mesh(&plane, &base).expect("plane");
+
+        let mut p = base.clone();
+        p.seal_faces = [false, true, false, false]; // +X face
+        p.seal_depth = 3.0;
+        let m = build_voxel_mesh(&plane, &p).expect("plane");
+
+        let eps = 0.75f32;
+        let border: Vec<[f32; 3]> = surface
+            .positions
+            .iter()
+            .filter(|v| (v[0] - 8.0).abs() <= eps)
+            .copied()
+            .collect();
+        assert!(!border.is_empty(), "the plane's border ring must exist");
+
+        assert_eq!(
+            m.positions.len(),
+            surface.positions.len() + border.len(),
+            "exactly one dropped copy per border vertex, none elsewhere"
+        );
+
+        let skirt: Vec<&[f32; 3]> = m
+            .positions
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| m.normals[*i][0] > 0.99)
+            .map(|(_, v)| v)
+            .collect();
+        assert_eq!(skirt.len(), border.len(), "one skirt vertex per border vertex");
+        for v in &skirt {
+            assert!((v[0] - 8.0).abs() <= eps, "skirt stays on the sealed face");
+            assert!(
+                border.iter().any(|b| (b[0] - v[0]).abs() < 1e-4
+                    && (b[2] - v[2]).abs() < 1e-4
+                    && (v[1] - (b[1] - 3.0)).abs() < 1e-4),
+                "skirt vertex {v:?} hangs seal_depth below its border source"
+            );
+        }
+
+        let border_edges: std::collections::HashSet<(u32, u32)> = surface
+            .indices
+            .chunks_exact(3)
+            .flat_map(|t| [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])])
+            .map(|(a, b)| (a.min(b), a.max(b)))
+            .filter(|&(a, b)| {
+                let (pa, pb) = (surface.positions[a as usize], surface.positions[b as usize]);
+                (pa[0] - 8.0).abs() <= eps && (pb[0] - 8.0).abs() <= eps
+            })
+            .collect();
+        assert!(!border_edges.is_empty());
+        assert_eq!(
+            m.indices.len(),
+            surface.indices.len() + border_edges.len() * 6,
+            "two triangles per unique border edge"
+        );
+    }
+
+    #[test]
+    fn test_seal_skirts_carry_the_face_normal_and_no_cliff_alpha() {
+        let mut p = params(Vec3::new(0.0, -4.0, 0.0), 8, 1.0);
+        p.seal_faces = [true, false, false, false]; // −X face
+        p.seal_depth = 4.0;
+        let m = build_voxel_mesh(&plane, &p).expect("plane");
+        let skirts = m
+            .normals
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| n[0] < -0.99)
+            .count();
+        assert!(skirts > 0, "the −X seal must exist");
+        for (i, n) in m.normals.iter().enumerate() {
+            if n[0] < -0.99 {
+                assert!(
+                    (n[1].abs()) < 1e-4 && (n[2].abs()) < 1e-4,
+                    "skirt normal is horizontal: {n:?}"
+                );
+                assert!(
+                    (m.colors[i][3] - 0.0).abs() < 1e-5,
+                    "layers path zeroes the skirt alpha so no triplanar rock"
+                );
+            }
+        }
     }
 }

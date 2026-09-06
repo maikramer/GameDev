@@ -92,14 +92,27 @@ pub struct TerrainPlugin;
 
 impl bevy::app::Plugin for TerrainPlugin {
     fn build(&self, app: &mut bevy::app::App) {
-        app.init_resource::<ChunkLodState>().add_systems(
-            bevy::app::Update,
-            (
-                timed(Group::Terrain, adopt_chunks),
-                timed(Group::Terrain, update_chunk_lods),
-            )
-                .chain(),
-        );
+        app.init_resource::<ChunkLodState>();
+        // A migração volumétrica tem dois ladders sobre a mesma maquinaria:
+        // o heightfield legado (VIBER_HF_TERRAIN=1) e o de colunas voxel,
+        // que é o default — vê `update_voxel_columns`.
+        if super::hf_terrain_fallback() {
+            app.add_systems(
+                bevy::app::Update,
+                (
+                    timed(Group::Terrain, adopt_chunks),
+                    timed(Group::Terrain, update_hf_chunk_lods),
+                ),
+            );
+        } else {
+            app.add_systems(
+                bevy::app::Update,
+                (
+                    timed(Group::Terrain, adopt_chunks),
+                    timed(Group::Terrain, update_voxel_columns),
+                ),
+            );
+        }
     }
 }
 
@@ -121,6 +134,11 @@ fn parse_chunk_name(name: &str) -> Option<UVec2> {
 
 /// One-shot: tag the bootstrap's chunk meshes with [`TerrainChunk`], capture
 /// the terrain root and the shared chunk material.
+///
+/// Cobre os DOIS formatos de chunk: o heightfield legado (a entidade tem o
+/// mesh) e a coluna voxel (grupo nomeado cujas caixas têm o mesh — a coluna
+/// já nasce etiquetada pelo bootstrap, mas testes e respawn contam com a
+/// captura do material a partir das caixas).
 type ChunkCandidate = (
     Entity,
     &'static Name,
@@ -132,6 +150,9 @@ fn adopt_chunks(
     roots: Query<(Entity, &Name, &Children)>,
     tagged: Query<(), With<TerrainChunk>>,
     chunk_candidates: Query<ChunkCandidate, With<Mesh3d>>,
+    box_materials: Query<&MeshMaterial3d<StandardMaterial>, With<super::voxel::VoxelChunk>>,
+    named: Query<&Name>,
+    columns: Query<&Children>,
     mut commands: Commands,
 ) {
     if state.adopted {
@@ -144,22 +165,45 @@ fn adopt_chunks(
         }
         state.root = Some(root);
         for child in children.iter() {
-            let Ok((entity, child_name, material)) = chunk_candidates.get(child) else {
+            // Heightfield: the chunk entity itself carries the mesh.
+            if let Ok((entity, child_name, material)) = chunk_candidates.get(child) {
+                let Some(coords) = parse_chunk_name(child_name.as_str()) else {
+                    continue;
+                };
+                // Capture the shared material before the tagged check: the
+                // bootstrap tags its own chunks (it builds them at the LOD
+                // their distance implies), and respawns still need this handle.
+                if let Some(mat) = material {
+                    state.material.get_or_insert(mat.0.clone());
+                }
+                if tagged.get(entity).is_ok() {
+                    continue;
+                }
+                commands.entity(entity).insert(TerrainChunk {
+                    coords,
+                    lod: 0,
+                    built_lod: 0,
+                });
+                continue;
+            }
+            // Voxel column: a named group; the material comes from any box.
+            let Ok(child_name) = named.get(child) else {
                 continue;
             };
             let Some(coords) = parse_chunk_name(child_name.as_str()) else {
                 continue;
             };
-            // Capture the shared material before the tagged check: the
-            // bootstrap tags its own chunks (it builds them at the LOD their
-            // distance implies), and respawns still need this handle.
-            if let Some(mat) = material {
-                state.material.get_or_insert(mat.0.clone());
+            if let Ok(kids) = columns.get(child) {
+                for kid in kids.iter() {
+                    if let Ok(mat) = box_materials.get(kid) {
+                        state.material.get_or_insert(mat.0.clone());
+                    }
+                }
             }
-            if tagged.get(entity).is_ok() {
+            if tagged.get(child).is_ok() {
                 continue;
             }
-            commands.entity(entity).insert(TerrainChunk {
+            commands.entity(child).insert(TerrainChunk {
                 coords,
                 lod: 0,
                 built_lod: 0,
@@ -168,10 +212,11 @@ fn adopt_chunks(
     }
 }
 
-/// Per-frame LOD pass: reselect (gated by camera movement), rebuild within
-/// the frame budget, and render-distance culling/respawn.
+/// Per-frame LOD pass over heightfield chunks (the `VIBER_HF_TERRAIN=1`
+/// escape path): reselect (gated by camera movement), rebuild within the
+/// frame budget, and render-distance culling/respawn.
 #[allow(clippy::too_many_arguments)]
-fn update_chunk_lods(
+fn update_hf_chunk_lods(
     mut state: ResMut<ChunkLodState>,
     runtime: Option<Res<TerrainRuntime>>,
     published: Option<Res<TerrainChunkMaterials>>,
@@ -435,6 +480,264 @@ fn rebuild(
     build_chunk_mesh(grid, &params, cliff).ok().flatten()
 }
 
+// ── Ladder de colunas voxel (o caminho default da migração volumétrica) ─────
+
+/// Caixas meshadas por frame no caminho voxel. Uma caixa 32³ custa ~39 k
+/// amostras do campo (~2-5 ms) — o mesmo espaço que os 4 builds de chunk do
+/// heightfield, contado em CAIXAS para uma coluna LOD-0 complete em um ou
+/// dois passes em vez de hitchar um frame único.
+const VOXEL_MAX_MESH_BUILDS_PER_FRAME: u32 = 4;
+
+/// Estado de construção de uma coluna a meio de uma troca de LOD: as caixas
+/// do `target` nascem escondidas (`staged`) sob o orçamento do frame; quando
+/// `remaining` esvazia, as caixas velhas morrem e as staged ficam visíveis —
+/// a troca é atómica (nunca dois LODs do mesmo chão desenhados ao mesmo
+/// tempo, nem buraco durante o rebuild).
+#[derive(Component)]
+struct ColumnBuild {
+    target: u8,
+    staged: Vec<Entity>,
+    remaining: Vec<super::voxel::VoxelBoxSpec>,
+}
+
+/// Per-frame LOD pass over VOXEL columns: same select/hysteresis/budget/cull
+/// machinery as the heightfield pass, but a "rebuild" swaps a whole stack of
+/// surface-nets boxes, staged hidden under the frame budget.
+#[allow(clippy::too_many_arguments)]
+fn update_voxel_columns(
+    mut state: ResMut<ChunkLodState>,
+    runtime: Option<Res<TerrainRuntime>>,
+    published: Option<Res<TerrainChunkMaterials>>,
+    cameras: Query<&GlobalTransform, With<Camera3d>>,
+    mut columns: Query<(Entity, &mut TerrainChunk, Option<&mut ColumnBuild>)>,
+    boxes: Query<(), With<super::voxel::VoxelChunk>>,
+    children_q: Query<&Children>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut commands: Commands,
+) {
+    let Some(runtime) = runtime else {
+        return;
+    };
+    if !state.adopted {
+        return;
+    }
+    let Ok(cam) = cameras.single() else {
+        return;
+    };
+    let cam_xz = Vec2::new(cam.translation().x, cam.translation().z);
+
+    // Reselect gate — idêntico ao caminho heightfield.
+    let moved = state
+        .last_cam
+        .is_none_or(|last| last.distance(cam_xz) > DEFAULT_LOD_RESELECT_DISTANCE);
+    if !moved && !state.pending {
+        return;
+    }
+    if moved {
+        state.last_cam = Some(cam_xz);
+    }
+
+    // Sync the chunk index with reality (adoptions and despawns).
+    let dead: Vec<UVec2> = state
+        .chunks
+        .iter()
+        .filter(|(_, e)| columns.get(**e).is_err())
+        .map(|(c, _)| *c)
+        .collect();
+    for coords in dead {
+        state.chunks.remove(&coords);
+    }
+    for (entity, chunk, _) in columns.iter() {
+        state.chunks.insert(chunk.coords, entity);
+    }
+
+    let mut budget = VOXEL_MAX_MESH_BUILDS_PER_FRAME;
+    state.pending = false;
+
+    let spec = &runtime.spec;
+    let edge = chunk_edge(spec);
+    let half = spec.world_size * 0.5;
+    let max_lod = max_lod_for(spec, edge);
+    let margin = hysteresis_margin(spec);
+    let render_distance = spec.effective_render_distance();
+    let lod0_cell = lod0_step(spec) as f32;
+    let grid = &runtime.grid;
+    let voxel = &runtime.voxel;
+    // Captura ANTES do loop de colunas (o índice usa `state` mutável).
+    let standard = state.material.clone();
+
+    let center_of = |coords: UVec2| {
+        Vec2::new(
+            -half + coords.x as f32 * edge + edge * 0.5,
+            -half + coords.y as f32 * edge + edge * 0.5,
+        )
+    };
+
+    // 1. Cull + re-select + construção staged.
+    for (entity, mut chunk, mut build) in columns.iter_mut() {
+        let dist = center_of(chunk.coords).distance(cam_xz);
+        if chunk_aabb_distance(dist, edge) > render_distance {
+            state.chunks.remove(&chunk.coords);
+            // Despawn recursivo: as caixas da coluna morrem com ela.
+            commands.entity(entity).despawn();
+            continue;
+        }
+        chunk.lod = select_lod(dist, spec.lod_distance(), chunk.built_lod, max_lod, margin);
+        match build.as_mut() {
+            // O alvo mudou a meio da construção: as staged (escondidas)
+            // morrem e a fila recomputa para o novo alvo.
+            Some(b) if b.target != chunk.lod => {
+                for e in b.staged.drain(..) {
+                    commands.entity(e).despawn();
+                }
+                b.remaining = super::voxel::column_boxes(
+                    spec, grid, voxel, edge, lod0_cell, chunk.lod, chunk.coords,
+                );
+                b.target = chunk.lod;
+                state.pending = true;
+            }
+            Some(b) => {
+                let material = published
+                    .as_ref()
+                    .and_then(|p| p.layer.as_ref())
+                    .and_then(|m| m.get(chunk.coords.x, chunk.coords.y).cloned())
+                    .map(ChunkMaterialHandle::Layer)
+                    .or_else(|| standard.clone().map(ChunkMaterialHandle::Standard));
+                let Some(material) = material else {
+                    continue;
+                };
+                while budget > 0 {
+                    let Some(box_spec) = b.remaining.pop() else {
+                        break;
+                    };
+                    let Some(data) =
+                        super::voxel::build_box_mesh(spec, grid, voxel, &box_spec)
+                    else {
+                        // Provou-se vazio depois de tudo — sem custo de
+                        // orçamento, segue para a próxima caixa.
+                        continue;
+                    };
+                    b.staged.push(super::voxel::spawn_box_entity(
+                        &mut commands,
+                        &mut meshes,
+                        entity,
+                        &box_spec,
+                        data,
+                        &material,
+                        false,
+                    ));
+                    budget -= 1;
+                }
+                if b.remaining.is_empty() {
+                    // Swap atómico: caixas do LOD velho morrem, staged ficam
+                    // visíveis, a coluna aponta o LOD construído.
+                    if let Ok(kids) = children_q.get(entity) {
+                        for kid in kids.iter() {
+                            if boxes.get(kid).is_ok() && !b.staged.contains(&kid) {
+                                commands.entity(kid).despawn();
+                            }
+                        }
+                    }
+                    for e in &b.staged {
+                        commands.entity(*e).insert(Visibility::Inherited);
+                    }
+                    chunk.built_lod = b.target;
+                    commands.entity(entity).remove::<ColumnBuild>();
+                }
+            }
+            None if chunk.lod != chunk.built_lod => {
+                let remaining = super::voxel::column_boxes(
+                    spec, grid, voxel, edge, lod0_cell, chunk.lod, chunk.coords,
+                );
+                commands.entity(entity).insert(ColumnBuild {
+                    target: chunk.lod,
+                    staged: Vec::new(),
+                    remaining,
+                });
+                // O componente entra por commands (deferido) — sem isto o
+                // passe seguinte nem corria (gate de movimento de câmara).
+                state.pending = true;
+            }
+            None => {}
+        }
+    }
+    if budget == 0 {
+        state.pending = true;
+    }
+
+    // 2. Respawn de colunas em falta (culled antes, ou fora do raio no
+    //    bootstrap) — sem skip volumétrico: TODA a grelha é voxel agora.
+    let Some(root) = state.root else {
+        return;
+    };
+    if published.as_ref().and_then(|p| p.layer.as_ref()).is_none() && standard.is_none() {
+        return;
+    }
+    let rows = (spec.world_size / edge).ceil().max(1.0) as u32;
+    let clamp_coord = |axis: f32| -> u32 {
+        (((axis - render_distance + half) / edge).floor().max(0.0) as u32).min(rows - 1)
+    };
+    let clamp_hi = |axis: f32| -> u32 {
+        (((axis + render_distance + half) / edge).floor().max(0.0) as u32).min(rows - 1)
+    };
+    let min_cx = clamp_coord(cam_xz.x);
+    let max_cx = clamp_hi(cam_xz.x);
+    let min_cz = clamp_coord(cam_xz.y);
+    let max_cz = clamp_hi(cam_xz.y);
+    for cz in min_cz..=max_cz {
+        for cx in min_cx..=max_cx {
+            if budget == 0 {
+                state.pending = true;
+                return;
+            }
+            let coords = UVec2::new(cx, cz);
+            if state.chunks.contains_key(&coords) {
+                continue;
+            }
+            let dist = center_of(coords).distance(cam_xz);
+            if chunk_aabb_distance(dist, edge) > render_distance {
+                continue;
+            }
+            let Some(material) = published
+                .as_ref()
+                .and_then(|p| p.layer.as_ref())
+                .and_then(|m| m.get(cx, cz).cloned())
+                .map(ChunkMaterialHandle::Layer)
+                .or_else(|| standard.clone().map(ChunkMaterialHandle::Standard))
+            else {
+                continue;
+            };
+            // Respawn já no LOD cru da distância (sem histerese — coluna nova
+            // não tem histórico). As caixas da coluna constroem TODAS neste
+            // frame: um chão a meio é pior do que ultrapassar o orçamento
+            // uma vez; o `saturating_sub` limita a uma coluna destes por
+            // frame.
+            let lod = raw_lod(dist, spec.lod_distance(), max_lod);
+            let column_boxes = super::voxel::column_boxes(
+                spec, grid, voxel, edge, lod0_cell, lod, coords,
+            );
+            budget = budget.saturating_sub(column_boxes.len() as u32);
+            let (entity, built) = super::voxel::spawn_column(
+                &mut commands,
+                &mut meshes,
+                root,
+                coords,
+                lod,
+                &material,
+                &column_boxes,
+                grid,
+                voxel,
+                spec,
+            );
+            if built > 0 {
+                state.chunks.insert(coords, entity);
+            } else {
+                commands.entity(entity).despawn();
+            }
+        }
+    }
+}
+
 /// Distância da câmara à AABB XZ do chunk: `max(0, dist_centro − meia-edge)`.
 /// Chunks são quadrados axis-aligned — 0 com a câmara dentro do quadrado;
 /// fora, a folga até à borda mais próxima. Cull e respawn partilham a
@@ -446,9 +749,9 @@ fn chunk_aabb_distance(dist_center: f32, edge: f32) -> f32 {
 
 /// LOD cru para uma distância — o esquema plano `2^lod` de
 /// `bevy_mesh_terrain`, antes da histerese. O passe de seleção alimenta com
-/// isto a decisão de troca; o respawn usa-o diretamente (um chunk novo não tem
-/// histórico para a histerese decidir).
-fn raw_lod(dist: f32, lod_distance: f32, max_lod: u8) -> u8 {
+/// isto a decisão de troca; o respawn usa-o diretamente (um chunk novo não
+/// tem histórico para a histerese decidir).
+pub(crate) fn raw_lod(dist: f32, lod_distance: f32, max_lod: u8) -> u8 {
     if lod_distance <= 0.0 || !dist.is_finite() {
         return 0;
     }
@@ -570,9 +873,10 @@ mod tests {
         }
     }
 
-    /// App mínimo com o runtime real, 4 chunks bootstrap-style (grelha 2×2,
-    /// edge 16, centros em (±8, ±8)) e raio de render fixo — base dos testes
-    /// de cull/respawn. A câmara é criada por cada teste.
+    /// App mínimo com o runtime real e 4 COLUNAS voxel bootstrap-style
+    /// (grelha 2×2, edge 16) — base dos testes de cull/respawn. Cada coluna
+    /// tem uma caixa `VoxelChunk` dummy (o adopt captura daí o material e os
+    /// censos de caixas têm o que contar). A câmara é criada por cada teste.
     fn lod_app(render_distance: f32) -> bevy::app::App {
         let mut app = bevy::app::App::new();
         app.add_plugins(bevy::MinimalPlugins)
@@ -621,18 +925,34 @@ mod tests {
             )));
         for cz in 0..2u32 {
             for cx in 0..2u32 {
-                let center = Vec3::new(
-                    -half + cx as f32 * edge + edge * 0.5,
-                    0.0,
-                    -half + cz as f32 * edge + edge * 0.5,
-                );
+                let origin = Vec3::new(-half + cx as f32 * edge, 0.0, -half + cz as f32 * edge);
+                let column = app
+                    .world_mut()
+                    .spawn((
+                        Name::new(chunk_name(UVec2::new(cx, cz))),
+                        Transform::default(),
+                        Visibility::Inherited,
+                        ChildOf(root),
+                        TerrainChunk {
+                            coords: UVec2::new(cx, cz),
+                            lod: 0,
+                            built_lod: 0,
+                        },
+                    ))
+                    .id();
                 app.world_mut().spawn((
-                    Name::new(chunk_name(UVec2::new(cx, cz))),
-                    Transform::from_translation(center),
+                    Name::new(format!("voxel dummy {cx}-{cz}")),
+                    Transform::from_translation(origin),
                     Visibility::Inherited,
                     Mesh3d(mesh0.clone()),
                     MeshMaterial3d(material.clone()),
-                    ChildOf(root),
+                    ChildOf(column),
+                    crate::terrain::voxel::VoxelChunk {
+                        coords: bevy::math::IVec3::new(cx as i32, 0, cz as i32),
+                        origin,
+                        extent: edge,
+                        voxel_size: 1.0,
+                    },
                 ));
             }
         }
@@ -779,18 +1099,34 @@ mod tests {
             )));
         for cz in 0..2u32 {
             for cx in 0..2u32 {
-                let center = Vec3::new(
-                    -half + cx as f32 * edge + edge * 0.5,
-                    0.0,
-                    -half + cz as f32 * edge + edge * 0.5,
-                );
+                let origin = Vec3::new(-half + cx as f32 * edge, 0.0, -half + cz as f32 * edge);
+                let column = app
+                    .world_mut()
+                    .spawn((
+                        Name::new(chunk_name(UVec2::new(cx, cz))),
+                        Transform::default(),
+                        Visibility::Inherited,
+                        ChildOf(root),
+                        TerrainChunk {
+                            coords: UVec2::new(cx, cz),
+                            lod: 0,
+                            built_lod: 0,
+                        },
+                    ))
+                    .id();
                 app.world_mut().spawn((
-                    Name::new(chunk_name(UVec2::new(cx, cz))),
-                    Transform::from_translation(center),
+                    Name::new(format!("voxel dummy {cx}-{cz}")),
+                    Transform::from_translation(origin),
                     Visibility::Inherited,
                     Mesh3d(mesh0.clone()),
                     MeshMaterial3d(material.clone()),
-                    ChildOf(root),
+                    ChildOf(column),
+                    crate::terrain::voxel::VoxelChunk {
+                        coords: bevy::math::IVec3::new(cx as i32, 0, cz as i32),
+                        origin,
+                        extent: edge,
+                        voxel_size: 1.0,
+                    },
                 ));
             }
         }
@@ -813,6 +1149,12 @@ mod tests {
             lods.sort_unstable();
             lods
         };
+        let count = |app: &mut bevy::app::App| {
+            let mut q = app
+                .world_mut()
+                .query::<&crate::terrain::voxel::VoxelChunk>();
+            q.iter(app.world()).count()
+        };
         assert_eq!(lod(&mut app), vec![0, 0, 0, 0], "camera at center: LOD 0");
 
         // Pin the render distance while the LOD ladder is under test: the
@@ -826,14 +1168,18 @@ mod tests {
         }
 
         // Fly far away → coarser LOD everywhere (budget 4 covers 4 chunks).
+        // Três updates no caminho voxel: o 1.º sincroniza a transform e
+        // agenda o ColumnBuild (deferido), o 2.º constrói as caixas staged e
+        // faz o swap; o 3.º cobre colunas cujas caixas não couberam no
+        // orçamento do 2.º. (O heightfield reconstruía inline no próprio
+        // passe; o voxel constrói caixas staged sob orçamento.)
         let mut cam = app
             .world_mut()
             .query::<(&Camera3d, &mut Transform)>()
             .single_mut(app.world_mut())
             .expect("one camera");
         cam.1.translation = Vec3::new(half + 500.0, 20.0, half);
-        // Two updates: the first syncs Transform -> GlobalTransform (PostUpdate),
-        // the second runs the LOD pass against the new camera position.
+        app.update();
         app.update();
         app.update();
         assert_eq!(lod(&mut app), vec![2, 2, 2, 2], "far camera: coarsest LOD");
@@ -847,7 +1193,9 @@ mod tests {
             assert_eq!(state.tracked_chunks(), 0, "all chunks culled");
         }
         let count = |app: &mut bevy::app::App| {
-            let mut q = app.world_mut().query::<(&Mesh3d, &TerrainChunk)>();
+            let mut q = app
+                .world_mut()
+                .query::<&crate::terrain::voxel::VoxelChunk>();
             q.iter(app.world()).count()
         };
         assert_eq!(count(&mut app), 0);
@@ -903,8 +1251,10 @@ mod tests {
         move_camera(&mut app, 39.0, 8.0);
         let state = app.world().resource::<ChunkLodState>();
         assert_eq!(state.tracked_chunks(), 0, "AABB fora do raio: culled");
-        let mut q = app.world_mut().query::<(&Mesh3d, &TerrainChunk)>();
-        assert_eq!(q.iter(app.world()).count(), 0);
+        let mut q = app
+            .world_mut()
+            .query::<&crate::terrain::voxel::VoxelChunk>();
+        assert_eq!(q.iter(app.world()).count(), 0, "as caixas morrem com a coluna");
     }
 
     /// Respawn no LOD que a distância pede: chunks que re-entram no raio a
@@ -932,8 +1282,8 @@ mod tests {
         // a 72-88 m, mesmo escalão. Antes do fix, todos reconstruíam em LOD 0
         // e a re-seleção para o LOD 2 só chegava num passe seguinte.
         move_camera(&mut app, 78.0, 8.0);
-        let mut q = app.world_mut().query::<(&TerrainChunk, &Mesh3d)>();
-        let mut lods: Vec<u8> = q.iter(app.world()).map(|(c, _)| c.built_lod).collect();
+        let mut q = app.world_mut().query::<&TerrainChunk>();
+        let mut lods: Vec<u8> = q.iter(app.world()).map(|(c)| c.built_lod).collect();
         lods.sort_unstable();
         assert_eq!(
             lods,
