@@ -12,6 +12,10 @@ use bevy::world_serialization::WorldAssetRoot;
 
 use super::{EntityKind, EntitySpec, MaterialSpec, ParsedWorld, Shape, TransformSpec};
 use crate::terrain::TerrainSpec;
+use crate::terrain::cliffs::CliffSpec;
+use crate::terrain::voxel::ArchSpec;
+use crate::terrain::voxel::CaveSpec;
+use crate::terrain::decal::GroundDecalSpec;
 use crate::terrain::features::TerrainFeatures;
 use crate::terrain::roads::{RoadNetworkSpec, RoadSpec, SegmentSpec, WaySpec};
 use crate::terrain::spec::TerrainPadSpec;
@@ -126,9 +130,18 @@ fn is_ground_feature(kind: &EntityKind) -> bool {
         EntityKind::TerrainPad { .. }
             | EntityKind::Lake { .. }
             | EntityKind::River { .. }
+            | EntityKind::Cliff { .. }
+            | EntityKind::Cave { .. }
+            | EntityKind::Arch { .. }
             | EntityKind::Road { .. }
             | EntityKind::RoadNetwork { .. }
+            | EntityKind::GroundDecal { .. }
             | EntityKind::StaticSpawner { .. }
+            // Consumidos como specs (grupos de spawn / recurso de
+            // exclusões / spec de vegetação) — nunca spawna entidade.
+            | EntityKind::DynamicSpawner { .. }
+            | EntityKind::SpawnExclusion { .. }
+            | EntityKind::Vegetation { .. }
     )
 }
 
@@ -164,6 +177,12 @@ fn collect_walk(specs: &[EntitySpec], offset: Vec2, out: &mut PendingTerrain) {
                     ..pad.clone()
                 });
             }
+            EntityKind::GroundDecal { spec: dec } => {
+                out.features.decals.push(GroundDecalSpec {
+                    at: dec.at + offset,
+                    ..dec.clone()
+                });
+            }
             EntityKind::Lake { spec: lake } => {
                 out.features.lakes.push(LakeSpec {
                     at: lake.at + offset,
@@ -174,6 +193,24 @@ fn collect_walk(specs: &[EntitySpec], offset: Vec2, out: &mut PendingTerrain) {
                 out.features.rivers.push(RiverSpec {
                     path: river.path.iter().map(|p| *p + offset).collect(),
                     ..river.clone()
+                });
+            }
+            EntityKind::Cliff { spec: cliff } => {
+                out.features.cliffs.push(CliffSpec {
+                    path: cliff.path.iter().map(|p| *p + offset).collect(),
+                    ..cliff.clone()
+                });
+            }
+            EntityKind::Cave { spec: cave } => {
+                out.features.caves.push(CaveSpec {
+                    path: cave.path.iter().map(|p| *p + offset).collect(),
+                    ..cave.clone()
+                });
+            }
+            EntityKind::Arch { spec: arch } => {
+                out.features.arches.push(ArchSpec {
+                    at: arch.at + offset,
+                    ..arch.clone()
                 });
             }
             EntityKind::Road { spec: road } => {
@@ -223,13 +260,17 @@ pub fn startup(world: &mut World) {
         return;
     };
     let parsed = pending.world;
+    let world_dir = pending.base_dir.clone();
     // Ground features are collected (not spawned) for the terrain runtime.
     let mut pending_terrain = PendingTerrain {
-        base_dir: pending.base_dir,
+        base_dir: pending.base_dir.clone(),
         ..PendingTerrain::default()
     };
     collect_terrain(&parsed.entities, &mut pending_terrain);
     world.insert_resource(pending_terrain);
+    // O save por-mundo precisa da pasta do world.xml DEPOIS de o bootstrap
+    // do terreno remover `PendingTerrain` (save.rs::WorldBaseDir).
+    world.insert_resource(crate::save::WorldBaseDir(pending.base_dir));
     if let Some([r, g, b]) = parsed.clear_color {
         world.insert_resource(ClearColor(Color::srgb(r, g, b)));
     }
@@ -247,6 +288,9 @@ pub fn startup(world: &mut World) {
     let asset_server = world
         .remove_resource::<AssetServer>()
         .expect("AssetServer exists before startup systems run");
+    let mut tiled = world
+        .remove_resource::<crate::textures::WorldTiledTextures>()
+        .expect("WorldTiledTextures exists before startup systems run");
     // `<StaticSpawner>` groups: collect specs and start their template loads;
     // `spawner::instantiate_spawn_groups` places instances once the terrain
     // runtime and the assets are ready.
@@ -261,19 +305,35 @@ pub fn startup(world: &mut World) {
     world.insert_resource(crate::spawner::PendingSpawnGroups {
         groups: spawn_groups,
         exclusions,
+        occupancy: crate::spawner::SpawnOccupancy::new(),
+        age: 0.0,
     });
     let mut stats = SpawnStats::default();
     let mut ambient: Option<GlobalAmbientLight> = None;
-    let (chips, hud_elements, mixer_settings, pending_worldsys, _sky_request) = {
+    let (
+        chips,
+        hud_elements,
+        ui_styles,
+        ui_trees,
+        ui_tree_sheets,
+        mixer_settings,
+        pending_worldsys,
+        _sky_request,
+    ) = {
         let mut ctx = SpawnCtx {
             meshes: &mut meshes,
             materials: &mut materials,
             sky_mats: &mut sky_mats,
             asset_server: &asset_server,
+            tiled: &mut tiled,
             chip_counter: std::cell::Cell::new(0),
             mixer: std::cell::RefCell::new(None),
             chips: std::cell::RefCell::new(Vec::new()),
             hud: std::cell::RefCell::new(Vec::new()),
+            ui_styles: std::cell::RefCell::new(Vec::new()),
+            ui_pending_sheets: std::cell::RefCell::new(Vec::new()),
+            ui_tree_sheets: std::cell::RefCell::new(Vec::new()),
+            ui_trees: std::cell::RefCell::new(Vec::new()),
             worldsys: Default::default(),
             sky_request: std::cell::RefCell::new(None),
         };
@@ -289,12 +349,18 @@ pub fn startup(world: &mut World) {
             crate::sky::build_sky(world, ctx.meshes, ctx.sky_mats);
         }
         let hud_elements = ctx.hud.into_inner();
+        let ui_styles = ctx.ui_styles.into_inner();
+        let ui_tree_sheets = ctx.ui_tree_sheets.into_inner();
+        let ui_trees = ctx.ui_trees.into_inner();
         let mixer = ctx.mixer.into_inner();
         let pending_worldsys = ctx.worldsys.consume();
         let sky_request = ctx.sky_request.into_inner();
         (
             ctx.chips.into_inner(),
             hud_elements,
+            ui_styles,
+            ui_trees,
+            ui_tree_sheets,
             mixer,
             pending_worldsys,
             sky_request,
@@ -309,6 +375,14 @@ pub fn startup(world: &mut World) {
     for (tag, attrs) in &hud_elements {
         crate::hud::spawn_hud(world, tag, attrs);
     }
+    build_declarative_ui(
+        world,
+        &ui_styles,
+        &ui_trees,
+        &ui_tree_sheets,
+        world_dir.as_deref(),
+        &asset_server,
+    );
     if let Some(day) = pending_worldsys.day_cycle {
         world.insert_resource(day);
     }
@@ -332,6 +406,7 @@ pub fn startup(world: &mut World) {
     world.insert_resource(materials);
     world.insert_resource(sky_mats);
     world.insert_resource(asset_server);
+    world.insert_resource(tiled);
     if !stats.has_camera {
         world.spawn((
             Camera3d::default(),
@@ -360,16 +435,130 @@ struct SpawnCtx<'a> {
     /// `Assets<Mesh>` missing for the terrain bootstrap).
     sky_mats: &'a mut Assets<crate::sky::SkyMaterial>,
     asset_server: &'a AssetServer,
+    /// World-tiled texture registry (single sampler writer em
+    /// `crate::textures`): primitivas com `texture-tile-size` usam UVs em
+    /// metros e precisam de REPEAT — registadas no próprio `load`.
+    tiled: &'a mut crate::textures::WorldTiledTextures,
     chip_counter: std::cell::Cell<usize>,
     mixer: std::cell::RefCell<Option<crate::music::AudioMixerSettings>>,
     /// Deferred HUD chip UI nodes (resource name + stack index).
     chips: std::cell::RefCell<Vec<(usize, String)>>,
     /// Deferred HUD screen elements (tag + raw attrs).
     hud: std::cell::RefCell<HudList>,
+    /// `<UiStyle>` sources, in document order (later rules win).
+    ui_styles: std::cell::RefCell<Vec<String>>,
+    /// Índices (em `ui_styles`) das folhas ainda pendentes — as que precedem
+    /// o PRÓXIMO `<UiRoot>` são as que o alimentam (shadow-DOM-lite).
+    ui_pending_sheets: std::cell::RefCell<Vec<usize>>,
+    /// Por `<UiRoot>` (mesma ordem de `ui_trees`): as folhas que o alimentam.
+    ui_tree_sheets: std::cell::RefCell<Vec<Vec<usize>>>,
+    /// `<UiRoot>` subtrees, built after the stylesheets are loaded.
+    ui_trees: std::cell::RefCell<Vec<crate::xml::XmlNode>>,
     /// Deferred world-system resources (DayCycle/Weather/border/biomes/config).
     worldsys: crate::worldsys::PendingWorldSystems,
     /// `<Sky>` attrs — constrói o domo no fim do startup.
     sky_request: std::cell::RefCell<Option<Vec<(String, String)>>>,
+}
+
+/// Grupo interno de pedras de margem (`rocks="1"` num corpo de água):
+/// templates do pool + ladder de LOD, entregues ao pipeline de spawner
+/// normal (occupancy partilhada, gates, escolha de template por RNG).
+fn push_shore_rock_group(
+    out: &mut Vec<crate::spawner::SpawnGroupState>,
+    asset_server: &AssetServer,
+    candidates: Vec<bevy::math::Vec2>,
+    at: bevy::math::Vec2,
+    rocks: &crate::terrain::shore_rocks::ShoreRocksSpec,
+) {
+    if candidates.is_empty() {
+        return;
+    }
+    const LOD_NEAR: f32 = 50.0;
+    const LOD_MID: f32 = 120.0;
+    let load = |url: &str| -> Handle<bevy::gltf::Gltf> {
+        crate::meshopt::load_gltf(asset_server, url.trim_start_matches('/').to_owned())
+    };
+    let handles = crate::terrain::shore_rocks::ROCK_TEMPLATES
+        .iter()
+        .map(|url| load(url))
+        .collect();
+    let lod_handles = crate::terrain::shore_rocks::ROCK_LODS
+        .iter()
+        .map(|(l1, l2)| (l1.map(load), l2.map(load), LOD_NEAR, LOD_MID))
+        .collect();
+    let template_urls = crate::terrain::shore_rocks::ROCK_TEMPLATES
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let template_lods = crate::terrain::shore_rocks::ROCK_LODS
+        .iter()
+        .map(|(l1, l2)| crate::recipes::TemplateLod {
+            lod1_url: l1.map(|s| s.to_string()),
+            lod2_url: l2.map(|s| s.to_string()),
+            near: LOD_NEAR,
+            mid: LOD_MID,
+        })
+        .collect();
+    let spec = crate::recipes::StaticSpawnerSpec {
+        seed: at.x.to_bits() as u64 ^ ((at.y.to_bits() as u64) << 32),
+        count: candidates.len() as u32,
+        fixed_candidates: candidates,
+        template_urls,
+        template_lods,
+        // Rochas de margem: coladas à água é o ponto — gates de água
+        // desligados; estradas e ocupação partilhada continuam a valer.
+        avoid_water: false,
+        in_water: false,
+        near_water: false,
+        near_water_radius: crate::recipes::DEFAULT_NEAR_WATER_RADIUS,
+        avoid_road: true,
+        // Rochas de margem nunca em parede de cliff — candidatos são fixos
+        // (sem re-roll), pelo que os rejeitados são simplesmente omitidos.
+        avoid_cliff: true,
+        cliff_margin: crate::recipes::DEFAULT_CLIFF_MARGIN,
+        align_to_terrain: true,
+        random_yaw: true,
+        scale_min: 0.55,
+        scale_max: rocks.scale_max,
+        scale_axis_min: 0.85,
+        scale_axis_max: 1.15,
+        max_slope_deg: 55.0,
+        footprint_radius: 0.8,
+        avoid_overlaps: true,
+        // Assentam meio afundadas — a base do GLB nunca fica a flutuar no
+        // declive da margem.
+        base_y_offset: -0.12,
+        template_collider: Some(crate::physics::ColliderShape::Box {
+            size: bevy::math::Vec3::new(0.9, 0.8, 0.9),
+            offset: bevy::math::Vec3::ZERO,
+        }),
+        region_min: [0.0; 3],
+        region_max: [0.0; 3],
+        cluster_count: 0,
+        cluster_radius: 0.0,
+        max_distance: 0.0,
+        template_script: None,
+        activation_radius: crate::luau::DEFAULT_ACTIVATION_RADIUS,
+        template_destructible: None,
+        cull_distance: crate::render_lod::DEFAULT_STATIC_CULL,
+        cast_shadows: true,
+        max_slope_attempts: 4,
+        density_per_km2: 0.0,
+        max_instances: 0,
+    };
+    out.push(crate::spawner::SpawnGroupState {
+        template_collider: spec.template_collider.clone(),
+        spec,
+        handles,
+        lod_handles,
+        done: false,
+        failed: false,
+        dynamic: false,
+        template_script: None,
+        activation_radius: crate::luau::DEFAULT_ACTIVATION_RADIUS,
+        template_destructible: None,
+        collider_handle: None,
+    });
 }
 
 /// Recursively collect `<StaticSpawner>` specs and start their template loads.
@@ -381,8 +570,64 @@ fn collect_spawn_groups(
 ) {
     for spec in specs {
         match &spec.kind {
+            EntityKind::Lake { spec: lake } => {
+                if lake.rocks {
+                    let candidates = crate::terrain::shore_rocks::lake_candidates(
+                        bevy::math::Vec2::new(lake.at.x, lake.at.y),
+                        lake.radius,
+                        lake.depth,
+                        lake.water_offset,
+                        &lake.rocks_spec,
+                        out.len(),
+                    );
+                    push_shore_rock_group(
+                        out,
+                        asset_server,
+                        candidates,
+                        bevy::math::Vec2::new(lake.at.x, lake.at.y),
+                        &lake.rocks_spec,
+                    );
+                }
+                collect_spawn_groups(&spec.children, asset_server, out, exclusions);
+            }
+            EntityKind::River { spec: river } => {
+                if river.rocks && river.path.len() >= 2 {
+                    // As candidatas seguem o MESMO suavizado do carve
+                    // (chaikin ×2 + resample) — as estações finais do rio.
+                    let smoothed = crate::terrain::paths::chaikin_smooth(&river.path, 2, false);
+                    let stations = crate::terrain::paths::resample(
+                        &smoothed,
+                        crate::terrain::water::RIVER_STATION_SPACING.max(0.5),
+                    );
+                    let centroid =
+                        stations.iter().sum::<bevy::math::Vec2>() / stations.len().max(1) as f32;
+                    let candidates = crate::terrain::shore_rocks::river_candidates(
+                        &stations,
+                        river.width,
+                        river.depth,
+                        river.water_offset,
+                        river.bank_width,
+                        &river.rocks_spec,
+                        out.len(),
+                    );
+                    push_shore_rock_group(
+                        out,
+                        asset_server,
+                        candidates,
+                        centroid,
+                        &river.rocks_spec,
+                    );
+                }
+                collect_spawn_groups(&spec.children, asset_server, out, exclusions);
+            }
             EntityKind::StaticSpawner { spec: group }
             | EntityKind::DynamicSpawner { spec: group } => {
+                if group.template_urls.is_empty() {
+                    // Sem template glTF: o parse já avisou ("skipped"); um
+                    // grupo vazio nunca instancia (panic por len()-1 em
+                    // spawner.rs se chegar lá).
+                    continue;
+                }
                 let handles = group
                     .template_urls
                     .iter()
@@ -393,25 +638,48 @@ fn collect_spawn_groups(
                         )
                     })
                     .collect();
+                // Ladder de LOD do template (`lod1-url`/`lod2-url`): um
+                // handle por tier, alinhado com `handles` pelo índice.
+                let lod_handles = group
+                    .template_lods
+                    .iter()
+                    .map(|lod| {
+                        let load = |url: &Option<String>| {
+                            url.as_ref().map(|url| {
+                                crate::meshopt::load_gltf(
+                                    asset_server,
+                                    url.trim_start_matches('/').to_owned(),
+                                )
+                            })
+                        };
+                        (load(&lod.lod1_url), load(&lod.lod2_url), lod.near, lod.mid)
+                    })
+                    .collect();
                 out.push(crate::spawner::SpawnGroupState {
                     spec: group.clone(),
                     handles,
+                    lod_handles,
                     done: false,
+                    failed: false,
                     // `<DynamicSpawner>` instances are driven by the AI system.
                     dynamic: matches!(spec.kind, EntityKind::DynamicSpawner { .. }),
                     template_script: group.template_script.clone(),
                     activation_radius: group.activation_radius,
                     template_collider: group.template_collider.clone(),
-                    collider_handle: group.template_collider.as_ref().map(|shape| {
+                    template_destructible: group.template_destructible.clone(),
+                    collider_handle: group.template_collider.as_ref().and_then(|shape| {
+                        // Só Mesh/Precompute consomem o glTF de colisão;
+                        // Box/None/Auto nunca o usam — não pedir um load
+                        // de path vazio.
                         let url = match shape {
                             crate::physics::ColliderShape::Mesh { url, .. }
-                            | crate::physics::ColliderShape::Precompute { url } => url.clone(),
-                            _ => String::new(),
+                            | crate::physics::ColliderShape::Precompute { url } => url,
+                            _ => return None,
                         };
-                        crate::meshopt::load_gltf(
+                        Some(crate::meshopt::load_gltf(
                             asset_server,
                             url.trim_start_matches('/').to_owned(),
-                        )
+                        ))
                     }),
                 });
             }
@@ -437,9 +705,13 @@ fn collect_spawn_groups(
                     })
                     .collect();
                 out.push(crate::spawner::SpawnGroupState {
+                    // Erva não tem ladder: as malhas de `<Vegetation>` já são
+                    // de algumas dezenas de KB.
+                    lod_handles: Vec::new(),
                     template_script: spawner_spec.template_script.clone(),
                     activation_radius: spawner_spec.activation_radius,
                     template_collider: spawner_spec.template_collider.clone(),
+                    template_destructible: spawner_spec.template_destructible.clone(),
                     collider_handle: spawner_spec.template_collider.as_ref().map(|shape| {
                         let url = match shape {
                             crate::physics::ColliderShape::Mesh { url, .. }
@@ -454,6 +726,7 @@ fn collect_spawn_groups(
                     spec: spawner_spec,
                     handles,
                     done: false,
+                    failed: false,
                     // Vegetation is scenery — never AI-driven.
                     dynamic: false,
                 });
@@ -544,6 +817,11 @@ fn spawn_entity(
     if let Some(path) = &spec.script {
         entity.insert(crate::luau::LuaScriptRef { path: path.clone() });
     }
+    // Destrutível standalone (`<Entity destructible="…">`) — o caminho do
+    // spawner cobre as instâncias; este cobre props autorais soltos.
+    if let Some(destructible) = &spec.destructible {
+        entity.insert(crate::harvest::Destructible::from_spec(destructible));
+    }
     attach_physics(&mut entity, ctx, spec);
     match &spec.kind {
         EntityKind::Group => {
@@ -572,7 +850,16 @@ fn spawn_entity(
                 Visibility::Inherited,
                 NotShadowCaster,
                 crate::particles::ParticleEmitter {
-                    sim: crate::particles::EmitterSim::new(spec),
+                    // Seed derivada da posição (a transform já está na
+                    // entidade): emissores distintos têm sequências
+                    // distintas — sem flicker em lockstep.
+                    sim: crate::particles::EmitterSim::seeded(
+                        spec,
+                        entity
+                            .get::<Transform>()
+                            .map(|t| t.translation)
+                            .unwrap_or_default(),
+                    ),
                     capacity,
                     culled: false,
                 },
@@ -585,6 +872,12 @@ fn spawn_entity(
         }
         EntityKind::Primitive { shape, material } => {
             let mut primitive = primitive_mesh(shape);
+            // UV world-space (`texture-tile-size` > 0 em Plane/Cuboid, a
+            // mesma fórmula das ribbons) ⇒ a textura precisa de REPEAT:
+            // registada no `load` para o escritor único de samplers.
+            let world_tiled_uv = material.texture.is_some()
+                && material.texture_tile.is_some_and(|tile| tile > 0.0)
+                && matches!(shape, Shape::Plane { .. } | Shape::Cuboid { .. });
             if material.texture.is_some() {
                 if let Some(tile) = material.texture_tile {
                     // UV world-space: decals com o mesmo tile-size batem com
@@ -593,7 +886,13 @@ fn spawn_entity(
                 }
             }
             let mesh = ctx.meshes.add(primitive);
-            let mat = build_material(material, ctx.materials, ctx.asset_server);
+            let mat = build_material(
+                material,
+                world_tiled_uv,
+                ctx.materials,
+                ctx.asset_server,
+                ctx.tiled,
+            );
             entity.insert((Mesh3d(mesh), MeshMaterial3d(mat), Visibility::Inherited));
         }
         EntityKind::PointLight {
@@ -764,10 +1063,12 @@ fn spawn_entity(
             ctx.chips.borrow_mut().push((index, resource.clone()));
         }
         EntityKind::AudioMixer { master, music, sfx } => {
+            // Buses em 0..=1: um volume negativo do XML tocava a 200 % no
+            // driver (`Volume::Linear` não faz clamp).
             ctx.mixer.replace(Some(crate::music::AudioMixerSettings {
-                master: *master,
-                music: *music,
-                sfx: *sfx,
+                master: master.clamp(0.0, 1.0),
+                music: music.clamp(0.0, 1.0),
+                sfx: sfx.clamp(0.0, 1.0),
             }));
         }
         EntityKind::MusicLayer { layer, base_volume } => {
@@ -781,6 +1082,28 @@ fn spawn_entity(
                     base_volume: *base_volume,
                 },
             ));
+        }
+        EntityKind::UiStyle { source } => {
+            // Deferred like the HUD elements: the sheet is a resource, and the
+            // element tree is only built after every stylesheet is loaded so
+            // the first frame is already styled. O índice fica pendente até à
+            // próxima raiz — é ela que o carrega (scoping por raiz).
+            let index = ctx.ui_styles.borrow().len();
+            ctx.ui_styles.borrow_mut().push(source.clone());
+            ctx.ui_pending_sheets.borrow_mut().push(index);
+        }
+        EntityKind::UiTree { node } => {
+            ctx.ui_trees.borrow_mut().push((**node).clone());
+            // As folhas acumuladas desde a última raiz alimentam ESTA.
+            ctx.ui_tree_sheets
+                .borrow_mut()
+                .push(std::mem::take(&mut *ctx.ui_pending_sheets.borrow_mut()));
+            // A HUD script is not an NPC: it must keep running wherever the
+            // player walks, so it opts out of the activation-radius LOD that
+            // freezes distant scripts.
+            entity.insert(crate::luau::ScriptActivation {
+                radius: f32::INFINITY,
+            });
         }
         EntityKind::HudElement { tag, attrs } => {
             if tag.eq_ignore_ascii_case("sky") {
@@ -812,8 +1135,12 @@ fn spawn_entity(
         | EntityKind::TerrainPad { .. }
         | EntityKind::Lake { .. }
         | EntityKind::River { .. }
+        | EntityKind::Cliff { .. }
+        | EntityKind::Cave { .. }
+        | EntityKind::Arch { .. }
         | EntityKind::Road { .. }
         | EntityKind::RoadNetwork { .. }
+        | EntityKind::GroundDecal { .. }
         | EntityKind::StaticSpawner { .. }
         | EntityKind::DynamicSpawner { .. }
         | EntityKind::SpawnExclusion { .. }
@@ -829,6 +1156,7 @@ fn spawn_entity(
             drive_ambient,
             max_sun_elevation,
             sun_azimuth_base,
+            min_sun_elevation,
         } => {
             ctx.worldsys.day_cycle = Some(crate::worldsys::DayCycleState::from_parts(
                 *minute_of_day,
@@ -840,6 +1168,7 @@ fn spawn_entity(
                 *drive_ambient,
                 *max_sun_elevation,
                 *sun_azimuth_base,
+                *min_sun_elevation,
             ));
         }
         EntityKind::Weather {
@@ -859,6 +1188,7 @@ fn spawn_entity(
         }
         EntityKind::BiomeRegion {
             id,
+            display_name,
             polygon,
             fog_density,
             tint,
@@ -867,6 +1197,7 @@ fn spawn_entity(
         } => {
             ctx.worldsys.biomes.push(crate::worldsys::BiomeRegionData {
                 id: id.clone(),
+                display_name: display_name.clone(),
                 polygon: polygon.clone(),
                 fog_density: *fog_density,
                 tint: *tint,
@@ -938,8 +1269,10 @@ fn primitive_mesh(shape: &Shape) -> Mesh {
 
 fn build_material(
     spec: &MaterialSpec,
+    world_tiled_uv: bool,
     materials: &mut Assets<StandardMaterial>,
     asset_server: &AssetServer,
+    tiled: &mut crate::textures::WorldTiledTextures,
 ) -> Handle<StandardMaterial> {
     let mut material = StandardMaterial::default();
     if let Some([r, g, b]) = spec.base_color {
@@ -952,8 +1285,13 @@ fn build_material(
         material.perceptual_roughness = v.clamp(0.0, 1.0);
     }
     if let Some(url) = spec.texture.as_deref() {
-        material.base_color_texture =
-            Some(asset_server.load(url.trim_start_matches('/').to_owned()));
+        let handle = if world_tiled_uv {
+            // UVs em metros: REPEAT via o registry do escritor único.
+            crate::textures::load_tiled_image(asset_server, tiled, url)
+        } else {
+            asset_server.load(url.trim_start_matches('/').to_owned())
+        };
+        material.base_color_texture = Some(handle);
     }
     materials.add(material)
 }
@@ -1110,6 +1448,7 @@ mod terrain_collect_tests {
                 .iter()
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect(),
+            text: String::new(),
             children: vec![],
         }
     }
@@ -1168,5 +1507,85 @@ mod terrain_collect_tests {
             Vec2::new(13.0, 24.0),
             "via offset applied"
         );
+    }
+}
+
+/// Loads every `<UiStyle>` and then builds every `<UiRoot>` tree.
+///
+/// Order matters: the stylesheet has to be complete before the first element
+/// is spawned, otherwise the opening frame flashes unstyled boxes. A `src`
+/// sheet is read from the world directory so a HUD can keep its CSS in its own
+/// file instead of inlined in the world XML.
+fn build_declarative_ui(
+    world: &mut World,
+    styles: &[String],
+    trees: &[crate::xml::XmlNode],
+    tree_sheets: &[Vec<usize>],
+    world_dir: Option<&std::path::Path>,
+    assets: &AssetServer,
+) {
+    if styles.is_empty() && trees.is_empty() {
+        return;
+    }
+    // Idempotência de arranque: o processamento de specs pode re-correr (o
+    // gate dos templates de glTF resolve depois do primeiro passe) e um
+    // segundo build deixava uma CÓPIA ÓRFÃ do HUD inteiro por cima do jogo,
+    // sem ids no registry (invisível a scripts, imóvel). Qualquer UI
+    // declarativa pré-existente sai — a reconstrução parte de zero, aconteça
+    // isto uma ou N vezes.
+    {
+        let mut stale: Vec<Entity> = world
+            .query_filtered::<Entity, With<crate::ui::runtime::UiTag>>()
+            .iter(world)
+            .collect();
+        // Folhas primeiro: o despawn de um pai leva os filhos e iterar uma
+        // lista com entidades já despanadas daria erro.
+        stale.sort_unstable_by_key(|e| std::cmp::Reverse(*e));
+        for entity in stale {
+            if let Ok(mut e) = world.get_entity_mut(entity) {
+                e.despawn();
+            }
+        }
+        world
+            .resource_mut::<crate::ui::runtime::UiRegistry>()
+            .by_id
+            .clear();
+    }
+    let mut sheet = crate::ui::StyleSheet::default();
+    // Índice (em `styles`) → índice de FOLHA no StyleSheet. Um ficheiro que
+    // falha ao ler não cria folha; sem este mapa os índices desalinham e o
+    // scoping por raiz perdia regras legítimas.
+    let mut sheet_index_of = vec![usize::MAX; styles.len()];
+    for (index, source) in styles.iter().enumerate() {
+        match source.strip_prefix('@') {
+            Some(relative) => {
+                let base = world_dir.unwrap_or_else(|| std::path::Path::new("."));
+                let path = base.join(relative.trim_start_matches('/'));
+                match std::fs::read_to_string(&path) {
+                    Ok(text) => sheet_index_of[index] = sheet.parse_into(&text),
+                    Err(error) => bevy::log::warn!(
+                        "ui: stylesheet {} could not be read ({error})",
+                        path.display()
+                    ),
+                }
+            }
+            None => sheet_index_of[index] = sheet.parse_into(source),
+        }
+    }
+    world.insert_resource(sheet);
+    let font = crate::hud::HudAssets::get(world).font.clone();
+    for (position, node) in trees.iter().enumerate() {
+        let Some(root) = crate::ui::build_ui_tree(world, node, None, &font, assets) else {
+            continue;
+        };
+        // Shadow-DOM-lite: a raiz vê só as folhas que a precederam no mundo.
+        // Índices MAX (fonte falhada) não existem no sheet — inofensivos.
+        let allowed: Vec<usize> = tree_sheets
+            .get(position)
+            .map(|pending| pending.iter().map(|i| sheet_index_of[*i]).collect())
+            .unwrap_or_default();
+        world
+            .entity_mut(root)
+            .insert(crate::ui::runtime::UiRootSheets(allowed));
     }
 }

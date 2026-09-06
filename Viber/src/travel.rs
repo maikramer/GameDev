@@ -81,18 +81,66 @@ pub struct NotaLandmark {
 
 /// Os 12 marcos — espelham os `objective.target` das quests `*_survey`.
 pub const LANDMARKS: [NotaLandmark; 12] = [
-    NotaLandmark { name: "forest-outpost-tower", biome: Biome::DarkForest, label: "Torre do Posto Avançado" },
-    NotaLandmark { name: "forest-crossroads-well", biome: Biome::DarkForest, label: "Poço da Encruzilhada" },
-    NotaLandmark { name: "forest-stone-circle", biome: Biome::DarkForest, label: "Círculo de Menires" },
-    NotaLandmark { name: "desert-arch", biome: Biome::Desert, label: "Arco do Deserto" },
-    NotaLandmark { name: "desert-caravan-wreck", biome: Biome::Desert, label: "Caravana Encalhada" },
-    NotaLandmark { name: "desert-sun-obelisk", biome: Biome::Desert, label: "Obelisco do Sol" },
-    NotaLandmark { name: "swamp-wrecked-boat", biome: Biome::Swamp, label: "Barco Naufragado" },
-    NotaLandmark { name: "swamp-sunken-graves", biome: Biome::Swamp, label: "Covas Submersas" },
-    NotaLandmark { name: "swamp-bone-altar", biome: Biome::Swamp, label: "Altar de Ossos" },
-    NotaLandmark { name: "peaks-cairn-1", biome: Biome::FrozenPeaks, label: "Primeiro Mojão" },
-    NotaLandmark { name: "peaks-cairn-2", biome: Biome::FrozenPeaks, label: "Segundo Mojão" },
-    NotaLandmark { name: "peaks-cairn-3", biome: Biome::FrozenPeaks, label: "Terceiro Mojão" },
+    NotaLandmark {
+        name: "forest-outpost-tower",
+        biome: Biome::DarkForest,
+        label: "Torre do Posto Avançado",
+    },
+    NotaLandmark {
+        name: "forest-crossroads-well",
+        biome: Biome::DarkForest,
+        label: "Poço da Encruzilhada",
+    },
+    NotaLandmark {
+        name: "forest-stone-circle",
+        biome: Biome::DarkForest,
+        label: "Círculo de Menires",
+    },
+    NotaLandmark {
+        name: "desert-arch",
+        biome: Biome::Desert,
+        label: "Arco do Deserto",
+    },
+    NotaLandmark {
+        name: "desert-caravan-wreck",
+        biome: Biome::Desert,
+        label: "Caravana Encalhada",
+    },
+    NotaLandmark {
+        name: "desert-sun-obelisk",
+        biome: Biome::Desert,
+        label: "Obelisco do Sol",
+    },
+    NotaLandmark {
+        name: "swamp-wrecked-boat",
+        biome: Biome::Swamp,
+        label: "Barco Naufragado",
+    },
+    NotaLandmark {
+        name: "swamp-sunken-graves",
+        biome: Biome::Swamp,
+        label: "Covas Submersas",
+    },
+    NotaLandmark {
+        name: "swamp-bone-altar",
+        biome: Biome::Swamp,
+        label: "Altar de Ossos",
+    },
+    NotaLandmark {
+        name: "peaks-cairn-1",
+        biome: Biome::FrozenPeaks,
+        label: "Primeiro Mojão",
+    },
+    NotaLandmark {
+        name: "peaks-cairn-2",
+        biome: Biome::FrozenPeaks,
+        label: "Segundo Mojão",
+    },
+    NotaLandmark {
+        name: "peaks-cairn-3",
+        biome: Biome::FrozenPeaks,
+        label: "Terceiro Mojão",
+    },
 ];
 
 pub fn landmark_by_name(name: &str) -> Option<&'static NotaLandmark> {
@@ -159,13 +207,20 @@ impl Plugin for TravelPlugin {
             .init_resource::<Waypoint>()
             .init_resource::<EnemyRegistry>()
             .init_resource::<TravelMenuState>()
+            .init_resource::<TravelFade>()
+            // Idempotente com o Ambient/Combat (apps mínimas auto-suficientes).
+            .add_message::<crate::ambient::SfxEvent>()
             .add_message::<TravelPing>()
-            .add_systems(Startup, (spawn_travel_menu, spawn_waypoint_hud))
+            .add_systems(
+                Startup,
+                (spawn_travel_menu, spawn_waypoint_hud, spawn_travel_fade_overlay),
+            )
             .add_systems(
                 Update,
                 (
                     nota_measure_system,
                     travel_menu_system,
+                    travel_fade_system,
                     waypoint_hud_system,
                     enemy_registry_system,
                     quest_debug_landmark,
@@ -180,13 +235,77 @@ pub struct TravelPing {
     pub label: &'static str,
 }
 
+// ── fade da viagem rápida (passe de juice r1) ───────────────────────────
+
+/// Duração do fade a PRETO antes do teleport (s).
+pub const TRAVEL_FADE_OUT: f32 = 0.4;
+/// Duração do fade de volta do preto depois do teleport (s).
+pub const TRAVEL_FADE_IN: f32 = 0.4;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TravelFadePhase {
+    /// Sem viagem em curso (overlay escondido).
+    Idle,
+    /// A escurecer (0 → 1 em [`TRAVEL_FADE_OUT`]).
+    Out,
+    /// Preto cheio atingido — teleport feito, a clarear (1 → 0).
+    In,
+}
+
+/// Estado do fade da viagem rápida. O pedido ([J] no menu) só ARMA o estado
+/// (`Out` + destino); [`travel_fade_system`] aplica o teleport no preto
+/// cheio — máquina pura em [`travel_fade_step`] para os testes.
+#[derive(Debug, Clone, Copy, Resource)]
+pub struct TravelFade {
+    pub phase: TravelFadePhase,
+    /// Segundos restantes da fase atual.
+    pub timer: f32,
+    /// Destino a aplicar no meio do fade (já com Y amostrado).
+    pub target: Option<Vec3>,
+}
+
+impl Default for TravelFade {
+    fn default() -> Self {
+        Self {
+            phase: TravelFadePhase::Idle,
+            timer: 0.0,
+            target: None,
+        }
+    }
+}
+
+/// Avança a máquina um passo de `dt`; devolve `(alpha do overlay, chegou a
+/// meio?)`. O teleport dispara EXATAMENTE uma vez, na transição Out→In.
+pub fn travel_fade_step(state: &mut TravelFade, dt: f32) -> (f32, bool) {
+    match state.phase {
+        TravelFadePhase::Idle => (0.0, false),
+        TravelFadePhase::Out => {
+            state.timer -= dt;
+            if state.timer <= 0.0 {
+                state.phase = TravelFadePhase::In;
+                state.timer = TRAVEL_FADE_IN;
+                (1.0, true)
+            } else {
+                (1.0 - state.timer / TRAVEL_FADE_OUT, false)
+            }
+        }
+        TravelFadePhase::In => {
+            state.timer -= dt;
+            if state.timer <= 0.0 {
+                *state = TravelFade::default();
+                (0.0, false)
+            } else {
+                (state.timer / TRAVEL_FADE_IN, false)
+            }
+        }
+    }
+}
+
 // ── A Nota: medir e assinar [F] ─────────────────────────────────────────
 
 /// [F] perto de um marco não assinado → assina; 3 do bioma → bioma assinado.
 #[allow(clippy::too_many_arguments)]
 fn nota_measure_system(
-    mut throttle: Local<f32>,
-    time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
     players: Query<&GlobalTransform, With<Player>>,
     named: Query<(&Name, &GlobalTransform)>,
@@ -194,13 +313,10 @@ fn nota_measure_system(
     mut waypoint: ResMut<Waypoint>,
     mut toasts: MessageWriter<ScriptToast>,
 ) {
-    *throttle -= time.delta_secs();
-    if *throttle > 0.0 {
-        return;
-    }
-    *throttle = 0.3;
     // just_pressed (não pressed): o tap sintético da bridge faz press+release
     // no mesmo lote, e `pressed` já voltou a false quando o Update corre.
+    // SEM throttle a montante: just_pressed só é verdadeiro 1 frame e um
+    // gate de 0,3 s descartava a maioria das pressões de [F].
     if !keys.just_pressed(KeyCode::KeyF) {
         return;
     }
@@ -208,17 +324,15 @@ fn nota_measure_system(
         return;
     };
     let player_pos = player.translation();
-    let Some((name, _)) = named
-        .iter()
-        .find(|(name, t)| {
-            landmark_by_name(name)
-                .filter(|l| !nota.marked.contains(l.name))
-                .filter(|l| {
-                    t.translation().distance(player_pos) <= l.biome.mark_radius()
-                })
-                .is_some()
-        })
-    else {
+    // Visitar um sítio é 2D: a distância de marcação ignora Y — diferenças
+    // residuais de cota (marco num outeiro, herói na base) não deviam
+    // impedir o [F] nem completar as quests *_survey.
+    let Some((name, _)) = named.iter().find(|(name, t)| {
+        landmark_by_name(name)
+            .filter(|l| !nota.marked.contains(l.name))
+            .filter(|l| t.translation().xz().distance(player_pos.xz()) <= l.biome.mark_radius())
+            .is_some()
+    }) else {
         return;
     };
     let name = name.to_string();
@@ -318,24 +432,30 @@ pub struct TravelMenuState {
 }
 
 /// [G] perto da fogueira abre; ↑↓ seleciona marcos assinados; [J] viaja.
+/// O [J] não teleporta directamente: arma o [`TravelFade`] (o teleport
+/// acontece no preto cheio, em [`travel_fade_system`]).
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn travel_menu_system(
     keys: Res<ButtonInput<KeyCode>>,
     players: Query<&GlobalTransform, With<Player>>,
-    mut player_transforms: Query<&mut Transform, With<Player>>,
-    camps: Query<&GlobalTransform, Without<Player>>,
     named: Query<(&Name, &GlobalTransform)>,
     nota: Res<NotaLog>,
     mut state: ResMut<TravelMenuState>,
+    mut fade: ResMut<TravelFade>,
     terrain: Option<Res<crate::terrain::runtime::TerrainRuntime>>,
     mut q_menu: Query<&mut Visibility, With<TravelMenu>>,
     mut q_content: Query<&mut Text, With<TravelContent>>,
     mut toasts: MessageWriter<ScriptToast>,
+    mut sfx: MessageWriter<crate::ambient::SfxEvent>,
 ) {
+    // Fogueira POR NOME ("campfire" no mundo) — sem o marcador, qualquer
+    // entidade a <14 m (árvore, rocha, NPC) abria o fast-travel em todo o
+    // lado e o requisito "fogueira da praça" era letra morta.
     let near_campfire = players.iter().next().is_some_and(|player| {
-        camps
-            .iter()
-            .any(|c| c.translation().distance(player.translation()) < TRAVEL_CAMPFIRE_RANGE_M)
+        named.iter().any(|(name, t)| {
+            name.to_ascii_lowercase().contains("campfire")
+                && t.translation().distance(player.translation()) < TRAVEL_CAMPFIRE_RANGE_M
+        })
     });
 
     if keys.just_pressed(KeyCode::KeyG) && (near_campfire || state.open) {
@@ -381,25 +501,26 @@ fn travel_menu_system(
         state.selection = (state.selection + marked.len() - 1) % marked.len();
     }
 
-    // viajar
+    // viajar: fade a preto 0.4 s → teleport no preto cheio → 0.4 s de volta
     if keys.just_pressed(KeyCode::KeyJ) {
         if let Some((name, label)) = marked.get(state.selection) {
             let target = named
                 .iter()
                 .find(|(name_entity, _)| name_entity.to_string() == *name)
                 .map(|(_, t)| t.translation());
-            if let Ok(mut transform) = player_transforms.single_mut() {
-                if let Some(pos) = target {
-                    let x = pos.x + 2.0;
-                    let z = pos.z + 2.0;
-                    let y = terrain
-                        .as_ref()
-                        .map(|t| t.sample(x, z))
-                        .unwrap_or(pos.y);
-                    transform.translation = Vec3::new(x, y + 0.1, z);
-                    toasts.write(ScriptToast(format!("A viajar para {label}…")));
-                    state.open = false;
-                }
+            if let Some(pos) = target {
+                let x = pos.x + 2.0;
+                let z = pos.z + 2.0;
+                let y = terrain.as_ref().map(|t| t.sample(x, z)).unwrap_or(pos.y);
+                fade.phase = TravelFadePhase::Out;
+                fade.timer = TRAVEL_FADE_OUT;
+                fade.target = Some(Vec3::new(x, y + 0.1, z));
+                sfx.write(crate::ambient::SfxEvent {
+                    clip: crate::ambient::SfxClip::Travel,
+                    position: None,
+                });
+                toasts.write(ScriptToast(format!("A viajar para {label}…")));
+                state.open = false;
             }
         }
     }
@@ -417,33 +538,115 @@ fn travel_menu_system(
             text.0 = wanted;
         }
     }
-    let _ = terrain;
+}
+
+// ── overlay + sistema do fade da viagem ─────────────────────────────────
+
+/// Nó full-screen preto (uma vez em Startup); o alpha é conduzido por frame.
+#[derive(Component)]
+struct TravelFadeOverlay;
+
+fn spawn_travel_fade_overlay(mut commands: Commands) {
+    commands.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(0.0),
+            left: Val::Px(0.0),
+            right: Val::Px(0.0),
+            bottom: Val::Px(0.0),
+            ..Default::default()
+        },
+        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.0)),
+        Visibility::Hidden,
+        Name::new("ui:travel-fade"),
+        TravelFadeOverlay,
+    ));
+}
+
+/// Conduz o fade da viagem: alpha do overlay, TELEPORT no preto cheio
+/// (transição Out→In, exatamente uma vez) e poeira de aterragem. A máquina
+/// em si é pura ([`travel_fade_step`]) — aqui é só ECS.
+#[allow(clippy::type_complexity)]
+fn travel_fade_system(
+    time: Res<Time>,
+    mut fade: ResMut<TravelFade>,
+    mut overlay: Query<(&mut BackgroundColor, &mut Visibility), With<TravelFadeOverlay>>,
+    mut heroes: Query<(&mut Transform, &mut Player), With<Player>>,
+    mut commands: Commands,
+    meshes: Option<ResMut<Assets<Mesh>>>,
+    materials: Option<ResMut<Assets<StandardMaterial>>>,
+) {
+    if fade.phase == TravelFadePhase::Idle {
+        return;
+    }
+    let (alpha, arrived) = travel_fade_step(&mut fade, time.delta_secs());
+    if arrived {
+        if let Some(target) = fade.target {
+            if let Ok((mut transform, mut player)) = heroes.single_mut() {
+                transform.translation = target;
+                // Chegada limpa: sem arrastar a inércia do trajeto antigo.
+                player.vel_x = 0.0;
+                player.vel_z = 0.0;
+                player.vel_y = 0.0;
+            }
+            if let (Some(mut meshes), Some(mut materials)) = (meshes, materials) {
+                // Poeira de aterragem — visível quando o fade abre.
+                crate::particles::spawn_burst(
+                    &mut commands,
+                    &mut meshes,
+                    &mut materials,
+                    &crate::vitals::juice_spec(
+                        "ground-dust",
+                        (0.3, 0.7),
+                        (0.3, 0.6),
+                        (1.0, 2.5),
+                        None,
+                    ),
+                    target + Vec3::Y * 0.15,
+                    14,
+                );
+            }
+        }
+    }
+    let Ok((mut bg, mut visibility)) = overlay.single_mut() else {
+        return;
+    };
+    let wanted = if alpha > 0.0 {
+        Visibility::Visible
+    } else {
+        Visibility::Hidden
+    };
+    if *visibility != wanted {
+        *visibility = wanted;
+    }
+    bg.0.set_alpha(alpha);
 }
 
 // ── waypoint HUD ────────────────────────────────────────────────────────
 
 fn spawn_waypoint_hud(mut commands: Commands) {
-    commands.spawn((
-        Node {
-            position_type: PositionType::Absolute,
-            top: Val::Px(64.0),
-            left: Val::Px(0.0),
-            right: Val::Px(0.0),
-            justify_content: JustifyContent::Center,
-            ..Default::default()
-        },
-        Visibility::Hidden,
-        Name::new("ui:waypoint"),
-        WaypointHud,
-    ))
-    .with_children(|wrap| {
-        wrap.spawn((
-            Text::new(""),
-            TextColor(Color::srgb(0.98, 0.8, 0.5)),
-            TextFont::from_font_size(14.0),
-            WaypointText,
-        ));
-    });
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                top: Val::Px(64.0),
+                left: Val::Px(0.0),
+                right: Val::Px(0.0),
+                justify_content: JustifyContent::Center,
+                ..Default::default()
+            },
+            Visibility::Hidden,
+            Name::new("ui:waypoint"),
+            WaypointHud,
+        ))
+        .with_children(|wrap| {
+            wrap.spawn((
+                Text::new(""),
+                TextColor(Color::srgb(0.98, 0.8, 0.5)),
+                TextFont::from_font_size(14.0),
+                WaypointText,
+            ));
+        });
 }
 
 #[derive(Component)]
@@ -484,7 +687,9 @@ fn waypoint_hud_system(
         return;
     };
     let delta = position - player.translation();
-    let distance = delta.length();
+    // Distância lida no plano XZ: o rumo já é cardeal (2D) e a cota residual
+    // do marco não devia inflar os metros mostrados.
+    let distance = delta.xz().length();
     for mut visibility in hud.iter_mut() {
         *visibility = Visibility::Visible;
     }
@@ -578,7 +783,12 @@ mod tests {
     #[test]
     fn test_catalog_12_landmarks_3_per_biome() {
         assert_eq!(LANDMARKS.len(), 12);
-        for biome in [Biome::DarkForest, Biome::Desert, Biome::Swamp, Biome::FrozenPeaks] {
+        for biome in [
+            Biome::DarkForest,
+            Biome::Desert,
+            Biome::Swamp,
+            Biome::FrozenPeaks,
+        ] {
             let count = LANDMARKS.iter().filter(|l| l.biome == biome).count();
             assert_eq!(count, 3, "bioma {:?} com {count}", biome);
         }
@@ -592,7 +802,12 @@ mod tests {
     #[test]
     fn test_survey_quests_exist_in_quest_log() {
         let log = crate::quests::QuestLog::default();
-        for biome in [Biome::DarkForest, Biome::Desert, Biome::Swamp, Biome::FrozenPeaks] {
+        for biome in [
+            Biome::DarkForest,
+            Biome::Desert,
+            Biome::Swamp,
+            Biome::FrozenPeaks,
+        ] {
             assert!(
                 log.def(biome.survey_quest()).is_some(),
                 "quest de traçado {} em falta",
@@ -637,5 +852,43 @@ mod tests {
         assert_eq!(l.label, "Arco do Deserto");
         assert_eq!(l.biome.mark_radius(), 12.0);
         assert!(landmark_by_name("not-a-landmark").is_none());
+    }
+
+    #[test]
+    fn test_travel_fade_phases_and_midpoint_teleport() {
+        // Tempos contratados: 0.4 s out / 0.4 s in.
+        assert_eq!(TRAVEL_FADE_OUT, 0.4);
+        assert_eq!(TRAVEL_FADE_IN, 0.4);
+        let mut fade = TravelFade {
+            phase: TravelFadePhase::Out,
+            timer: TRAVEL_FADE_OUT,
+            target: Some(Vec3::new(5.0, 2.0, -7.0)),
+        };
+        // A meio do fade-out: a escurecer (alpha 0.5), ainda SEM teleport.
+        let (alpha, arrived) = travel_fade_step(&mut fade, TRAVEL_FADE_OUT * 0.5);
+        assert!((alpha - 0.5).abs() < 1e-4, "alpha={alpha}");
+        assert!(!arrived);
+        assert_eq!(fade.phase, TravelFadePhase::Out);
+        // Fim do fade-out: preto cheio, teleport EXATAMENTE uma vez.
+        let (alpha, arrived) = travel_fade_step(&mut fade, TRAVEL_FADE_OUT);
+        assert!((alpha - 1.0).abs() < 1e-4, "preto cheio: {alpha}");
+        assert!(arrived, "teleport no meio do fade");
+        assert_eq!(fade.phase, TravelFadePhase::In);
+        assert_eq!(fade.timer, TRAVEL_FADE_IN);
+        // A meio do fade-in: a clarear, sem NOVO teleport.
+        let (alpha, arrived) = travel_fade_step(&mut fade, TRAVEL_FADE_IN * 0.5);
+        assert!((alpha - 0.5).abs() < 1e-4);
+        assert!(!arrived, "teleport só no meio do fade, uma vez");
+        assert_eq!(fade.phase, TravelFadePhase::In);
+        // Fim: idle e alpha zero.
+        let (alpha, arrived) = travel_fade_step(&mut fade, TRAVEL_FADE_IN);
+        assert_eq!(alpha, 0.0);
+        assert!(!arrived);
+        assert_eq!(fade.phase, TravelFadePhase::Idle);
+        assert_eq!(fade.target, None);
+        // Idle: nada acontece (nem teleport fantasma).
+        let (alpha, arrived) = travel_fade_step(&mut fade, 1.0);
+        assert_eq!(alpha, 0.0);
+        assert!(!arrived);
     }
 }

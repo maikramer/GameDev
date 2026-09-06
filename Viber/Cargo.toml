@@ -46,4 +46,21 @@ meshopt = "0.6"
 
 [dev-dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }
+naga = { version = "29.0.4", features = ["wgsl-in"] }
 tempfile = "3"
+
+# ---------------------------------------------------------------- profiles
+# Bevy/Rapier/image are unusable at `opt-level = 0`: a dev build of
+# `simple-rpg` ran at 8 fps where the same world in release sits in the
+# tens. Optimizing *dependencies* only keeps `viber`'s own crate fast to
+# rebuild (the inner loop an agent actually pays for) while the engine,
+# the physics solver and the texture decoders run at full speed.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

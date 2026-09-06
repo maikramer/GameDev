@@ -79,8 +79,14 @@ pub fn parse_vec2_list(value: &str, ctx: &str) -> Result<Vec<[f32; 2]>> {
 
 /// Parse an attribute value as a `u32` (non-negative, finite integers only).
 pub fn parse_u32(value: &str, ctx: &str) -> Result<u32> {
+    // Caminho exato primeiro: f32 perde precisão acima de 2^24 e o limite
+    // u32::MAX não é representável — "4294967296" passaria o check em f32
+    // (arredonda a 2^32) e `as u32` saturava em silêncio.
+    if let Ok(n) = value.trim().parse::<u32>() {
+        return Ok(n);
+    }
     let v = parse_f32(value, ctx)?;
-    if v < 0.0 || v.fract() != 0.0 || v > u32::MAX as f32 {
+    if v < 0.0 || v.fract() != 0.0 || v >= 4294967296.0 {
         bail!("{ctx}: `{value}` is not a non-negative integer");
     }
     Ok(v as u32)
@@ -88,8 +94,12 @@ pub fn parse_u32(value: &str, ctx: &str) -> Result<u32> {
 
 /// Parse an attribute value as a `u64` (non-negative, finite integers only).
 pub fn parse_u64(value: &str, ctx: &str) -> Result<u64> {
+    // Exato primeiro (seeds grandes perdem precisão em f32 acima de 2^24).
+    if let Ok(n) = value.trim().parse::<u64>() {
+        return Ok(n);
+    }
     let v = parse_f32(value, ctx)?;
-    if v < 0.0 || v.fract() != 0.0 || v > 18_446_744_073_709_551_615.0 {
+    if v < 0.0 || v.fract() != 0.0 || v >= 18_446_744_073_709_551_616.0 {
         bail!("{ctx}: `{value}` is not a non-negative integer");
     }
     Ok(v as u64)

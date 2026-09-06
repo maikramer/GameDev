@@ -8,7 +8,7 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 
 use super::XmlNode;
 
@@ -30,7 +30,7 @@ pub fn load_world(path: &Path) -> Result<LoadedWorld> {
         .with_context(|| format!("world file not found: {}", path.display()))?;
     let root_dir = path
         .parent()
-        .expect("canonicalized file path has a parent")
+        .ok_or_else(|| anyhow!("caminho inválido (sem directório pai): {}", path.display()))?
         .to_path_buf();
     let doc = super::parse_file(&path)?;
     if doc.root_tag != "world" && doc.root_tag != "scene" {
@@ -84,11 +84,24 @@ fn expand(
         if stack.contains(&resolved) {
             bail!("include cycle detected: {} → {}", chain(stack), src);
         }
+        // Bail ANTES do push/parse: o ficheiro que excede a profundidade não
+        // merece ser lido e parseado na íntegra só para ser rejeitado.
+        // stack[0] é o ficheiro raiz, por isso `> MAX` equivale ao limite
+        // verificado no topo de `expand`.
+        if stack.len() > MAX_INCLUDE_DEPTH {
+            bail!(
+                "include depth exceeds {MAX_INCLUDE_DEPTH}: {}",
+                chain(stack)
+            );
+        }
         stack.push(resolved.clone());
         let doc = super::parse_file(&resolved)?;
         let file_dir = resolved
             .parent()
-            .expect("canonicalized file path has a parent")
+            .ok_or_else(|| anyhow!(
+                "caminho inválido (sem directório pai): {}",
+                resolved.display()
+            ))?
             .to_path_buf();
         // Unwrap: a <world>/<scene> root contributes its children; any other
         // single-root fragment is used as-is.
@@ -98,6 +111,7 @@ fn expand(
             vec![XmlNode {
                 tag: doc.root_tag,
                 attrs: doc.root_attrs,
+                text: String::new(),
                 children: doc.children,
             }]
         };
@@ -260,6 +274,29 @@ mod tests {
         write(
             &dir.path().join(format!("n{}.xml", MAX_INCLUDE_DEPTH + 1)),
             "<world />",
+        );
+        let err = load_at(dir.path(), "n0.xml").unwrap_err();
+        assert!(
+            err.to_string().contains("depth exceeds 8"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_include_depth_limit_bails_before_parsing() {
+        // Regression: o ficheiro que excede a profundidade já não é lido nem
+        // parseado — mesmo sendo XML inválido, o erro é de profundidade.
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..=MAX_INCLUDE_DEPTH + 1 {
+            let next = i + 1;
+            write(
+                &dir.path().join(format!("n{i}.xml")),
+                &format!("<world><Include src=\"n{next}.xml\" /></world>"),
+            );
+        }
+        write(
+            &dir.path().join(format!("n{}.xml", MAX_INCLUDE_DEPTH + 1)),
+            "<<< não é XML",
         );
         let err = load_at(dir.path(), "n0.xml").unwrap_err();
         assert!(

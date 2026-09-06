@@ -26,6 +26,11 @@ pub type LogBuffer = Arc<Mutex<VecDeque<LogEntry>>>;
 /// Máximo de entradas retidas (`viber.logs` devolve as últimas).
 pub const LOG_BUFFER_CAPACITY: usize = 1000;
 
+/// Cap por entrada: um log gigante (ex.: `viber.log(string.rep("x", 10^7))`
+/// de um script) não pode reter dezenas de MB por linha num ring de 1000 —
+/// trunca em char boundary antes de construir a [`LogEntry`].
+const MAX_LOG_MESSAGE: usize = 8192;
+
 /// Buffer global do processo — o `LogPlugin::custom_layer` é um fn pointer
 /// (sem captures), logo a layer lê daqui; `BridgeShared` referencia o mesmo.
 pub fn global_log_buffer() -> LogBuffer {
@@ -60,6 +65,14 @@ impl<S: Subscriber> TracingLayer<S> for BridgeLogLayer {
         event.record(&mut visitor);
         if visitor.message.is_empty() {
             return;
+        }
+        if visitor.message.len() > MAX_LOG_MESSAGE {
+            let mut end = MAX_LOG_MESSAGE;
+            while !visitor.message.is_char_boundary(end) {
+                end -= 1;
+            }
+            visitor.message.truncate(end);
+            visitor.message.push('…');
         }
         let entry = LogEntry {
             time: std::time::SystemTime::now()

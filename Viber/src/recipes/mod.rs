@@ -16,6 +16,10 @@ use anyhow::{Result, bail};
 use bevy::math::Vec2;
 
 use crate::terrain::TerrainSpec;
+use crate::terrain::cliffs::{CliffProfile, CliffSide, CliffSpec};
+use crate::terrain::voxel::ArchSpec;
+use crate::terrain::voxel::CaveSpec;
+use crate::terrain::decal::GroundDecalSpec;
 use crate::terrain::roads::{RoadNetworkSpec, RoadProfile, RoadSpec, SegmentSpec, WaySpec};
 use crate::terrain::spec::TerrainPadSpec;
 use crate::terrain::water::{LakeSpec, RiverSpec};
@@ -39,6 +43,8 @@ pub const KNOWN_TAGS: &[&str] = &[
     "terrainpad",
     "lake",
     "river",
+    "cliff",
+    "grounddecal",
     "road",
     "roadnetwork",
     "gltfscene",
@@ -76,6 +82,9 @@ pub const KNOWN_TAGS: &[&str] = &[
     "interactionprompt",
     "dialogueballoon",
     "tabbedmodal",
+    // Declarative UI (src/ui): stylesheet + element tree.
+    "uistyle",
+    "uiroot",
 ];
 
 /// A parsed world: clear color, entity tree and non-fatal warnings.
@@ -195,40 +204,87 @@ pub enum EntityKind {
     },
     /// `<Terrain>` — declarative heightfield terrain (consumed by the terrain
     /// runtime; the element itself spawns the chunk hierarchy).
-    Terrain { spec: TerrainSpec },
+    Terrain {
+        spec: TerrainSpec,
+    },
     /// `<TerrainPad>` — ground-flattening pad (world XZ, hierarchy-translated).
-    TerrainPad { spec: TerrainPadSpec },
+    TerrainPad {
+        spec: TerrainPadSpec,
+    },
     /// `<Lake>` — carved bowl + water mirror.
-    Lake { spec: LakeSpec },
+    Lake {
+        spec: LakeSpec,
+    },
+    GroundDecal {
+        spec: GroundDecalSpec,
+    },
     /// `<River>` — carved channel + water ribbon.
-    River { spec: RiverSpec },
+    River {
+        spec: RiverSpec,
+    },
+    /// `<Cliff>` — carved wall face along a crest polyline (procedural
+    /// penhasco 2.5D, `src/terrain/cliffs.rs`).
+    Cliff {
+        spec: CliffSpec,
+    },
+    /// `<Cave>` — tunnel bored through the terrain (voxel, not a carve:
+    /// `src/terrain/voxel/cave.rs`). The first feature the heightfield cannot
+    /// represent at all — inside one there is rock over your head.
+    Cave {
+        spec: CaveSpec,
+    },
+    /// `<Arch>` — free-standing rock portal (voxel union solid,
+    /// `src/terrain/voxel/arch.rs`): walk UNDER it and the same column has
+    /// two solid spans.
+    Arch {
+        spec: ArchSpec,
+    },
     /// `<Road>` — carved corridor + ribbon.
-    Road { spec: RoadSpec },
+    Road {
+        spec: RoadSpec,
+    },
     /// `<RoadNetwork>` — one road per `<Segment>` (expanded at carve time).
-    RoadNetwork { spec: RoadNetworkSpec },
+    RoadNetwork {
+        spec: RoadNetworkSpec,
+    },
     /// glTF asset loaded async; its default scene spawns under the entity
     /// (the entity's transform applies). Paths starting with `/` are relative
     /// to the engine asset root.
-    GltfScene { url: String },
+    GltfScene {
+        url: String,
+    },
     /// `<StaticSpawner>` — instancias `count` do template GLB sobre o terreno
     /// (posições determinísticas por `seed`; regras de água/declive/sobreposição).
     /// Consumido pelo runtime de spawner, não spawna entidade própria.
-    StaticSpawner { spec: StaticSpawnerSpec },
+    StaticSpawner {
+        spec: StaticSpawnerSpec,
+    },
     /// `<DynamicSpawner>` — mesmas regras de colocação do StaticSpawner; as
     /// entidades nascem marcadas como criaturas (IA/combat chegam com scripts).
-    DynamicSpawner { spec: StaticSpawnerSpec },
+    DynamicSpawner {
+        spec: StaticSpawnerSpec,
+    },
     /// `<SpawnExclusion>` — círculo global onde spawners não colocam instâncias.
     /// Recolhido num recurso global, não spawna entidade.
-    SpawnExclusion { center: [f32; 2], radius: f32 },
+    SpawnExclusion {
+        center: [f32; 2],
+        radius: f32,
+    },
     /// `<Vegetation>` — erva/flores densas por densidade/km² (convertida num
     /// grupo de spawner com cap; instancing GPU é follow-up).
-    Vegetation { spec: VegetationSpec },
+    Vegetation {
+        spec: VegetationSpec,
+    },
     /// `<ParticleSystem>` — emissor de partículas (fogueiras, poeira, clima).
     /// Entity própria; emissor CPU billboard desenhado em `particles`.
-    ParticleSystem { spec: ParticleSpec },
+    ParticleSystem {
+        spec: ParticleSpec,
+    },
     /// `<PlayerGLTF model-url>` — the controllable hero: glTF scene plus the
     /// [`crate::player::Player`] movement component.
-    PlayerGltf { url: String },
+    PlayerGltf {
+        url: String,
+    },
     /// `<DialogueNPC>` — marks the parent NPC as a dialogue target
     /// (`dialogue-id`), with a floating marker at `marker-height`.
     DialogueNpc {
@@ -248,11 +304,27 @@ pub enum EntityKind {
         tag: String,
         attrs: Vec<(String, String)>,
     },
+    /// `<UiStyle>` — a CSS-like stylesheet; the text content is the source.
+    UiStyle {
+        source: String,
+    },
+    /// `<UiRoot>` — the declarative UI tree, kept whole (children included)
+    /// because `src/ui/tree.rs` builds bevy_ui nodes straight from the XML.
+    UiTree {
+        node: Box<XmlNode>,
+    },
     /// `<AudioMixer>` bus volumes (world resource).
-    AudioMixer { master: f32, music: f32, sfx: f32 },
+    AudioMixer {
+        master: f32,
+        music: f32,
+        sfx: f32,
+    },
     /// `<MusicLayer layer sound base-volume>` — looped BGM bus layer; the
     /// driver crossfades layers by player zone (`src/music.rs`).
-    MusicLayer { layer: String, base_volume: f32 },
+    MusicLayer {
+        layer: String,
+        base_volume: f32,
+    },
     /// `<DayCycle>` — advances minute-of-day and drives the ambient light
     /// and the procedural sun.
     DayCycle {
@@ -265,6 +337,8 @@ pub enum EntityKind {
         drive_ambient: bool,
         max_sun_elevation: f32,
         sun_azimuth_base: f32,
+        /// Floor for the directional-light elevation (`min-sun-elevation`).
+        min_sun_elevation: f32,
     },
     /// `<Weather>` — wind/clouds/rain config (rain spawns a rain emitter).
     Weather {
@@ -278,9 +352,17 @@ pub enum EntityKind {
     /// a follow-up; the data drives BGM/hint systems).
     BiomeRegion {
         id: String,
+        /// `display-name`: nome de exposição da zona no HUD (`zone.name`).
+        /// Vazio = a engine usa a sua tabela de fallback.
+        display_name: String,
         polygon: Vec<[f32; 2]>,
         fog_density: f32,
         tint: Option<[f32; 3]>,
+        /// `pp-exposure`: linear exposure multiplier inside the region
+        /// (`1.0` = the world's base exposure). Consumed by `crate::postfx`.
+        pp_exposure: Option<f32>,
+        /// `pp-bloom-strength`: bloom intensity inside the region.
+        pp_bloom_strength: Option<f32>,
     },
     /// `<WorldBorder radius>` — keeps the player inside the world disc.
     WorldBorder {
@@ -309,6 +391,7 @@ pub struct DayCycleConfig {
     pub drive_ambient: bool,
     pub max_sun_elevation: f32,
     pub sun_azimuth_base: f32,
+    pub min_sun_elevation: f32,
 }
 
 /// `<Weather>` config (wind/clouds/rain).
@@ -339,6 +422,133 @@ pub struct ParticleSpec {
     pub world_space: bool,
 }
 
+/// Estilo de quebra de um prop destrutível (`break-style` no component-string
+/// `destructible`) — port do enum da referência VibeGame (`destructible`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BreakStyleSpec {
+    /// Só o burst de partículas (default).
+    #[default]
+    Burst,
+    /// Árvore tomba (toco persiste; a malha `Top` pré-dividida cai).
+    Fall,
+    /// Rocha estilhaça em pedaços balísticos.
+    Shatter,
+}
+
+/// `destructible="…"` (attr universal, component-string do VibeGame) — os
+/// valores crus do XML; a resolução para o componente runtime
+/// [`crate::harvest::Destructible`] aplica os defaults da referência.
+///
+/// Chaves aceites sem efeito funcional: `spark-on-hit` (sparks de hit são
+/// sempre ligadas), `crack-on-hit`/`crack-style` (o darken por hit cobre o
+/// mesmo papel), `cut-height` (os GLBs do mundo já vêm pré-divididos em
+/// `Stump`/`Top`), `impact-fraction`/`face-on-hit` (a engine usa os valores
+/// do melee). Chaves desconhecidas são ignoradas em silêncio — o attr migra
+/// verbatim e o `analyze` não ganha warnings novos.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DestructibleSpec {
+    /// `popup-text` — texto flutuante no break.
+    pub popup_text: Option<String>,
+    /// `popup-color` (#hex) — cor do popup.
+    pub popup_color: Option<[f32; 3]>,
+    /// `preset` — preset de partículas do burst de break.
+    pub preset: Option<String>,
+    /// `burst-count` — partículas do burst de break.
+    pub burst_count: Option<u32>,
+    /// `hits` — golpes até quebrar (default 3, aplicado na conversão).
+    pub hits: Option<u32>,
+    /// `hit-preset` — preset do burst por golpe (mapeado na conversão:
+    /// rockshards→sparks, woodchips→leaves, dust→ground-dust).
+    pub hit_preset: Option<String>,
+    /// `hit-burst-count` — partículas do burst por golpe.
+    pub hit_burst_count: Option<u32>,
+    /// `shake-on-hit` — wobble do visual por golpe.
+    pub shake_on_hit: bool,
+    /// `break-style` — burst/fall/shatter (default burst).
+    pub break_style: BreakStyleSpec,
+    /// `range` — alcance do golpe em metros (default 3.5 na conversão).
+    pub range: Option<f32>,
+    /// `(kind, yield)` do `<ResourceNode>` do template — preenchido pelo
+    /// parse do spawner (o loot não vem do attr `destructible`).
+    pub resource: Option<(String, u32)>,
+}
+
+impl Default for DestructibleSpec {
+    fn default() -> Self {
+        Self {
+            popup_text: None,
+            popup_color: None,
+            preset: None,
+            burst_count: None,
+            hits: None,
+            hit_preset: None,
+            hit_burst_count: None,
+            shake_on_hit: false,
+            break_style: BreakStyleSpec::Burst,
+            range: None,
+            resource: None,
+        }
+    }
+}
+
+impl DestructibleSpec {
+    /// Parser tolerante do component-string (`"hits: 3; break-style: fall"`).
+    /// Nunca falha: valores inválidos caem no default da chave.
+    pub fn parse(value: &str) -> Self {
+        let mut spec = Self::default();
+        for (key, val) in parse_component_string(value) {
+            match key.as_str() {
+                "popup-text" => {
+                    let text = val.trim().to_string();
+                    if !text.is_empty() {
+                        spec.popup_text = Some(text);
+                    }
+                }
+                "popup-color" => {
+                    spec.popup_color = values::parse_color(&val, "destructible popup-color").ok();
+                }
+                "preset" => spec.preset = non_empty(&val),
+                "burst-count" => spec.burst_count = parse_u32_tolerant(&val),
+                "hits" => spec.hits = parse_u32_tolerant(&val),
+                "hit-preset" => spec.hit_preset = non_empty(&val),
+                "hit-burst-count" => spec.hit_burst_count = parse_u32_tolerant(&val),
+                "shake-on-hit" => {
+                    spec.shake_on_hit =
+                        values::parse_bool(&val, "destructible shake-on-hit").unwrap_or(false);
+                }
+                "break-style" => {
+                    spec.break_style = match val.trim().to_ascii_lowercase().as_str() {
+                        "fall" => BreakStyleSpec::Fall,
+                        "shatter" => BreakStyleSpec::Shatter,
+                        _ => BreakStyleSpec::Burst,
+                    };
+                }
+                "range" => {
+                    spec.range = parse_u32_tolerant(&val)
+                        .map(|v| v as f32)
+                        .or_else(|| val.trim().parse::<f32>().ok().filter(|v| v.is_finite()));
+                }
+                // aceites sem efeito (ver doc do struct)
+                "spark-on-hit" | "crack-on-hit" | "crack-style" | "cut-height"
+                | "impact-fraction" | "face-on-hit" => {}
+                // desconhecidas: ignoradas em silêncio (sem warnings novos)
+                _ => {}
+            }
+        }
+        spec
+    }
+}
+
+fn non_empty(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+/// u32 tolerante (o `values::parse_u32` erra; aqui o default manda).
+fn parse_u32_tolerant(value: &str) -> Option<u32> {
+    value.trim().parse::<u32>().ok()
+}
+
 /// Placement rules + template urls of a `<StaticSpawner>` (attribute names as
 /// authored in the source worlds — the element migrates verbatim).
 #[derive(Debug, Clone)]
@@ -361,6 +571,12 @@ pub struct StaticSpawnerSpec {
     pub near_water_radius: f32,
     /// Never place on a carved road ribbon.
     pub avoid_road: bool,
+    /// Never place ON a cliff face/verge or within `cliff_margin` of one —
+    /// gates against the [`crate::terrain::cliffs::CliffMask`] dilated layer.
+    /// `avoid-cliff`, default ON (`"0"` restaura).
+    pub avoid_cliff: bool,
+    /// Extra clearance beyond the cliff mask, in meters — `cliff-margin`.
+    pub cliff_margin: f32,
     pub align_to_terrain: bool,
     pub scale_min: f32,
     pub scale_max: f32,
@@ -376,6 +592,41 @@ pub struct StaticSpawnerSpec {
     pub template_script: Option<String>,
     /// Raio de ativação (congelamento) das instâncias — `activation-radius`.
     pub activation_radius: f32,
+    /// Collider declarado no template (`<GameObject collider="…">`) — cada
+    /// instância spawna com colisão (árvores/rochas/props de spawner).
+    pub template_collider: Option<crate::physics::ColliderShape>,
+    /// `destructible` do template — cada instância spawna colhível
+    /// (componente [`crate::harvest::Destructible`]).
+    pub template_destructible: Option<DestructibleSpec>,
+    /// Ladder de LOD por template (mesmo índice de `template_urls`).
+    pub template_lods: Vec<TemplateLod>,
+    /// Raio (metros) além do qual a instância deixa de renderizar
+    /// (`cull-distance`). Ver [`crate::render_lod::CullDistance`].
+    pub cull_distance: f32,
+    /// `cast-shadows`: `false` tira as malhas da instância das cascatas de
+    /// sombra (erva e folhagem não pagam quatro passes de sombra).
+    pub cast_shadows: bool,
+    /// `base-y-offset`: somado em Y mundo após o assentamento no solo —
+    /// releva GLBs cujo pivô não coincide com a sola.
+    pub base_y_offset: f32,
+    /// `max-slope-attempts`: tentativas de amostragem POR instância — um
+    /// candidato rejeitado (água/estrada/declive/sobreposição) queima uma
+    /// tentativa; esgotadas, a instância é omitida (regiões impossíveis
+    /// devolvem menos do que `count`).
+    pub max_slope_attempts: u32,
+    /// `density-per-km2`: modo alternativo de contagem — count =
+    /// arredondar(densidade × área km² da região XZ). 0 = desligado (usa
+    /// `count`).
+    pub density_per_km2: f32,
+    /// `max-instances`: teto absoluto quando o count vem de
+    /// `density-per-km2` (evita excesso de objetos por área num mundo
+    /// grande); 0 = sem teto.
+    pub max_instances: u32,
+    /// Candidatos XZ explícitos (engine-interna, sem attr XML — as pedras de
+    /// margem de `<Lake>`/`<River>`): cada entrada é avaliada UMA vez pelos
+    /// gates normais (água/estrada/declive/ocupação); rejeitada = omitida.
+    /// Vazio = o modo aleatório habitual (região/clusters).
+    pub fixed_candidates: Vec<bevy::math::Vec2>,
 }
 
 /// `<Vegetation>`: dense foliage spread by density per km². The original
@@ -396,6 +647,10 @@ pub struct VegetationSpec {
     pub avoid_water: bool,
     /// Never place on a carved road ribbon.
     pub avoid_road: bool,
+    /// Same cliff exclusion as the spawners (`avoid-cliff`, default ON).
+    pub avoid_cliff: bool,
+    /// Extra clearance beyond the cliff mask, in meters (`cliff-margin`).
+    pub cliff_margin: f32,
     /// Reject a candidate that lands within another instance's footprint.
     pub avoid_overlaps: bool,
     /// Give every instance a random heading, so a stand of identical trees
@@ -406,6 +661,10 @@ pub struct VegetationSpec {
     pub cluster_radius: f32,
     /// Viber-specific instance cap (default 800 per tag).
     pub max_instances: u32,
+    /// Raio de render (metros) — erva desaparece muito antes dos props.
+    pub cull_distance: f32,
+    /// Erva a projetar sombra em 4 cascatas não se lê e custa o mundo.
+    pub cast_shadows: bool,
 }
 
 impl VegetationSpec {
@@ -439,6 +698,8 @@ impl VegetationSpec {
             near_water: false,
             near_water_radius: DEFAULT_NEAR_WATER_RADIUS,
             avoid_road: self.avoid_road,
+            avoid_cliff: self.avoid_cliff,
+            cliff_margin: self.cliff_margin,
             align_to_terrain: true,
             scale_min: self.scale_min,
             scale_max: self.scale_max,
@@ -449,6 +710,17 @@ impl VegetationSpec {
             template_urls: self.meshes.clone(),
             template_script: None,
             activation_radius: crate::luau::DEFAULT_ACTIVATION_RADIUS,
+            template_collider: None,
+            template_destructible: None,
+            template_lods: Vec::new(),
+            cull_distance: self.cull_distance,
+            cast_shadows: self.cast_shadows,
+            // count já vem resolvido por `instance_count` (com cap).
+            base_y_offset: 0.0,
+            max_slope_attempts: 32,
+            density_per_km2: 0.0,
+            max_instances: 0,
+            fixed_candidates: Vec::new(),
         }
     }
 }
@@ -456,6 +728,10 @@ impl VegetationSpec {
 /// Shoreline width for `near-water` placement (meters) — how far from a water
 /// body a point still counts as bank.
 pub const DEFAULT_NEAR_WATER_RADIUS: f32 = 4.0;
+
+/// Cliff clearance for spawn placement (meters) — how far from the cliff mask
+/// (face + vergem dilatada) um prop pode nascer (`cliff-margin`).
+pub const DEFAULT_CLIFF_MARGIN: f32 = 2.0;
 
 /// A resolved recipe: everything needed to spawn one Bevy entity.
 #[derive(Debug, Clone)]
@@ -467,6 +743,8 @@ pub struct EntitySpec {
     /// Script file reserved for the Luau runtime (parsed, not yet executed).
     #[allow(dead_code)]
     pub script: Option<String>,
+    /// `destructible="…"` — prop colhível/destrutível (`crate::harvest`).
+    pub destructible: Option<DestructibleSpec>,
     pub transform: TransformSpec,
     /// Colliders / rigid bodies for the physics runtime.
     pub physics: PhysicsSpec,
@@ -582,7 +860,14 @@ fn parse_entity(node: &XmlNode, ctx: &mut ParseCtx) -> Result<Option<EntitySpec>
         "biomeregion" => finish_biome_region(node, ctx).map(Some),
         "worldborder" => finish_world_border(node, ctx).map(Some),
         "questtracker" | "waypointarrow" => finish_hud_element(node, ctx).map(Some),
-        "musiclayer" => finish_music_layer(node, ctx).map(Some),
+        "musiclayer" => match node.attr("layer").map(str::trim).filter(|s| !s.is_empty()) {
+            Some(layer) => finish_music_layer(node, layer, ctx).map(Some),
+            None => {
+                ctx.warnings
+                    .push(format!("<{}>: missing layer — skipped", node.tag));
+                Ok(None)
+            }
+        },
         "dialoguenpc" => match node
             .attr("dialogue-id")
             .map(str::trim)
@@ -600,11 +885,17 @@ fn parse_entity(node: &XmlNode, ctx: &mut ParseCtx) -> Result<Option<EntitySpec>
         | "compass" | "interactionprompt" | "dialogueballoon" | "tabbedmodal" => {
             finish_hud_element(node, ctx).map(Some)
         }
+        "uistyle" => finish_ui_style(node, ctx).map(Some),
+        "uiroot" => finish_ui_tree(node, ctx).map(Some),
         "particlesystem" => finish_particle_system(node, ctx).map(Some),
         "terrain" => finish_terrain(node, ctx).map(Some),
         "terrainpad" => finish_terrain_pad(node, ctx).map(Some),
         "lake" => finish_lake(node, ctx).map(Some),
+        "grounddecal" => finish_ground_decal(node, ctx).map(Some),
         "river" => finish_river(node, ctx).map(Some),
+        "cliff" => finish_cliff(node, ctx).map(Some),
+        "cave" => finish_cave(node, ctx).map(Some),
+        "arch" => finish_arch(node, ctx).map(Some),
         "road" => finish_road(node, ctx).map(Some),
         "roadnetwork" => finish_road_network(node, ctx).map(Some),
         "include" => bail!(
@@ -624,6 +915,7 @@ struct Common {
     name: Option<String>,
     tag: Option<String>,
     script: Option<String>,
+    destructible: Option<DestructibleSpec>,
     transform: TransformSpec,
     /// Colliders / rigid bodies (`collider`, `rigidbody`, `body`).
     physics: PhysicsSpec,
@@ -636,6 +928,7 @@ fn parse_common(node: &XmlNode, ctx: &mut ParseCtx) -> Result<(Common, Vec<(Stri
         name: None,
         tag: None,
         script: None,
+        destructible: None,
         transform: TransformSpec::default(),
         physics: PhysicsSpec::default(),
     };
@@ -645,6 +938,9 @@ fn parse_common(node: &XmlNode, ctx: &mut ParseCtx) -> Result<(Common, Vec<(Stri
             "name" => common.name = Some(value.clone()),
             "tag" => common.tag = Some(value.clone()),
             "script" => common.script = Some(value.clone()),
+            // Component-string do plugin `destructible` do VibeGame — o
+            // prop nasce colhível (árvores/rochas dos spawners).
+            "destructible" => common.destructible = Some(DestructibleSpec::parse(value)),
             "collider" => {
                 let (shape, warning) = parse_collider(value);
                 common.physics.collider = shape;
@@ -736,6 +1032,7 @@ fn finish_group(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> {
         script: common.script,
         transform: common.transform,
         physics: common.physics,
+        destructible: common.destructible,
         kind: EntityKind::Group,
         children: parse_entities(&node.children, ctx)?,
     })
@@ -810,6 +1107,7 @@ fn finish_primitive(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> {
         script: common.script,
         transform: common.transform,
         physics: common.physics,
+        destructible: common.destructible,
         kind: EntityKind::Primitive { shape, material },
         children: parse_entities(&node.children, ctx)?,
     })
@@ -840,6 +1138,7 @@ fn finish_point_light(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> 
         script: common.script,
         transform: common.transform,
         physics: common.physics,
+        destructible: common.destructible,
         kind: EntityKind::PointLight {
             color,
             intensity,
@@ -875,6 +1174,7 @@ fn finish_directional_light(node: &XmlNode, ctx: &mut ParseCtx) -> Result<Entity
         script: common.script,
         transform: common.transform,
         physics: common.physics,
+        destructible: common.destructible,
         kind: EntityKind::DirectionalLight {
             color,
             illuminance,
@@ -906,6 +1206,7 @@ fn finish_ambient_light(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec
         script: common.script,
         transform: common.transform,
         physics: common.physics,
+        destructible: common.destructible,
         kind: EntityKind::AmbientLight { color, brightness },
         children: parse_entities(&node.children, ctx)?,
     })
@@ -973,6 +1274,7 @@ fn finish_orbit_camera(
         script: common.script,
         transform: common.transform,
         physics: common.physics,
+        destructible: common.destructible,
         kind,
         children: parse_entities(&node.children, ctx)?,
     })
@@ -980,15 +1282,65 @@ fn finish_orbit_camera(
 
 /// glTF urls in a spawner's template subtree (original `GLTFLoader` names and
 /// native `GltfScene` both accepted), in document order.
-fn collect_template_urls(node: &XmlNode, out: &mut Vec<String>) {
+/// Ladder de LOD autorada num `<GLTFLoader>` do template.
+///
+/// Os mundos migrados do VibeGame já trazem `lod1-url` / `lod2-url` e os
+/// cortes `lod-threshold-near` / `lod-threshold-mid` — o Viber ignorava-os e
+/// desenhava a malha *hero* de cada árvore a 200 m. Ver
+/// [`crate::render_lod::MeshLod`].
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TemplateLod {
+    /// Malha de LOD 1 (média distância), se autorada.
+    pub lod1_url: Option<String>,
+    /// Malha de LOD 2 (silhueta), se autorada.
+    pub lod2_url: Option<String>,
+    /// Distância (metros) em que LOD 0 cede a LOD 1.
+    pub near: f32,
+    /// Distância em que LOD 1 cede a LOD 2.
+    pub mid: f32,
+}
+
+/// Cortes de LOD usados quando o template só autora as urls.
+pub const DEFAULT_LOD_NEAR: f32 = 45.0;
+/// Corte LOD1 → LOD2 por omissão.
+pub const DEFAULT_LOD_MID: f32 = 110.0;
+
+impl TemplateLod {
+    /// `true` quando o template não autora nenhuma malha alternativa — a
+    /// instância não precisa de componente de LOD nenhum.
+    pub fn is_empty(&self) -> bool {
+        self.lod1_url.is_none() && self.lod2_url.is_none()
+    }
+}
+
+/// Recolhe urls de template e, em paralelo (mesmo índice), a ladder de LOD.
+fn collect_template_meshes(node: &XmlNode, out: &mut Vec<String>, lods: &mut Vec<TemplateLod>) {
     let lower = node.tag.to_ascii_lowercase();
     if matches!(lower.as_str(), "gltfloader" | "gltfscene") {
         if let Some(url) = node.attr("url").map(str::trim).filter(|s| !s.is_empty()) {
             out.push(url.to_string());
+            let attr = |name: &str| {
+                node.attr(name)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+            };
+            let number = |name: &str, fallback: f32| {
+                node.attr(name)
+                    .and_then(|v| v.trim().parse::<f32>().ok())
+                    .filter(|v| *v > 0.0)
+                    .unwrap_or(fallback)
+            };
+            lods.push(TemplateLod {
+                lod1_url: attr("lod1-url"),
+                lod2_url: attr("lod2-url"),
+                near: number("lod-threshold-near", DEFAULT_LOD_NEAR),
+                mid: number("lod-threshold-mid", DEFAULT_LOD_MID),
+            });
         }
     }
     for child in &node.children {
-        collect_template_urls(child, out);
+        collect_template_meshes(child, out, lods);
     }
 }
 
@@ -1003,6 +1355,35 @@ fn collect_template_script(node: &XmlNode) -> Option<String> {
         }
     }
     None
+}
+
+/// Primeiro attr `destructible=` na subárvore do template
+/// (`<GameObject destructible="…">`) — o props nascem colhíveis.
+fn collect_template_destructible(node: &XmlNode) -> Option<DestructibleSpec> {
+    if let Some(value) = node
+        .attr("destructible")
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        return Some(DestructibleSpec::parse(value));
+    }
+    node.children.iter().find_map(collect_template_destructible)
+}
+
+/// Primeiro `<ResourceNode kind="…" yield="…">` na subárvore do template
+/// (qualquer profundidade) — o loot nativo da colheita.
+fn collect_resource_node(node: &XmlNode) -> Option<(String, u32)> {
+    if node.tag.to_ascii_lowercase() == "resourcenode" {
+        if let Some(kind) = node.attr("kind").map(str::trim).filter(|s| !s.is_empty()) {
+            let amount = node
+                .attr("yield")
+                .and_then(|v| v.trim().parse::<u32>().ok())
+                .unwrap_or(1)
+                .max(1);
+            return Some((kind.to_string(), amount));
+        }
+    }
+    node.children.iter().find_map(collect_resource_node)
 }
 
 fn finish_static_spawner(node: &XmlNode, dynamic: bool, ctx: &mut ParseCtx) -> Result<EntitySpec> {
@@ -1022,7 +1403,14 @@ fn finish_static_spawner(node: &XmlNode, dynamic: bool, ctx: &mut ParseCtx) -> R
         in_water: false,
         near_water: false,
         near_water_radius: DEFAULT_NEAR_WATER_RADIUS,
-        avoid_road: false,
+        // Default ON (perfis do VibeGame): árvores/pedras/props nunca nascem
+        // no leito das estradas — `avoid-road="0"` devolve o comportamento
+        // antigo a quem o quiser.
+        avoid_road: true,
+        // Default ON: nada nasce em parede de cliff nem na sua vergem —
+        // `avoid-cliff="0"` restaura o comportamento antigo.
+        avoid_cliff: true,
+        cliff_margin: DEFAULT_CLIFF_MARGIN,
         align_to_terrain: true,
         scale_min: 1.0,
         scale_max: 1.0,
@@ -1033,9 +1421,45 @@ fn finish_static_spawner(node: &XmlNode, dynamic: bool, ctx: &mut ParseCtx) -> R
         template_urls: Vec::new(),
         template_script: None,
         activation_radius: crate::luau::DEFAULT_ACTIVATION_RADIUS,
+        template_collider: None,
+        template_destructible: None,
+        template_lods: Vec::new(),
+        cull_distance: crate::render_lod::DEFAULT_STATIC_CULL,
+        cast_shadows: true,
+        base_y_offset: 0.0,
+        max_slope_attempts: 32,
+        density_per_km2: 0.0,
+        max_instances: 0,
+        fixed_candidates: Vec::new(),
     };
-    collect_template_urls(node, &mut spec.template_urls);
+    collect_template_meshes(node, &mut spec.template_urls, &mut spec.template_lods);
     spec.template_script = collect_template_script(node);
+    // Destrutível do template: o attr `destructible` + o loot do
+    // `<ResourceNode kind yield>` filho (árvores→wood, rochas→stone).
+    spec.template_destructible = collect_template_destructible(node);
+    if let Some(template) = spec.template_destructible.as_mut() {
+        if template.resource.is_none() {
+            template.resource = collect_resource_node(node);
+        }
+    }
+    // Collider do template: primeiro filho com attr `collider`.
+    for child in &node.children {
+        if let Some(value) = child
+            .attr("collider")
+            .map(str::trim)
+            .filter(|c| !c.is_empty())
+        {
+            let (shape, warning) = crate::physics::parse_collider(value);
+            if let Some(warning) = warning {
+                ctx.warnings
+                    .push(format!("<{}> template: {warning}", node.tag));
+            }
+            if !matches!(shape, crate::physics::ColliderShape::None) {
+                spec.template_collider = Some(shape);
+            }
+            break;
+        }
+    }
     if spec.template_urls.is_empty() {
         ctx.warnings
             .push(format!("{ctx_tag}: no template glTF url found — skipped"));
@@ -1045,6 +1469,7 @@ fn finish_static_spawner(node: &XmlNode, dynamic: bool, ctx: &mut ParseCtx) -> R
             script: common.script,
             transform: common.transform,
             physics: common.physics,
+            destructible: common.destructible,
             kind: if dynamic {
                 EntityKind::DynamicSpawner { spec }
             } else {
@@ -1056,11 +1481,14 @@ fn finish_static_spawner(node: &XmlNode, dynamic: bool, ctx: &mut ParseCtx) -> R
     for (key, value) in rest {
         let kctx = format!("{ctx_tag} {key}");
         match key.as_str() {
-            "seed" => spec.seed = values::parse_f32(&value, &kctx)? as u64,
-            "count" => spec.count = values::parse_f32(&value, &kctx)? as u32,
+            // Inteiros via parsers validados (f32 `as` satura u32::MAX e
+            // perde precisão acima de 2^24); count com cap — o with_capacity
+            // do spawner e as tentativas count*8+64 escalam com ele.
+            "seed" => spec.seed = values::parse_u64(&value, &kctx)?,
+            "count" => spec.count = values::parse_u32(&value, &kctx)?.min(100_000),
             "region-min" => spec.region_min = values::parse_vec3(&value, &kctx)?,
             "region-max" => spec.region_max = values::parse_vec3(&value, &kctx)?,
-            "cluster-count" => spec.cluster_count = values::parse_f32(&value, &kctx)? as u32,
+            "cluster-count" => spec.cluster_count = values::parse_u32(&value, &kctx)?.min(10_000),
             "cluster-radius" => spec.cluster_radius = values::parse_f32(&value, &kctx)?,
             "footprint-radius" => spec.footprint_radius = values::parse_f32(&value, &kctx)?,
             "avoid-overlaps" => spec.avoid_overlaps = values::parse_bool(&value, &kctx)?,
@@ -1070,6 +1498,8 @@ fn finish_static_spawner(node: &XmlNode, dynamic: bool, ctx: &mut ParseCtx) -> R
             "near-water" => spec.near_water = values::parse_bool(&value, &kctx)?,
             "near-water-radius" => spec.near_water_radius = values::parse_f32(&value, &kctx)?,
             "avoid-road" => spec.avoid_road = values::parse_bool(&value, &kctx)?,
+            "avoid-cliff" => spec.avoid_cliff = values::parse_bool(&value, &kctx)?,
+            "cliff-margin" => spec.cliff_margin = values::parse_f32(&value, &kctx)?.max(0.0),
             "align-to-terrain" => spec.align_to_terrain = values::parse_bool(&value, &kctx)?,
             "scale-min" => spec.scale_min = values::parse_f32(&value, &kctx)?,
             "scale-max" => spec.scale_max = values::parse_f32(&value, &kctx)?,
@@ -1077,12 +1507,22 @@ fn finish_static_spawner(node: &XmlNode, dynamic: bool, ctx: &mut ParseCtx) -> R
             "scale-axis-max" => spec.scale_axis_max = values::parse_f32(&value, &kctx)?,
             "random-yaw" => spec.random_yaw = values::parse_bool(&value, &kctx)?,
             "max-distance" => spec.max_distance = values::parse_f32(&value, &kctx)?,
+            "cull-distance" => spec.cull_distance = values::parse_f32(&value, &kctx)?.max(0.0),
+            "cast-shadows" => spec.cast_shadows = values::parse_bool(&value, &kctx)?,
+            "base-y-offset" => spec.base_y_offset = values::parse_f32(&value, &kctx)?,
+            "max-slope-attempts" => {
+                spec.max_slope_attempts = values::parse_u32(&value, &kctx)?.clamp(1, 4096)
+            }
+            "density-per-km2" => spec.density_per_km2 = values::parse_f32(&value, &kctx)?.max(0.0),
+            "max-instances" => spec.max_instances = values::parse_u32(&value, &kctx)?,
             // accepted no-ops: profile metadata / placement details ported later
             "activation-radius" => {
                 spec.activation_radius = values::parse_f32(&value, &kctx)?.max(0.0)
             }
-            "profile" | "variation" | "ground-align" | "max-slope-attempts" | "pick-strategy"
-            | "base-y-offset" => {}
+            "profile" | "variation" | "ground-align" | "pick-strategy" => {}
+            // A ladder vive no `<GLTFLoader>` do template, não no spawner;
+            // `collect_template_meshes` lê-a lá.
+            "lod1-url" | "lod2-url" | "lod-threshold-near" | "lod-threshold-mid" => {}
             other => ctx
                 .warnings
                 .push(format!("{ctx_tag}: ignored attribute `{other}`")),
@@ -1094,6 +1534,7 @@ fn finish_static_spawner(node: &XmlNode, dynamic: bool, ctx: &mut ParseCtx) -> R
         script: common.script,
         transform: common.transform,
         physics: common.physics,
+        destructible: common.destructible,
         kind: if dynamic {
             EntityKind::DynamicSpawner { spec }
         } else {
@@ -1193,6 +1634,7 @@ fn finish_particle_system(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySp
         script: common.script,
         transform: common.transform,
         physics: common.physics,
+        destructible: common.destructible,
         kind: EntityKind::ParticleSystem { spec },
         children: Vec::new(),
     })
@@ -1223,6 +1665,7 @@ fn finish_spawn_exclusion(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySp
         script: common.script,
         transform: common.transform,
         physics: common.physics,
+        destructible: common.destructible,
         kind: EntityKind::SpawnExclusion { center, radius },
         children: Vec::new(),
     })
@@ -1246,13 +1689,20 @@ fn finish_vegetation(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> {
         avoid_water: true,
         // VibeGame vegetation is randomly oriented and non-overlapping by
         // default; a stand of clones all facing the same way is the tell.
-        avoid_road: false,
         avoid_overlaps: true,
+        // Erva fora das fitas de estrada por omissão — tapetes a atravessar
+        // asfalto lia-se como textura desaparecida (`avoid-road="0"` liga).
+        avoid_road: true,
+        // Idem cliffs: folhagem nunca em parede/vergem de falésia.
+        avoid_cliff: true,
+        cliff_margin: DEFAULT_CLIFF_MARGIN,
         random_yaw: true,
         max_distance: 0.0,
         cluster_count: 0,
         cluster_radius: 0.0,
         max_instances: 800,
+        cull_distance: crate::render_lod::DEFAULT_VEGETATION_CULL,
+        cast_shadows: false,
     };
     for (key, value) in rest {
         let kctx = format!("{ctx_tag} {key}");
@@ -1261,7 +1711,7 @@ fn finish_vegetation(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> {
                 spec.meshes = value.split_whitespace().map(str::to_string).collect();
             }
             "density-per-km2" => spec.density_per_km2 = values::parse_f32(&value, &kctx)?,
-            "seed" => spec.seed = values::parse_f32(&value, &kctx)? as u64,
+            "seed" => spec.seed = values::parse_u64(&value, &kctx)?,
             "region-min" => spec.region_min = values::parse_vec3(&value, &kctx)?,
             "region-max" => spec.region_max = values::parse_vec3(&value, &kctx)?,
             "scale-min" => spec.scale_min = values::parse_f32(&value, &kctx)?,
@@ -1271,12 +1721,16 @@ fn finish_vegetation(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> {
             "max-slope-deg" => spec.max_slope_deg = values::parse_f32(&value, &kctx)?,
             "avoid-water" => spec.avoid_water = values::parse_bool(&value, &kctx)?,
             "avoid-road" => spec.avoid_road = values::parse_bool(&value, &kctx)?,
+            "avoid-cliff" => spec.avoid_cliff = values::parse_bool(&value, &kctx)?,
+            "cliff-margin" => spec.cliff_margin = values::parse_f32(&value, &kctx)?.max(0.0),
             "avoid-overlaps" => spec.avoid_overlaps = values::parse_bool(&value, &kctx)?,
             "random-yaw" => spec.random_yaw = values::parse_bool(&value, &kctx)?,
             "max-distance" => spec.max_distance = values::parse_f32(&value, &kctx)?,
-            "cluster-count" => spec.cluster_count = values::parse_f32(&value, &kctx)? as u32,
+            "cluster-count" => spec.cluster_count = values::parse_u32(&value, &kctx)?.min(10_000),
             "cluster-radius" => spec.cluster_radius = values::parse_f32(&value, &kctx)?,
-            "max-instances" => spec.max_instances = values::parse_f32(&value, &kctx)? as u32,
+            "max-instances" => spec.max_instances = values::parse_u32(&value, &kctx)?.min(200_000),
+            "cull-distance" => spec.cull_distance = values::parse_f32(&value, &kctx)?.max(0.0),
+            "cast-shadows" => spec.cast_shadows = values::parse_bool(&value, &kctx)?,
             // accepted no-ops: VibeGame instancing/appearance details
             "smart"
             | "wind"
@@ -1301,6 +1755,7 @@ fn finish_vegetation(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> {
         script: common.script,
         transform: common.transform,
         physics: common.physics,
+        destructible: common.destructible,
         kind: EntityKind::Vegetation { spec },
         children: Vec::new(),
     })
@@ -1319,6 +1774,7 @@ fn finish_player_gltf(node: &XmlNode, url: String, ctx: &mut ParseCtx) -> Result
         name: common.name.or_else(|| Some("player".to_string())),
         tag: common.tag,
         script: common.script,
+        destructible: common.destructible,
         transform: common.transform,
         physics: common.physics,
         kind: EntityKind::PlayerGltf { url },
@@ -1354,6 +1810,7 @@ fn finish_dialogue_npc(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec>
         script: common.script,
         transform: common.transform,
         physics: common.physics,
+        destructible: common.destructible,
         kind: EntityKind::DialogueNpc {
             dialogue_id,
             marker_height,
@@ -1388,6 +1845,7 @@ fn finish_resource_chip(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec
         script: common.script,
         transform: common.transform,
         physics: common.physics,
+        destructible: common.destructible,
         kind: EntityKind::ResourceChip {
             resource,
             icon,
@@ -1421,19 +1879,16 @@ fn finish_audio_mixer(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> 
         script: common.script,
         transform: common.transform,
         physics: common.physics,
+        destructible: common.destructible,
         kind: EntityKind::AudioMixer { master, music, sfx },
         children: Vec::new(),
     })
 }
 
-fn finish_music_layer(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> {
+fn finish_music_layer(node: &XmlNode, layer: &str, ctx: &mut ParseCtx) -> Result<EntitySpec> {
     let (common, rest) = parse_common(node, ctx)?;
     let ctx_tag = format!("<{}>", node.tag);
-    let layer = node
-        .attr("layer")
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
+    let layer = layer.to_string();
     let sound = node.attr("sound").map(str::trim).unwrap_or("");
     let mut base_volume = 0.2;
     for (key, value) in rest {
@@ -1447,22 +1902,6 @@ fn finish_music_layer(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> 
                 .push(format!("{ctx_tag}: ignored attribute `{other}`")),
         }
     }
-    let Some(layer) = layer else {
-        ctx.warnings
-            .push(format!("{ctx_tag}: missing layer — skipped"));
-        return Ok(EntitySpec {
-            name: common.name,
-            tag: common.tag,
-            script: common.script,
-            transform: common.transform,
-            physics: common.physics,
-            kind: EntityKind::MusicLayer {
-                layer: String::new(),
-                base_volume,
-            },
-            children: Vec::new(),
-        });
-    };
     let _ = sound;
     Ok(EntitySpec {
         name: common.name,
@@ -1470,6 +1909,7 @@ fn finish_music_layer(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> 
         script: common.script,
         transform: common.transform,
         physics: common.physics,
+        destructible: common.destructible,
         kind: EntityKind::MusicLayer { layer, base_volume },
         children: Vec::new(),
     })
@@ -1488,6 +1928,7 @@ fn finish_daycycle(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> {
         drive_ambient: true,
         max_sun_elevation: 62.0,
         sun_azimuth_base: 205.0,
+        min_sun_elevation: crate::worldsys::MIN_LIGHT_ELEVATION_DEG,
     };
     for (key, value) in rest {
         let kctx = format!("{ctx_tag} {key}");
@@ -1502,8 +1943,11 @@ fn finish_daycycle(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> {
             "ambient-night-intensity" => c.ambient_night = values::parse_f32(&value, &kctx)?,
             "drive-ambient" => c.drive_ambient = values::parse_bool(&value, &kctx)?,
             "max-sun-elevation" => c.max_sun_elevation = values::parse_f32(&value, &kctx)?,
+            "min-sun-elevation" => c.min_sun_elevation = values::parse_f32(&value, &kctx)?,
             "sun-azimuth-base" => c.sun_azimuth_base = values::parse_f32(&value, &kctx)?,
-            _ => {}
+            other => ctx
+                .warnings
+                .push(format!("{ctx_tag}: ignored attribute `{other}`")),
         }
     }
     Ok(EntitySpec {
@@ -1512,6 +1956,7 @@ fn finish_daycycle(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> {
         script: common.script,
         transform: common.transform,
         physics: common.physics,
+        destructible: common.destructible,
         kind: EntityKind::DayCycle {
             minute_of_day: c.minute_of_day,
             minutes_per_real_second: c.minutes_per_real_second,
@@ -1522,6 +1967,7 @@ fn finish_daycycle(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> {
             drive_ambient: c.drive_ambient,
             max_sun_elevation: c.max_sun_elevation,
             sun_azimuth_base: c.sun_azimuth_base,
+            min_sun_elevation: c.min_sun_elevation,
         },
         children: Vec::new(),
     })
@@ -1548,7 +1994,9 @@ fn finish_weather(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> {
             "clouds" => w.clouds = values::parse_f32(&value, &kctx)?,
             "rain" => w.rain = values::parse_f32(&value, &kctx)?,
             "cycle" => w.cycle = values::parse_bool(&value, &kctx)?,
-            _ => {}
+            other => ctx
+                .warnings
+                .push(format!("{ctx_tag}: ignored attribute `{other}`")),
         }
     }
     Ok(EntitySpec {
@@ -1557,6 +2005,7 @@ fn finish_weather(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> {
         script: common.script,
         transform: common.transform,
         physics: common.physics,
+        destructible: common.destructible,
         kind: EntityKind::Weather {
             wind: w.wind,
             wind_strength: w.wind_strength,
@@ -1574,9 +2023,19 @@ pub fn parse_polygon(value: &str) -> Vec<[f32; 2]> {
         .trim_start_matches('[')
         .trim_end_matches(']')
         .split(';')
+        .filter(|pair| !pair.trim().is_empty())
         .filter_map(|pair| {
             let (x, y) = pair.trim().split_once(',')?;
-            Some([x.trim().parse::<f32>().ok()?, y.trim().parse::<f32>().ok()?])
+            // Mesma regra dos demais números: não-finitos rejeitados; um
+            // par malformado não reduz o polígono em silêncio — o chamador
+            // avisa quando sobram vértices a menos.
+            let x = x.trim().parse::<f32>().ok()?;
+            let y = y.trim().parse::<f32>().ok()?;
+            if x.is_finite() && y.is_finite() {
+                Some([x, y])
+            } else {
+                None
+            }
         })
         .collect()
 }
@@ -1585,17 +2044,37 @@ fn finish_biome_region(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec>
     let (common, rest) = parse_common(node, ctx)?;
     let ctx_tag = format!("<{}>", node.tag);
     let mut id = String::new();
+    let mut display_name = String::new();
     let mut polygon = Vec::new();
     let mut fog_density = 0.0;
     let mut tint = None;
+    let mut pp_exposure = None;
+    let mut pp_bloom_strength = None;
     for (key, value) in rest {
         let kctx = format!("{ctx_tag} {key}");
         match key.as_str() {
             "id" => id = value.trim().to_string(),
-            "polygon" => polygon = parse_polygon(&value),
+            // Nome de exposição no HUD (`zone.name`); texto livre, só aparado.
+            "display-name" => display_name = value.trim().to_string(),
+            "polygon" => {
+                let pairs = value.split(';').filter(|p| !p.trim().is_empty()).count();
+                polygon = parse_polygon(&value);
+                if polygon.len() < pairs {
+                    ctx.warnings.push(format!(
+                        "{ctx_tag}: polygon dropped {} malformed pair(s)",
+                        pairs - polygon.len()
+                    ));
+                }
+            }
             "fog-density" => fog_density = values::parse_f32(&value, &kctx)?,
             "tint" => tint = Some(values::parse_color(&value, &kctx)?),
-            _ => {}
+            "pp-exposure" => pp_exposure = Some(values::parse_f32(&value, &kctx)?),
+            "pp-bloom-strength" => {
+                pp_bloom_strength = Some(values::parse_f32(&value, &kctx)?);
+            }
+            other => ctx
+                .warnings
+                .push(format!("{ctx_tag}: ignored attribute `{other}`")),
         }
     }
     Ok(EntitySpec {
@@ -1604,11 +2083,15 @@ fn finish_biome_region(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec>
         script: common.script,
         transform: common.transform,
         physics: common.physics,
+        destructible: common.destructible,
         kind: EntityKind::BiomeRegion {
             id,
+            display_name,
             polygon,
             fog_density,
             tint,
+            pp_exposure,
+            pp_bloom_strength,
         },
         children: Vec::new(),
     })
@@ -1626,7 +2109,9 @@ fn finish_world_border(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec>
             "radius" => radius = values::parse_f32(&value, &kctx)?,
             "warn-seconds" => warn_seconds = values::parse_f32(&value, &kctx)?,
             "margin" => margin = values::parse_f32(&value, &kctx)?,
-            _ => {}
+            other => ctx
+                .warnings
+                .push(format!("{ctx_tag}: ignored attribute `{other}`")),
         }
     }
     Ok(EntitySpec {
@@ -1635,6 +2120,7 @@ fn finish_world_border(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec>
         script: common.script,
         transform: common.transform,
         physics: common.physics,
+        destructible: common.destructible,
         kind: EntityKind::WorldBorder {
             radius,
             warn_seconds,
@@ -1655,6 +2141,7 @@ fn finish_engine_config(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec
         script: common.script,
         transform: common.transform,
         physics: common.physics,
+        destructible: common.destructible,
         kind: EntityKind::EngineConfig {
             tag: node.tag.to_ascii_lowercase(),
             attrs: node
@@ -1667,8 +2154,9 @@ fn finish_engine_config(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec
     })
 }
 
-/// `<Sky>` — procedural sky parameters kept as raw attrs; `src/hud.rs`
-/// (`spawn_hud`) builds the shader dome from them.
+/// `<Sky>` — procedural sky parameters kept as raw attrs; o domo é
+/// construído no fim do startup (`spawn.rs` → `sky::build_sky`) e o shader
+/// WGSL especializado por mundo é escrito pelo `run()` em `main.rs`.
 fn finish_sky(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> {
     let (common, rest) = parse_common(node, ctx)?;
     let _ = rest;
@@ -1678,6 +2166,7 @@ fn finish_sky(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> {
         script: common.script,
         transform: common.transform,
         physics: common.physics,
+        destructible: common.destructible,
         kind: EntityKind::HudElement {
             tag: "sky".to_string(),
             attrs: node
@@ -1699,6 +2188,7 @@ fn finish_hud_element(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> 
         script: common.script,
         transform: common.transform,
         physics: common.physics,
+        destructible: common.destructible,
         kind: EntityKind::HudElement {
             tag: node.tag.to_ascii_lowercase(),
             attrs: node
@@ -1706,6 +2196,53 @@ fn finish_hud_element(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> 
                 .iter()
                 .map(|(k, v)| (k.to_ascii_lowercase(), v.clone()))
                 .collect(),
+        },
+        children: Vec::new(),
+    })
+}
+
+/// `<UiStyle>`: the stylesheet source is the element's text, or the file named
+/// by `src` (resolved at spawn time against the world dir).
+fn finish_ui_style(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> {
+    let (common, rest) = parse_common(node, ctx)?;
+    warn_ignored(
+        node,
+        rest.into_iter().filter(|(key, _)| key != "src").collect(),
+        ctx,
+    );
+    let source = match node.attr("src") {
+        Some(src) => format!("@{}", src.trim()),
+        None => node.text.clone(),
+    };
+    if source.trim().is_empty() {
+        ctx.warnings
+            .push(format!("<{}>: empty stylesheet", node.tag));
+    }
+    Ok(EntitySpec {
+        name: common.name,
+        tag: common.tag,
+        script: common.script,
+        transform: common.transform,
+        physics: common.physics,
+        destructible: common.destructible,
+        kind: EntityKind::UiStyle { source },
+        children: Vec::new(),
+    })
+}
+
+/// `<UiRoot>`: unlike every other tag, the whole subtree is carried through —
+/// the UI builder needs the XML, not a flattened `EntitySpec` list.
+fn finish_ui_tree(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> {
+    let (common, _rest) = parse_common(node, ctx)?;
+    Ok(EntitySpec {
+        name: common.name,
+        tag: common.tag,
+        script: common.script,
+        transform: common.transform,
+        physics: common.physics,
+        destructible: common.destructible,
+        kind: EntityKind::UiTree {
+            node: Box::new(node.clone()),
         },
         children: Vec::new(),
     })
@@ -1725,6 +2262,7 @@ fn finish_gltf_scene(node: &XmlNode, url: String, ctx: &mut ParseCtx) -> Result<
         script: common.script,
         transform: common.transform,
         physics: common.physics,
+        destructible: common.destructible,
         kind: EntityKind::GltfScene { url },
         children: parse_entities(&node.children, ctx)?,
     })
@@ -1781,12 +2319,15 @@ fn finish_terrain(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> {
                 if spec.world_size <= 0.0 {
                     bail!("{kctx}: must be positive");
                 }
+                // Authored extent: the heightmap file no longer overrides it.
+                spec.extent_authored = true;
             }
             "max-height" => {
                 spec.max_height = values::parse_f32(&value, &kctx)?;
                 if spec.max_height <= 0.0 {
                     bail!("{kctx}: must be positive");
                 }
+                spec.extent_authored = true;
             }
             "chunk-size" => {
                 spec.chunk_size = values::parse_f32(&value, &kctx)?;
@@ -1809,6 +2350,23 @@ fn finish_terrain(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> {
             "resolution" => spec.resolution = values::parse_u32(&value, &kctx)?.max(1),
             "texture" | "texture-url" => spec.texture = Some(value.trim().to_string()),
             "texture-tile-size" => spec.texture_tile_size = values::parse_f32(&value, &kctx)?,
+            "layers" => {
+                spec.layers = value
+                    .split(|c: char| c == ',' || c.is_whitespace())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .collect();
+                if spec.layers.len() > crate::terrain::splat::LAYER_COUNT {
+                    bail!(
+                        "{kctx}: at most {} layers, got {}",
+                        crate::terrain::splat::LAYER_COUNT,
+                        spec.layers.len()
+                    );
+                }
+            }
+            "shore-width" => spec.shore_width = values::parse_f32(&value, &kctx)?,
+            "splat-texel" => spec.splat_texel = values::parse_f32(&value, &kctx)?,
             "seed" => spec.seed = values::parse_u64(&value, &kctx)?,
             "base-color" => spec.tint.base_color = tint_color(&value, &kctx)?,
             "color-low" => spec.tint.color_low = tint_color(&value, &kctx)?,
@@ -1821,17 +2379,32 @@ fn finish_terrain(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> {
             "height-blend-strength" => {
                 spec.tint.height_blend_strength = values::parse_f32(&value, &kctx)?;
             }
+            // Cliff system: trigger angle for the peak-preserving LOD / wall
+            // shading, and the opt-in sharpen pass (`src/terrain/cliffs.rs`).
+            "cliff-angle" => spec.cliff_angle = values::parse_f32(&value, &kctx)?,
+            "sharpen" => spec.sharpen = values::parse_bool(&value, &kctx)?,
+            "sharpen-angle" => spec.sharpen_angle = values::parse_f32(&value, &kctx)?,
+            "sharpen-seed" => spec.sharpen_seed = values::parse_f32(&value, &kctx)?.max(0.0) as u64,
+            "cliff-min-area" => spec.cliff_min_area = values::parse_f32(&value, &kctx)?,
+            "cliff-min-drop" => spec.cliff_min_drop = values::parse_f32(&value, &kctx)?,
+            "cliff-min-extent" => spec.cliff_min_extent = values::parse_f32(&value, &kctx)?,
+            // Pele da parede de cliff (`src/terrain/chunk.wgsl` CFG_*).
+            "cliff-streaks" => spec.cliff_streaks = values::parse_f32(&value, &kctx)?,
+            "cliff-moss" => spec.cliff_moss = values::parse_f32(&value, &kctx)?,
             other => ctx
                 .warnings
                 .push(format!("{ctx_tag}: ignored attribute `{other}`")),
         }
     }
+    spec.validate()
+        .map_err(|e| anyhow::anyhow!("{ctx_tag}: {e}"))?;
     Ok(EntitySpec {
         name: common.name,
         tag: common.tag,
         script: common.script,
         transform: common.transform,
         physics: common.physics,
+        destructible: common.destructible,
         kind: EntityKind::Terrain { spec },
         children: Vec::new(),
     })
@@ -1867,6 +2440,7 @@ fn finish_terrain_pad(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> 
         script: common.script,
         transform: common.transform,
         physics: common.physics,
+        destructible: common.destructible,
         kind: EntityKind::TerrainPad { spec },
         children: Vec::new(),
     })
@@ -1874,9 +2448,37 @@ fn finish_terrain_pad(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> 
 
 fn finish_lake(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> {
     let (common, rest) = parse_common(node, ctx)?;
-    warn_children(node, ctx);
     let ctx_tag = format!("<{}>", node.tag);
     let off = terrain_offset(&common, node, ctx);
+    // Filhos `<Island at="x z" radius height/>` — ilhas na bacia (repetível).
+    // Outros filhos continuam a ser avisados e ignorados. O `at` da ilha
+    // segue o MESMO offset de grupo do lago.
+    let mut islands = Vec::new();
+    for child in &node.children {
+        if child.tag.eq_ignore_ascii_case("island") {
+            let kctx = format!("{ctx_tag} <Island>");
+            let mut island = crate::terrain::water::IslandSpec::default();
+            for (key, value) in &child.attrs {
+                match key.as_str() {
+                    "at" => island.at = offset_point(values::parse_vec2(&value, &kctx)?, off),
+                    "radius" => island.radius = values::parse_f32(&value, &kctx)?,
+                    "height" => island.height = values::parse_f32(&value, &kctx)?,
+                    other => ctx
+                        .warnings
+                        .push(format!("{kctx}: ignored attribute `{other}`")),
+                }
+            }
+            if island.radius <= 0.0 {
+                bail!("{kctx}: radius must be > 0 (got {})", island.radius);
+            }
+            islands.push(island);
+        } else {
+            ctx.warnings.push(format!(
+                "{ctx_tag}: child <{}> ignored (only <Island> is supported)",
+                child.tag
+            ));
+        }
+    }
     let mut spec = LakeSpec::default();
     for (key, value) in rest {
         let kctx = format!("{ctx_tag} {key}");
@@ -1888,10 +2490,108 @@ fn finish_lake(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> {
             "color" => spec.color = values::parse_color(&value, &kctx)?,
             "opacity" => spec.opacity = values::parse_f32(&value, &kctx)?,
             "ripple" => spec.ripple = values::parse_f32(&value, &kctx)?,
+            "bank" => {
+                spec.bank =
+                    crate::terrain::water::BankStyle::from_name(&value).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "{kctx}: unknown bank style `{value}` \
+                             (soft|beach|cliff|terraced|gorge|overhang)"
+                        )
+                    })?;
+            }
+            "rocks" => spec.rocks = values::parse_bool(&value, &kctx)?,
+            "rocks-density" => {
+                spec.rocks_spec.density = values::parse_f32(&value, &kctx)?.clamp(0.01, 1.0)
+            }
+            "rocks-scale-max" => {
+                spec.rocks_spec.scale_max = values::parse_f32(&value, &kctx)?.clamp(0.5, 4.0)
+            }
             other => ctx
                 .warnings
                 .push(format!("{ctx_tag}: ignored attribute `{other}`")),
         }
+    }
+    // radius/depth ≤ 0 falham o carve silenciosamente e desalinhavam os
+    // corpos de água seguintes — rejeita no parse (contrato do path).
+    if spec.radius <= 0.0 {
+        bail!("{ctx_tag}: radius must be > 0 (got {})", spec.radius);
+    }
+    if spec.depth <= 0.0 {
+        bail!("{ctx_tag}: depth must be > 0 (got {})", spec.depth);
+    }
+    spec.islands = islands;
+    Ok(EntitySpec {
+        name: common.name,
+        tag: common.tag,
+        script: common.script,
+        transform: common.transform,
+        physics: common.physics,
+        destructible: common.destructible,
+        kind: EntityKind::Lake { spec },
+        children: Vec::new(),
+    })
+}
+
+/// `<GroundDecal at size|radius feather noise texture texture-scale …>` — a
+/// draped, feathered ground patch.
+///
+/// This replaces the migrated `<Plane>` "decals" (a plaza floor, a market
+/// apron). A plane is a hard-edged quad at a fixed `y`: on sloped ground it
+/// clips and floats, its square corners cut across the terrain, and with no
+/// `texture` it renders as a flat white rectangle. A decal drapes, wobbles
+/// its rim and fades to zero alpha.
+fn finish_ground_decal(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> {
+    let (common, rest) = parse_common(node, ctx)?;
+    warn_children(node, ctx);
+    let ctx_tag = format!("<{}>", node.tag);
+    let off = terrain_offset(&common, node, ctx);
+    let mut spec = GroundDecalSpec {
+        name: common.name.clone(),
+        ..GroundDecalSpec::default()
+    };
+    let mut seeded = false;
+    for (key, value) in rest {
+        let kctx = format!("{ctx_tag} {key}");
+        match key.as_str() {
+            "at" => spec.at = offset_point(values::parse_vec2(&value, &kctx)?, off),
+            // Full extent, like <TerrainPad size> — halved into the radii.
+            "size" => {
+                let v = values::parse_vec2(&value, &kctx)?;
+                spec.half_extent = Vec2::new(v[0], v[1]) * 0.5;
+            }
+            "half-size" => {
+                let v = values::parse_vec2(&value, &kctx)?;
+                spec.half_extent = Vec2::new(v[0], v[1]);
+            }
+            "radius" => spec.half_extent = Vec2::splat(values::parse_f32(&value, &kctx)?),
+            "feather" | "edge-feather" => spec.feather = values::parse_f32(&value, &kctx)?,
+            "noise" | "edge-noise" => spec.noise = values::parse_f32(&value, &kctx)?,
+            "seed" => {
+                spec.seed = values::parse_f32(&value, &kctx)?.max(0.0) as u32;
+                seeded = true;
+            }
+            "texture" | "texture-url" => spec.texture = Some(value.trim().to_string()),
+            "texture-scale" | "texture-tile-size" => {
+                spec.texture_scale = values::parse_f32(&value, &kctx)?
+            }
+            "base-color" => spec.base_color = values::parse_color(&value, &kctx)?,
+            "roughness" => spec.roughness = values::parse_f32(&value, &kctx)?,
+            "lift" => spec.lift = values::parse_f32(&value, &kctx)?,
+            other => ctx
+                .warnings
+                .push(format!("{ctx_tag}: ignored attribute `{other}`")),
+        }
+    }
+    if spec.half_extent.x <= 0.0 || spec.half_extent.y <= 0.0 {
+        bail!(
+            "{ctx_tag}: size/radius must be > 0 (got {} x {})",
+            spec.half_extent.x,
+            spec.half_extent.y
+        );
+    }
+    if !seeded {
+        // Position-derived seed: stable across runs, distinct per decal.
+        spec.seed = spec.at.x.to_bits() ^ spec.at.y.to_bits().rotate_left(16);
     }
     Ok(EntitySpec {
         name: common.name,
@@ -1899,7 +2599,8 @@ fn finish_lake(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> {
         script: common.script,
         transform: common.transform,
         physics: common.physics,
-        kind: EntityKind::Lake { spec },
+        destructible: common.destructible,
+        kind: EntityKind::GroundDecal { spec },
         children: Vec::new(),
     })
 }
@@ -1926,9 +2627,109 @@ fn finish_river(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> {
             "bank-height" => spec.bank_height = values::parse_f32(&value, &kctx)?,
             "color" => spec.color = values::parse_color(&value, &kctx)?,
             "opacity" => spec.opacity = values::parse_f32(&value, &kctx)?,
+            "bank" => {
+                spec.bank =
+                    crate::terrain::water::BankStyle::from_name(&value).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "{kctx}: unknown bank style `{value}` \
+                             (soft|beach|cliff|terraced|gorge|overhang)"
+                        )
+                    })?;
+            }
+            "rocks" => spec.rocks = values::parse_bool(&value, &kctx)?,
+            "rocks-density" => {
+                spec.rocks_spec.density = values::parse_f32(&value, &kctx)?.clamp(0.01, 1.0)
+            }
+            "rocks-scale-max" => {
+                spec.rocks_spec.scale_max = values::parse_f32(&value, &kctx)?.clamp(0.5, 4.0)
+            }
+            "pool-spacing" => spec.pool_spacing = values::parse_f32(&value, &kctx)?.max(0.0),
+            "cascades" => spec.cascades = values::parse_bool(&value, &kctx)?,
+            "spring" => spec.spring = values::parse_bool(&value, &kctx)?,
             other => ctx
                 .warnings
                 .push(format!("{ctx_tag}: ignored attribute `{other}`")),
+        }
+    }
+    // width/depth ≤ 0 falham o carve silenciosamente — rejeita no parse.
+    if spec.width <= 0.0 {
+        bail!("{ctx_tag}: width must be > 0 (got {})", spec.width);
+    }
+    if spec.depth <= 0.0 {
+        bail!("{ctx_tag}: depth must be > 0 (got {})", spec.depth);
+    }
+    Ok(EntitySpec {
+        name: common.name,
+        tag: common.tag,
+        script: common.script,
+        transform: common.transform,
+        physics: common.physics,
+        destructible: common.destructible,
+        kind: EntityKind::River { spec },
+        children: Vec::new(),
+    })
+}
+
+/// `<Cliff path width height angle profile side noise seed>` — a procedural
+/// wall face along a crest polyline (`src/terrain/cliffs.rs`).
+///
+/// The heightfield is 2.5D, so the face stays at or below vertical: `concave`
+/// leans the wall back toward the toe (quarry look) instead of overhanging.
+fn finish_cliff(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> {
+    let (common, rest) = parse_common(node, ctx)?;
+    warn_children(node, ctx);
+    let ctx_tag = format!("<{}>", node.tag);
+    let off = terrain_offset(&common, node, ctx);
+    let mut spec = CliffSpec::default();
+    for (key, value) in rest {
+        let kctx = format!("{ctx_tag} {key}");
+        match key.as_str() {
+            "path" => {
+                spec.path = offset_path(values::parse_vec2_list(&value, &kctx)?, off);
+                if spec.path.len() < 2 {
+                    bail!("{kctx}: a cliff needs at least 2 points (x z pairs)");
+                }
+            }
+            "width" => spec.width = values::parse_f32(&value, &kctx)?,
+            "height" => spec.height = Some(values::parse_f32(&value, &kctx)?),
+            "angle" => spec.angle = Some(values::parse_f32(&value, &kctx)?),
+            "profile" => {
+                spec.profile = CliffProfile::parse(&value).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "{kctx}: unknown profile `{value}` (vertical|concave|convex|columnar|terraced|overhang|arch)"
+                    )
+                })?;
+            }
+            "side" => {
+                spec.side = CliffSide::parse(&value).ok_or_else(|| {
+                    anyhow::anyhow!("{kctx}: unknown side `{value}` (auto|left|right)")
+                })?;
+            }
+            "noise" => spec.noise = values::parse_f32(&value, &kctx)?,
+            "gullies" => spec.gullies = values::parse_f32(&value, &kctx)?.clamp(0.0, 0.6),
+            "notches" => spec.notches = values::parse_f32(&value, &kctx)?.clamp(0.0, 0.5),
+            "talus" => spec.talus = values::parse_bool(&value, &kctx)?,
+            "talus-angle" => spec.talus_angle = values::parse_f32(&value, &kctx)?,
+            "seed" => spec.seed = values::parse_f32(&value, &kctx)?.max(0.0) as u64,
+            other => ctx
+                .warnings
+                .push(format!("{ctx_tag}: ignored attribute `{other}`")),
+        }
+    }
+    if spec.path.len() < 2 {
+        bail!("{ctx_tag}: `path` with at least 2 points is required");
+    }
+    // A degenerate width fails the carve silently — reject at parse, unless
+    // height+angle were authored (they derive the width in the carve).
+    if spec.width <= 0.0 && (spec.height.is_none() || spec.angle.is_none()) {
+        bail!(
+            "{ctx_tag}: width must be > 0 (got {w}) — or author both height and angle",
+            w = spec.width
+        );
+    }
+    if let Some(a) = spec.angle {
+        if a <= 0.0 {
+            bail!("{ctx_tag}: angle must be > 0 (got {a})");
         }
     }
     Ok(EntitySpec {
@@ -1937,7 +2738,123 @@ fn finish_river(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> {
         script: common.script,
         transform: common.transform,
         physics: common.physics,
-        kind: EntityKind::River { spec },
+        destructible: common.destructible,
+        kind: EntityKind::Cliff { spec },
+        children: Vec::new(),
+    })
+}
+
+/// `<Cave>` — a tunnel through the terrain (`src/terrain/voxel/cave.rs`).
+///
+/// `path` is XZ like every other ground feature; the tunnel takes its height
+/// from the terrain and sits `depth` below the surface. Unlike `<Cliff>`, this
+/// is not a carve — nothing is written to the heightfield. It is a subtractive
+/// solid in the voxel field, which is why there can be rock above you inside.
+fn finish_cave(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> {
+    let (common, rest) = parse_common(node, ctx)?;
+    warn_children(node, ctx);
+    let ctx_tag = format!("<{}>", node.tag);
+    let off = terrain_offset(&common, node, ctx);
+    let mut spec = CaveSpec {
+        name: common.name.clone(),
+        ..CaveSpec::default()
+    };
+    for (key, value) in rest {
+        let kctx = format!("{ctx_tag} {key}");
+        match key.as_str() {
+            "path" => {
+                spec.path = offset_path(values::parse_vec2_list(&value, &kctx)?, off);
+            }
+            "radius" => spec.radius = values::parse_f32(&value, &kctx)?,
+            "depth" => spec.depth = values::parse_f32(&value, &kctx)?,
+            "open-ends" => spec.open_ends = values::parse_bool(&value, &kctx)?,
+            other => ctx
+                .warnings
+                .push(format!("{ctx_tag}: ignored attribute `{other}`")),
+        }
+    }
+    if spec.path.len() < 2 {
+        bail!("{ctx_tag}: a cave needs a `path` with at least 2 points (x z pairs)");
+    }
+    if spec.radius <= 0.0 || !spec.radius.is_finite() {
+        bail!("{ctx_tag}: radius must be > 0 (got {r})", r = spec.radius);
+    }
+    // A tunnel shallower than its own radius is a trench, not a cave: it would
+    // breach the surface along its whole length and leave no roof.
+    if spec.depth < spec.radius {
+        ctx.warnings.push(format!(
+            "{ctx_tag}: depth {d} is under the radius {r} — the tunnel breaches the surface along \
+             its length instead of having a roof",
+            d = spec.depth,
+            r = spec.radius
+        ));
+    }
+    Ok(EntitySpec {
+        name: common.name,
+        tag: common.tag,
+        script: common.script,
+        transform: common.transform,
+        physics: common.physics,
+        destructible: common.destructible,
+        kind: EntityKind::Cave { spec },
+        children: Vec::new(),
+    })
+}
+
+/// `<Arch>` — a free-standing rock portal (`src/terrain/voxel/arch.rs`).
+///
+/// Like `<Cave>`, this is a solid in the voxel field, not a carve: a column
+/// under the opening resolves to TWO solid spans, and the walker chooses
+/// which one to stand on. `at` follows the `at` semantics of every ground
+/// feature (own `translation` + ancestor groups apply).
+fn finish_arch(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> {
+    let (common, rest) = parse_common(node, ctx)?;
+    warn_children(node, ctx);
+    let ctx_tag = format!("<{}>", node.tag);
+    let off = terrain_offset(&common, node, ctx);
+    let mut spec = ArchSpec {
+        name: common.name.clone(),
+        ..ArchSpec::default()
+    };
+    let mut authored_at = false;
+    for (key, value) in rest {
+        let kctx = format!("{ctx_tag} {key}");
+        match key.as_str() {
+            "at" => {
+                spec.at = offset_point(values::parse_vec2(&value, &kctx)?, off);
+                authored_at = true;
+            }
+            "width" | "span" => spec.span = values::parse_f32(&value, &kctx)?,
+            "height" => spec.height = values::parse_f32(&value, &kctx)?,
+            "thickness" => spec.thickness = values::parse_f32(&value, &kctx)?,
+            "depth" => spec.depth = values::parse_f32(&value, &kctx)?,
+            "yaw" => spec.yaw = values::parse_f32(&value, &kctx)?,
+            other => ctx
+                .warnings
+                .push(format!("{ctx_tag}: ignored attribute `{other}`")),
+        }
+    }
+    if !authored_at {
+        bail!("{ctx_tag}: `at` with an \"x z\" position is required");
+    }
+    for (key, size) in [("width", spec.span), ("height", spec.height)] {
+        if size <= 0.0 || !size.is_finite() {
+            bail!("{ctx_tag}: {key} must be > 0 (got {size})");
+        }
+    }
+    for (key, size) in [("thickness", spec.thickness), ("depth", spec.depth)] {
+        if size <= 0.0 || !size.is_finite() {
+            bail!("{ctx_tag}: {key} must be > 0 (got {size})");
+        }
+    }
+    Ok(EntitySpec {
+        name: common.name,
+        tag: common.tag,
+        script: common.script,
+        transform: common.transform,
+        physics: common.physics,
+        destructible: common.destructible,
+        kind: EntityKind::Arch { spec },
         children: Vec::new(),
     })
 }
@@ -2053,6 +2970,7 @@ fn finish_road(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> {
         script: common.script,
         transform: common.transform,
         physics: common.physics,
+        destructible: common.destructible,
         kind: EntityKind::Road { spec },
         children: Vec::new(),
     })
@@ -2196,6 +3114,7 @@ fn finish_road_network(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec>
         script: common.script,
         transform: common.transform,
         physics: common.physics,
+        destructible: common.destructible,
         kind: EntityKind::RoadNetwork { spec },
         children: Vec::new(),
     })
@@ -2215,8 +3134,15 @@ pub struct WorldSummary {
     pub terrain_pads: usize,
     pub lakes: usize,
     pub rivers: usize,
+    /// `<Cliff>` carved wall faces.
+    pub cliffs: usize,
+    pub caves: usize,
+    /// `<Arch>` free-standing rock portals.
+    pub arches: usize,
     pub roads: usize,
     pub road_networks: usize,
+    /// `<GroundDecal>` draped ground patches.
+    pub ground_decals: usize,
     /// glTF scenes referenced (spawned async at runtime).
     pub gltf_scenes: usize,
     /// `<StaticSpawner>` groups (expanded into instances at runtime).
@@ -2233,6 +3159,12 @@ pub struct WorldSummary {
     pub players: usize,
     /// `<DialogueNPC>` dialogue targets.
     pub dialogue_npcs: usize,
+    /// `<UiStyle>` stylesheets.
+    pub ui_stylesheets: usize,
+    /// `<UiRoot>` declarative UI trees.
+    pub ui_roots: usize,
+    /// Elements inside those trees (the whole HUD, in one number).
+    pub ui_elements: usize,
     /// `<ResourceChip>` HUD chips.
     pub resource_chips: usize,
     /// HUD screen elements (bars, minimap, compass, modal…).
@@ -2261,7 +3193,15 @@ impl WorldSummary {
     /// Total ground-feature elements (terrain element excluded — it is the
     /// heightfield itself, counted in `terrain`).
     pub fn ground_features(&self) -> usize {
-        self.terrain_pads + self.lakes + self.rivers + self.roads + self.road_networks
+        self.terrain_pads
+            + self.lakes
+            + self.rivers
+            + self.cliffs
+            + self.caves
+            + self.arches
+            + self.roads
+            + self.road_networks
+            + self.ground_decals
     }
 }
 
@@ -2310,6 +3250,11 @@ fn demote_extra_cameras(specs: Vec<EntitySpec>, warnings: &mut Vec<String>) -> V
     specs
 }
 
+/// Elements in a `<UiRoot>` subtree, root included.
+fn count_ui_elements(node: &XmlNode) -> usize {
+    1 + node.children.iter().map(count_ui_elements).sum::<usize>()
+}
+
 /// Walk the entity tree and count each kind.
 pub fn summarize(world: &ParsedWorld) -> WorldSummary {
     fn walk(specs: &[EntitySpec], out: &mut WorldSummary) {
@@ -2324,7 +3269,11 @@ pub fn summarize(world: &ParsedWorld) -> WorldSummary {
                 EntityKind::Terrain { .. } => out.terrain += 1,
                 EntityKind::TerrainPad { .. } => out.terrain_pads += 1,
                 EntityKind::Lake { .. } => out.lakes += 1,
+                EntityKind::GroundDecal { .. } => out.ground_decals += 1,
                 EntityKind::River { .. } => out.rivers += 1,
+                EntityKind::Cliff { .. } => out.cliffs += 1,
+                EntityKind::Cave { .. } => out.caves += 1,
+                EntityKind::Arch { .. } => out.arches += 1,
                 EntityKind::Road { .. } => out.roads += 1,
                 EntityKind::RoadNetwork { .. } => out.road_networks += 1,
                 EntityKind::GltfScene { .. } => out.gltf_scenes += 1,
@@ -2337,6 +3286,11 @@ pub fn summarize(world: &ParsedWorld) -> WorldSummary {
                 EntityKind::DialogueNpc { .. } => out.dialogue_npcs += 1,
                 EntityKind::ResourceChip { .. } => out.resource_chips += 1,
                 EntityKind::HudElement { .. } => out.hud_elements += 1,
+                EntityKind::UiStyle { .. } => out.ui_stylesheets += 1,
+                EntityKind::UiTree { node } => {
+                    out.ui_elements += count_ui_elements(node);
+                    out.ui_roots += 1;
+                }
                 EntityKind::AudioMixer { .. } => out.audio_mixer += 1,
                 EntityKind::MusicLayer { .. } => out.music_layers += 1,
                 EntityKind::DayCycle { .. }
@@ -2364,6 +3318,7 @@ mod tests {
                 .iter()
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect(),
+            text: String::new(),
             children: vec![],
         }
     }
@@ -2933,6 +3888,57 @@ mod tests {
         assert_eq!(spec.cluster_count, 14);
     }
 
+    /// Cliff gate: default ON, attrs `avoid-cliff`/`cliff-margin` fazem parse
+    /// (margem negativa satura a 0) e o `Vegetation` partilha os defaults.
+    #[test]
+    fn test_spawner_cliff_attrs_parse_and_default_on() {
+        let mut template = node("GameObject", &[("role", "static")]);
+        template.children = vec![node(
+            "GLTFLoader",
+            &[("url", "/assets/meshes/forest/pine_dark_lod0.glb")],
+        )];
+        // Default (sem attrs): avoid_cliff ON, margem 2 m.
+        let mut spawner = node("StaticSpawner", &[("count", "3")]);
+        spawner.children = vec![template.clone()];
+        let (spec, _) = parse_one(&spawner).unwrap();
+        let EntityKind::StaticSpawner { spec } = spec.kind else {
+            panic!("expected static spawner");
+        };
+        assert!(spec.avoid_cliff, "avoid-cliff is ON by default");
+        assert_eq!(spec.cliff_margin, crate::recipes::DEFAULT_CLIFF_MARGIN);
+
+        // Attrs explícitos: opt-out + margem autoral; negativa satura a 0.
+        let mut spawner = node(
+            "StaticSpawner",
+            &[
+                ("count", "3"),
+                ("avoid-cliff", "0"),
+                ("cliff-margin", "-1.5"),
+            ],
+        );
+        spawner.children = vec![template];
+        let (spec, _) = parse_one(&spawner).unwrap();
+        let EntityKind::StaticSpawner { spec } = spec.kind else {
+            panic!("expected static spawner");
+        };
+        assert!(!spec.avoid_cliff);
+        assert_eq!(spec.cliff_margin, 0.0);
+
+        // Vegetation partilha os mesmos defaults.
+        let veg = node(
+            "Vegetation",
+            &[("meshes", "/assets/meshes/vegetation/grass.glb"), ("density-per-km2", "100")],
+        );
+        let (spec, _) = parse_one(&veg).unwrap();
+        let EntityKind::Vegetation { spec } = spec.kind else {
+            panic!("expected vegetation");
+        };
+        assert!(spec.avoid_cliff);
+        assert_eq!(spec.cliff_margin, crate::recipes::DEFAULT_CLIFF_MARGIN);
+        let group = spec.to_spawner_spec();
+        assert!(group.avoid_cliff && group.cliff_margin == crate::recipes::DEFAULT_CLIFF_MARGIN);
+    }
+
     #[test]
     fn test_static_spawner_without_template_warns_but_keeps_spec() {
         let (spec, w) = parse_one(&node("StaticSpawner", &[("count", "5")])).unwrap();
@@ -2941,6 +3947,98 @@ mod tests {
         };
         assert!(spec.template_urls.is_empty());
         assert!(w.iter().any(|m| m.contains("no template glTF url")));
+        // Default ON: árvores/pedras/props fora do leito das estradas
+        // (VibeGame perfis tree/foliage/creature); `avoid-road="0"` liga.
+        assert!(spec.avoid_road, "avoid-road defaults ON");
+    }
+
+    #[test]
+    fn test_destructible_spec_parses_all_fields() {
+        let spec = DestructibleSpec::parse(
+            "popup-text: Dark Wood; popup-color: #1a3320; preset: leaves; burst-count: 24; \
+             hits: 3; spark-on-hit: 1; hit-preset: woodchips; hit-burst-count: 12; \
+             shake-on-hit: 1; crack-on-hit: 1; crack-style: vertical; break-style: fall; \
+             cut-height: 0.7; range: 3.2",
+        );
+        assert_eq!(spec.popup_text.as_deref(), Some("Dark Wood"));
+        let [r, g, b] = spec.popup_color.expect("popup-color");
+        assert!((r - 26.0 / 255.0).abs() < 1e-5);
+        assert!((g - 51.0 / 255.0).abs() < 1e-5);
+        assert!((b - 32.0 / 255.0).abs() < 1e-5);
+        assert_eq!(spec.preset.as_deref(), Some("leaves"));
+        assert_eq!(spec.burst_count, Some(24));
+        assert_eq!(spec.hits, Some(3));
+        assert_eq!(spec.hit_preset.as_deref(), Some("woodchips"));
+        assert_eq!(spec.hit_burst_count, Some(12));
+        assert!(spec.shake_on_hit);
+        assert_eq!(spec.break_style, BreakStyleSpec::Fall);
+        assert!((spec.range.unwrap() - 3.2).abs() < 1e-4);
+        assert!(spec.resource.is_none());
+    }
+
+    #[test]
+    fn test_destructible_spec_defaults_are_tolerant() {
+        let spec = DestructibleSpec::parse("popup-text: Stone; break-style: shatter");
+        assert_eq!(spec.break_style, BreakStyleSpec::Shatter);
+        assert_eq!(spec.hits, None, "default aplicado na conversão runtime");
+        assert!(!spec.shake_on_hit);
+        assert_eq!(spec.range, None);
+        // desconhecidas/lixo não quebram nem produzem dados
+        let junk = DestructibleSpec::parse("hits: abc; burst-count: -2; range: nan; foo: bar");
+        assert_eq!(junk.hits, None);
+        assert_eq!(junk.burst_count, None);
+        assert_eq!(junk.range, None);
+        // default puro: burst
+        assert_eq!(
+            DestructibleSpec::parse("").break_style,
+            BreakStyleSpec::Burst
+        );
+    }
+
+    #[test]
+    fn test_spawner_collects_template_destructible_and_resource_node() {
+        let mut destructible = node(
+            "GameObject",
+            &[
+                ("role", "static"),
+                (
+                    "destructible",
+                    "popup-text: Stone; popup-color: #cccccc; preset: dust; burst-count: 22; \
+                     hits: 3; hit-preset: rockshards; hit-burst-count: 10; shake-on-hit: 1; \
+                     break-style: shatter",
+                ),
+            ],
+        );
+        destructible.children = vec![
+            node(
+                "GLTFLoader",
+                &[("url", "/assets/meshes/swamp/moss_rock_lod0.glb")],
+            ),
+            node("ResourceNode", &[("kind", "stone"), ("yield", "4")]),
+        ];
+        let mut spawner = node(
+            "StaticSpawner",
+            &[
+                ("count", "8"),
+                ("seed", "6105"),
+                ("region-min", "-10 0 -10"),
+                ("region-max", "10 0 10"),
+            ],
+        );
+        spawner.children = vec![destructible];
+        let (spec, w) = parse_one(&spawner).unwrap();
+        assert!(
+            w.iter().all(|m| !m.contains("destructible")),
+            "destructible nunca vira warning: {w:?}"
+        );
+        let EntityKind::StaticSpawner { spec } = spec.kind else {
+            panic!("expected static spawner");
+        };
+        let template = spec.template_destructible.expect("template destructible");
+        assert_eq!(template.popup_text.as_deref(), Some("Stone"));
+        assert_eq!(template.hits, Some(3));
+        assert_eq!(template.break_style, BreakStyleSpec::Shatter);
+        assert_eq!(template.resource, Some(("stone".into(), 4)));
     }
 
     #[test]
@@ -3048,6 +4146,11 @@ mod tests {
                 node("TerrainPad", &[]),
                 node("Lake", &[]),
                 node("River", &[]),
+                node(
+                    "Cliff",
+                    &[("path", "0 -10 0 10"), ("height", "18"), ("angle", "60")],
+                ),
+                node("Cave", &[("path", "-20 0 20 0"), ("radius", "3"), ("depth", "10")]),
                 node("Road", &[]),
                 node("RoadNetwork", &[]),
                 node("GltfScene", &[("url", "/assets/meshes/x.glb")]),
@@ -3092,6 +4195,8 @@ mod tests {
         assert_eq!(
             summary,
             WorldSummary {
+                caves: 1,
+                arches: 0,
                 groups: 1,
                 primitives: 1,
                 point_lights: 1,
@@ -3102,6 +4207,7 @@ mod tests {
                 terrain_pads: 1,
                 lakes: 1,
                 rivers: 1,
+                cliffs: 1,
                 roads: 1,
                 road_networks: 1,
                 gltf_scenes: 1,
@@ -3114,13 +4220,17 @@ mod tests {
                 dialogue_npcs: 1,
                 resource_chips: 1,
                 hud_elements: 1,
+                ui_stylesheets: 0,
+                ui_roots: 0,
+                ui_elements: 0,
                 audio_mixer: 1,
                 music_layers: 1,
                 world_systems: 1,
+                ground_decals: 0,
             }
         );
         assert_eq!(summary.entities(), 8);
-        assert_eq!(summary.ground_features(), 5);
+        assert_eq!(summary.ground_features(), 7);
     }
 
     // ----- terrain feature parsing -----
@@ -3211,6 +4321,50 @@ mod tests {
     }
 
     #[test]
+    fn test_ground_decal_parses_size_and_defaults() {
+        let (spec, _) = parse_one(&node(
+            "GroundDecal",
+            &[
+                ("at", "15 -17"),
+                ("size", "14 12.5"),
+                ("feather", "3"),
+                ("noise", "0.16"),
+                ("texture", "/assets/textures/forest_floor/albedo.webp"),
+                ("texture-scale", "6"),
+            ],
+        ))
+        .unwrap();
+        let EntityKind::GroundDecal { spec } = spec.kind else {
+            panic!("expected a GroundDecal");
+        };
+        assert_eq!(spec.at, Vec2::new(15.0, -17.0));
+        // `size` is the full extent — halved into the ellipse radii.
+        assert_eq!(spec.half_extent, Vec2::new(7.0, 6.25));
+        assert_eq!(spec.feather, 3.0);
+        assert!((spec.noise - 0.16).abs() < 1e-6);
+        assert_eq!(spec.texture_scale, 6.0);
+        assert!(
+            spec.lift < crate::terrain::roads::RIBBON_LIFT,
+            "decals go under the ribbons"
+        );
+        assert_ne!(spec.seed, 0, "an unseeded decal seeds from its position");
+    }
+
+    #[test]
+    fn test_ground_decal_radius_is_a_circle() {
+        let (spec, _) = parse_one(&node("GroundDecal", &[("radius", "10.5")])).unwrap();
+        let EntityKind::GroundDecal { spec } = spec.kind else {
+            panic!("expected a GroundDecal");
+        };
+        assert_eq!(spec.half_extent, Vec2::splat(10.5));
+    }
+
+    #[test]
+    fn test_ground_decal_rejects_zero_size() {
+        assert!(parse_one(&node("GroundDecal", &[("radius", "0")])).is_err());
+    }
+
+    #[test]
     fn test_lake_and_river_parse() {
         let (spec, w) = parse_one(&node(
             "Lake",
@@ -3257,7 +4411,77 @@ mod tests {
         assert_eq!(spec.bank_width, 6.4);
     }
 
+        /// Voxels de água: gorge/overhang, pools, cascades, spring e ilhas
+    /// parseiam (e o vocabulário de bank estende-se sem quebrar o antigo).
     #[test]
+    fn test_water_voxel_attrs_parse() {
+        let (spec, w) = parse_one(&node(
+            "River",
+            &[
+                ("path", "0 0 20 0 40 5"),
+                ("width", "8"),
+                ("bank", "gorge"),
+                ("pool-spacing", "14"),
+                ("cascades", "0"),
+                ("spring", "1"),
+            ],
+        ))
+        .unwrap();
+        assert!(w.is_empty(), "{w:?}");
+        let EntityKind::River { spec } = spec.kind else {
+            panic!("expected river");
+        };
+        assert_eq!(spec.bank, crate::terrain::water::BankStyle::Gorge);
+        assert!(spec.bank.is_voxel());
+        assert_eq!(spec.pool_spacing, 14.0);
+        assert!(!spec.cascades);
+        assert!(spec.spring);
+
+        let (spec, w) = parse_one(&node(
+            "Lake",
+            &[
+                ("at", "10 -10"),
+                ("radius", "18"),
+                ("bank", "overhang"),
+            ],
+        ))
+        .unwrap();
+        let EntityKind::Lake { spec } = spec.kind else {
+            panic!("expected lake");
+        };
+        assert_eq!(spec.bank, crate::terrain::water::BankStyle::Overhang);
+        assert!(spec.islands.is_empty(), "sem filhos: sem ilhas");
+
+        // Ilha como FILHO do lago, com o offset do grupo aplicado ao `at`.
+        let mut lake = node(
+            "Lake",
+            &[
+                ("at", "10 -10"),
+                ("radius", "18"),
+                ("depth", "2.4"),
+            ],
+        );
+        lake.children.push(node(
+            "Island",
+            &[("at", "12 -8"), ("radius", "4.5"), ("height", "1.6")],
+        ));
+        let (spec, w) = parse_one(&lake).unwrap();
+        assert!(w.is_empty(), "{w:?}");
+        let EntityKind::Lake { spec } = spec.kind else {
+            panic!("expected lake");
+        };
+        assert_eq!(spec.islands.len(), 1);
+        let island = &spec.islands[0];
+        assert_eq!(island.at, Vec2::new(12.0, -8.0));
+        assert_eq!(island.radius, 4.5);
+        assert_eq!(island.height, 1.6);
+
+        // bank desconhecido continua a ser erro.
+        let bad = node("River", &[("path", "0 0 10 0"), ("bank", "lava")]);
+        assert!(parse_one(&bad).is_err());
+    }
+
+#[test]
     fn test_river_needs_two_points() {
         assert!(parse_one(&node("River", &[("path", "4 215")])).is_err());
     }
@@ -3356,13 +4580,19 @@ mod tests {
 
     #[test]
     fn test_ground_feature_children_warn() {
+        // Filhos que não sejam `<Island>` continuam avisados (e ignorados).
         let mut lake = node("Lake", &[("at", "0 0")]);
         lake.children = vec![node("Cuboid", &[])];
         let (_, w) = parse_one(&lake).unwrap();
         assert!(
-            w.iter().any(|m| m.contains("children are ignored")),
+            w.iter().any(|m| m.contains("child <Cuboid> ignored")),
             "{w:?}"
         );
+        // E um filho <Island> NÃO avisa (é suportado).
+        let mut lake = node("Lake", &[("at", "0 0")]);
+        lake.children = vec![node("Island", &[("at", "2 2")])];
+        let (_, w) = parse_one(&lake).unwrap();
+        assert!(w.is_empty(), "{w:?}");
     }
 
     #[test]
@@ -3382,5 +4612,36 @@ mod tests {
             spec.segments[0].via,
             vec![Vec2::new(4.0, 2.0), Vec2::new(6.0, 8.0)]
         );
+    }
+
+    #[test]
+    fn test_biome_region_display_name_present_and_absent() {
+        // Com o attr: o nome de exposição viaja no IR, aparado.
+        let (spec, w) = parse_one(&node(
+            "BiomeRegion",
+            &[
+                ("id", "dark-forest"),
+                ("display-name", "  Floresta Sombria  "),
+                ("polygon", "[-56,56;56,56]"),
+            ],
+        ))
+        .unwrap();
+        assert!(w.is_empty(), "display-name é attr conhecido: {w:?}");
+        let EntityKind::BiomeRegion { display_name, .. } = spec.kind else {
+            panic!("expected biome region");
+        };
+        assert_eq!(display_name, "Floresta Sombria");
+
+        // Sem o attr: campo vazio (a engine cai na tabela de fallback).
+        let (spec, w) = parse_one(&node(
+            "BiomeRegion",
+            &[("id", "desert"), ("polygon", "[56,-56;56,56]")],
+        ))
+        .unwrap();
+        assert!(w.is_empty(), "{w:?}");
+        let EntityKind::BiomeRegion { display_name, .. } = spec.kind else {
+            panic!("expected biome region");
+        };
+        assert!(display_name.is_empty());
     }
 }

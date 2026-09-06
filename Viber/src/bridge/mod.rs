@@ -7,12 +7,14 @@
 
 pub mod client;
 pub mod logs;
+pub mod lua;
 
 use std::collections::{BTreeMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use base64::Engine as _;
+use bevy::ecs::message::MessageWriter;
 use bevy::ecs::message::Messages;
 use bevy::ecs::system::In;
 use bevy::input::keyboard::{Key, KeyCode, KeyboardInput, NativeKey};
@@ -36,6 +38,7 @@ pub const METHOD_SCREENSHOT_STATUS: &str = "viber.screenshot_status";
 pub const METHOD_TREE: &str = "viber.tree";
 pub const METHOD_LOGS: &str = "viber.logs";
 pub const METHOD_PROFILER: &str = "viber.profiler";
+pub const METHOD_LUA: &str = "viber.lua";
 pub const METHOD_KEY: &str = "viber.input.key";
 pub const METHOD_TEXT: &str = "viber.input.text";
 pub const METHOD_CLICK: &str = "viber.input.click";
@@ -64,6 +67,9 @@ pub struct CaptureStore {
     next_id: u64,
     pending: Vec<(u64, PathBuf)>,
     captures: BTreeMap<u64, CaptureInfo>,
+    /// Entidades `Screenshot` vivas por id de captura — despawnadas quando
+    /// a captura termina (ver `process_capture_requests`).
+    screenshot_entities: Vec<(u64, Entity)>,
 }
 
 #[derive(Clone, Serialize)]
@@ -81,6 +87,13 @@ pub struct CaptureInfo {
 }
 
 impl CaptureStore {
+    /// Máximo de capturas retidas em memória — cada PNG em base64 pesa
+    /// vários MB; sem evicção, uma sessão longa de QA acumulava centenas
+    /// de MB no processo da engine. 16 porque sob sessão partilhada
+    /// vários agentes fazem poll em paralelo (4 dava `unknown capture id`
+    /// flaky quando outro agente capturava entretanto).
+    const RETAINED: u64 = 16;
+
     fn take_pending(&mut self) -> Vec<(u64, PathBuf)> {
         std::mem::take(&mut self.pending)
     }
@@ -89,7 +102,12 @@ impl CaptureStore {
         self.next_id += 1;
         let id = self.next_id;
         let dir = std::env::temp_dir().join(format!("viber-bridge-{}", std::process::id()));
-        let _ = std::fs::create_dir_all(&dir);
+        if let Err(error) = std::fs::create_dir_all(&dir) {
+            warn!(
+                "bridge: falha ao criar {} para capturas: {error}",
+                dir.display()
+            );
+        }
         let path = dir.join(format!("shot-{id}.png"));
         let info = CaptureInfo {
             id,
@@ -101,6 +119,9 @@ impl CaptureStore {
         };
         self.captures.insert(id, info);
         self.pending.push((id, path.clone()));
+        // Evicção das capturas mais antigas (o PNG no disco fica).
+        let cutoff = id.saturating_sub(Self::RETAINED);
+        self.captures.retain(|k, _| *k > cutoff);
         (id, path)
     }
 
@@ -125,6 +146,16 @@ pub struct BridgePlugin {
 
 impl Plugin for BridgePlugin {
     fn build(&self, app: &mut App) {
+        // O `RemoteHttpPlugin` engole o erro de bind (porta ocupada) sem log
+        // nenhum — a engine corre "saudável" sem bridge e os `viber debug`
+        // batem noutra engine. O listener temporário é largado de imediato
+        // (TOCTOU de ms aceitável; o objetivo é o aviso forte no ring-buffer).
+        if std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, self.port)).is_err() {
+            error!(
+                "bridge: porta {} já ocupada — comandos `viber debug` vão bater noutro processo",
+                self.port
+            );
+        }
         app.insert_resource(BridgeShared::new())
             .add_plugins(
                 RemotePlugin::default()
@@ -134,13 +165,95 @@ impl Plugin for BridgePlugin {
                     .with_method_main(METHOD_TREE, tree)
                     .with_method_main(METHOD_LOGS, logs_method)
                     .with_method_main(METHOD_PROFILER, profiler_snapshot)
+                    .with_method_main(METHOD_LUA, lua::eval)
                     .with_method_main(METHOD_KEY, input_key)
                     .with_method_main(METHOD_TEXT, input_text)
                     .with_method_main(METHOD_CLICK, input_click)
                     .with_method_main(METHOD_MOVE, input_move),
             )
             .add_plugins(RemoteHttpPlugin::default().with_port(self.port))
-            .add_systems(Update, process_capture_requests);
+            .add_systems(Update, process_capture_requests)
+            .init_resource::<PendingMouseClick>()
+            // Depois dos sistemas de input (processam mensagens) e ANTES do
+            // ui_focus_system (que lê just_pressed e a posição do cursor).
+            .add_systems(
+                PreUpdate,
+                deferred_mouse_release
+                    .after(bevy::input::InputSystems)
+                    .before(bevy::ui::UiSystems::Focus),
+            );
+    }
+}
+
+/// Clique sintético em curso: o PRESS à espera de injecção e o botão a
+/// libertar no frame seguinte — ver [`deferred_mouse_release`].
+#[derive(Debug, Default, Resource)]
+struct PendingMouseClick {
+    press: Option<(f32, f32, MouseButton)>,
+    release: Option<MouseButton>,
+}
+
+/// Faz o RELEASE de um clique sintético no frame SEGUINTE ao press.
+///
+/// press + release no MESMO frame eram invisíveis para a UI: o
+/// `ui_focus_system` (PreUpdate) marca `Pressed` e, vendo `just_released`,
+/// agenda o reset — quando `collect_ui_clicks` (Update) corre, o clique já
+/// desapareceu. Com o release um frame depois, `Pressed` sobrevive um Update
+/// e o script vê `viber.ui.clicked(id)`.
+fn deferred_mouse_release(
+    mut pending: ResMut<PendingMouseClick>,
+    mut input: Option<ResMut<ButtonInput<MouseButton>>>,
+    mut windows: Query<(Entity, &mut Window), With<PrimaryWindow>>,
+    mut messages: Option<MessageWriter<MouseButtonInput>>,
+    mut cursor_moved: Option<MessageWriter<CursorMoved>>,
+) {
+    // 1) PRESS injectado AQUI: corre antes do ui_focus_system (PreUpdate) e
+    //    depois dos sistemas de input — o focus vê o just_pressed NESTE frame.
+    //    Sem janela (headless) as mensagens saem na mesma; só a posição
+    //    física do cursor é que não tem onde escrever. Apps sem input/mensagens
+    //    (testes mínimos) não têm onde clicar — descarta em silêncio.
+    let (Some(mut input), Some(mut messages)) = (input, messages) else {
+        pending.press = None;
+        pending.release = None;
+        return;
+    };
+    if let Some((x, y, button)) = pending.press.take() {
+        let entity = windows
+            .single_mut()
+            .map(|(entity, mut window)| {
+                window.set_cursor_position(Some(Vec2::new(x, y)));
+                entity
+            })
+            .unwrap_or(Entity::PLACEHOLDER);
+        if let Some(mut cursor_moved) = cursor_moved {
+            cursor_moved.write(CursorMoved {
+                window: entity,
+                position: Vec2::new(x, y),
+                delta: None,
+            });
+        }
+        messages.write(MouseButtonInput {
+            button,
+            state: ButtonState::Pressed,
+            window: entity,
+        });
+        input.press(button);
+        pending.release = Some(button);
+        return;
+    }
+    // 2) RELEASE no frame seguinte: sem isto, `just_released` no mesmo frame
+    //    fazia o focus descartar o Pressed antes de o script o ler.
+    if let Some(button) = pending.release.take() {
+        let entity = windows
+            .single()
+            .map(|(e, _)| e)
+            .unwrap_or(Entity::PLACEHOLDER);
+        messages.write(MouseButtonInput {
+            button,
+            state: ButtonState::Released,
+            window: entity,
+        });
+        input.release(button);
     }
 }
 
@@ -150,13 +263,51 @@ impl Plugin for BridgePlugin {
 fn process_capture_requests(world: &mut World) {
     let requests = {
         let shared = world.resource::<BridgeShared>();
-        let mut store = shared.captures.lock().unwrap();
+        let mut store = shared
+            .captures
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         store.take_pending()
     };
-    for (_, path) in requests {
-        world
+    let mut spawned = Vec::with_capacity(requests.len());
+    for (id, path) in requests {
+        let entity = world
             .spawn(Screenshot::primary_window())
-            .observe(save_to_disk(path));
+            .observe(save_to_disk(path))
+            .id();
+        spawned.push((id, entity));
+    }
+    if !spawned.is_empty() {
+        let shared = world.resource::<BridgeShared>();
+        let mut store = shared
+            .captures
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        store.screenshot_entities.extend(spawned);
+    }
+    // Captura terminada (ou já evitada do store) → despawn da entidade
+    // `Screenshot`: sem isto cada screenshot deixava uma entidade zombie
+    // com observer para sempre.
+    let finished: Vec<Entity> = {
+        let shared = world.resource::<BridgeShared>();
+        let mut store = shared
+            .captures
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut finished = Vec::new();
+        store
+            .screenshot_entities
+            .retain(|(id, entity)| match store.captures.get(id) {
+                Some(info) if info.status == "pending" => true,
+                _ => {
+                    finished.push(*entity);
+                    false
+                }
+            });
+        finished
+    };
+    for entity in finished {
+        world.despawn(entity);
     }
 }
 
@@ -196,7 +347,10 @@ fn ping(_params: In<Option<Value>>, _world: &mut World) -> BrpResult {
 fn screenshot_request(_params: In<Option<Value>>, world: &mut World) -> BrpResult {
     let (id, path) = {
         let shared = world.resource::<BridgeShared>();
-        let mut store = shared.captures.lock().unwrap();
+        let mut store = shared
+            .captures
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         store.request()
     };
     Ok(json!({ "id": id, "path": path.display().to_string() }))
@@ -209,7 +363,10 @@ fn screenshot_status(params: In<Option<Value>>, world: &mut World) -> BrpResult 
     }
     let params: Params = parse_params(params.0)?;
     let shared = world.resource::<BridgeShared>();
-    let mut store = shared.captures.lock().unwrap();
+    let mut store = shared
+        .captures
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some(info) = store.get(params.id) else {
         return Err(invalid(format!("unknown capture id {}", params.id)));
     };
@@ -226,6 +383,9 @@ fn screenshot_status(params: In<Option<Value>>, world: &mut World) -> BrpResult 
                 }
                 Err(error) => {
                     if let Some(info) = store.captures.get_mut(&params.id) {
+                        // status="error" + causa: o cliente sai logo em vez
+                        // de fazer spin até timeout sem saber o motivo.
+                        info.status = "error".into();
                         info.error = Some(error.to_string());
                     }
                 }
@@ -282,9 +442,19 @@ fn logs_method(params: In<Option<Value>>, world: &mut World) -> BrpResult {
     }
     let params: Params = parse_params(params.0)?;
     let shared = world.resource::<BridgeShared>();
-    let logs = shared.logs.lock().unwrap();
-    let start = logs.len().saturating_sub(params.limit.unwrap_or(100));
-    let entries: Vec<&logs::LogEntry> = logs.iter().skip(start).collect();
+    // Clonar as entradas e LARGAR o lock antes de serializar: serializar sob
+    // o mutex global fazia stall de todos os threads que logam no processo.
+    let entries: Vec<logs::LogEntry> = {
+        let logs = shared
+            .logs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // O limite nunca excede a capacidade do buffer — pedidos absurdos
+        // devolvem tudo o que há, sem alocar além do buffer.
+        let limit = params.limit.unwrap_or(100).min(logs.capacity());
+        let start = logs.len().saturating_sub(limit);
+        logs.iter().skip(start).cloned().collect()
+    };
     Ok(serde_json::to_value(entries).expect("serialize"))
 }
 
@@ -308,9 +478,10 @@ fn send_key(world: &mut World, key_code: KeyCode, state: ButtonState, text: Opti
         _ => Key::Unidentified(NativeKey::Unidentified),
     };
     let text: Option<_> = text.map(|t| t.into());
-    world
-        .resource_mut::<Messages<KeyboardInput>>()
-        .write(KeyboardInput {
+    // No-op silencioso sem os recursos (app de teste mínimo, sem
+    // InputPlugin) — mesma defesa do `deferred_mouse_release`.
+    if let Some(mut messages) = world.get_resource_mut::<Messages<KeyboardInput>>() {
+        messages.write(KeyboardInput {
             key_code,
             logical_key,
             state,
@@ -318,38 +489,47 @@ fn send_key(world: &mut World, key_code: KeyCode, state: ButtonState, text: Opti
             window,
             repeat: false,
         });
-    let mut input = world.resource_mut::<ButtonInput<KeyCode>>();
-    match state {
-        ButtonState::Pressed => input.press(key_code),
-        ButtonState::Released => input.release(key_code),
+    }
+    if let Some(mut input) = world.get_resource_mut::<ButtonInput<KeyCode>>() {
+        match state {
+            ButtonState::Pressed => input.press(key_code),
+            ButtonState::Released => input.release(key_code),
+        }
     }
 }
 
 fn send_mouse_button(world: &mut World, button: MouseButton, state: ButtonState) {
     let window = primary_window(world).unwrap_or(Entity::PLACEHOLDER);
-    world
-        .resource_mut::<Messages<MouseButtonInput>>()
-        .write(MouseButtonInput {
+    if let Some(mut messages) = world.get_resource_mut::<Messages<MouseButtonInput>>() {
+        messages.write(MouseButtonInput {
             button,
             state,
             window,
         });
-    let mut input = world.resource_mut::<ButtonInput<MouseButton>>();
-    match state {
-        ButtonState::Pressed => input.press(button),
-        ButtonState::Released => input.release(button),
+    }
+    if let Some(mut input) = world.get_resource_mut::<ButtonInput<MouseButton>>() {
+        match state {
+            ButtonState::Pressed => input.press(button),
+            ButtonState::Released => input.release(button),
+        }
     }
 }
 
 fn send_cursor(world: &mut World, position: Vec2) {
     let window = primary_window(world).unwrap_or(Entity::PLACEHOLDER);
-    world
-        .resource_mut::<Messages<CursorMoved>>()
-        .write(CursorMoved {
+    if let Some(mut messages) = world.get_resource_mut::<Messages<CursorMoved>>() {
+        messages.write(CursorMoved {
             window,
             position,
             delta: None,
         });
+    }
+    // O hover/clique da bevy_ui lê a posição do cursor NA WINDOW (winit),
+    // não a fila de `CursorMoved` — sem escrever aqui, um clique sintético
+    // nunca "estava" sobre o nó em causa e os botões da UI não reagiam.
+    if let Some(mut window) = world.get_mut::<Window>(window) {
+        window.set_cursor_position(Some(position));
+    }
 }
 
 fn input_key(params: In<Option<Value>>, world: &mut World) -> BrpResult {
@@ -366,6 +546,13 @@ fn input_key(params: In<Option<Value>>, world: &mut World) -> BrpResult {
     }
     let params: Params = parse_params(params.0)?;
     let state = params.state.as_deref().unwrap_or("click");
+    // Estado desconhecido era aceite em silêncio: nada era enviado mas a
+    // resposta dizia {"sent": "foo"} — QA achava que a tecla tinha chegado.
+    if !matches!(state, "click" | "press" | "release") {
+        return Err(invalid(format!(
+            "invalid params: state `{state}` — esperado click | press | release"
+        )));
+    }
     let press = matches!(state, "click" | "press");
     let release = matches!(state, "click" | "release");
     if params.shift == Some(true) {
@@ -389,6 +576,11 @@ fn input_text(params: In<Option<Value>>, world: &mut World) -> BrpResult {
         text: String,
     }
     let params: Params = parse_params(params.0)?;
+    // Cada char vira 2-4 key events no mesmo frame — texto gigante
+    // congelava a engine; rejeitar cedo com invalid params.
+    if params.text.chars().count() > 4096 {
+        return Err(invalid("text demasiado longo (cap 4096 chars)".into()));
+    }
     for char in params.text.chars() {
         let (key_code, shift) = keycode_for_char(char);
         if shift {
@@ -422,9 +614,9 @@ fn input_click(params: In<Option<Value>>, world: &mut World) -> BrpResult {
     }
     let params: Params = parse_params(params.0)?;
     let button = params.button.unwrap_or(MouseButton::Left);
-    send_cursor(world, Vec2::new(params.x, params.y));
-    send_mouse_button(world, button, ButtonState::Pressed);
-    send_mouse_button(world, button, ButtonState::Released);
+    // O clique INTEIRO é injectado no PreUpdate do frame seguinte (ver
+    // `deferred_mouse_release`) — no meio do frame, focus/input já correram.
+    world.resource_mut::<PendingMouseClick>().press = Some((params.x, params.y, button));
     Ok(json!({ "x": params.x, "y": params.y, "button": format!("{button:?}") }))
 }
 

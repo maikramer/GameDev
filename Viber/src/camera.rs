@@ -236,6 +236,165 @@ pub fn noise_pm1(t: f32, seed: u32) -> f32 {
     hash01(i) * (1.0 - u) + hash01(i1) * u
 }
 
+// ── camera shake (modelo de trauma do VibeGame `player-controller/fx.ts`) ──
+
+/// Decaimento do trauma por segundo (tempo REAL — treme durante o hit-stop).
+pub const SHAKE_DECAY: f32 = 1.4;
+/// Offset máximo do shake (m) — amplitude = trauma² × isto.
+pub const SHAKE_MAX_OFFSET: f32 = 0.22;
+/// Roll máximo (rad).
+pub const SHAKE_MAX_ROLL: f32 = 0.03;
+
+/// Trauma acumulado (0..1). A amplitude é `trauma²` — golpes pequenos mal se
+/// leem, o finisher/KO abana a sério. Aditivo: `add_camera_shake` soma com
+/// clamp; vários pedidos no mesmo frame mantêm o mais forte via trauma alto.
+#[derive(Debug, Clone, Resource, Default)]
+pub struct CameraShake {
+    pub trauma: f32,
+}
+
+/// Soma trauma (0..1, clampeado) — pesos típicos: hit 0.22, finisher 0.38,
+/// crítico 0.4, abate 0.5, dano recebido `min(0.45, 0.22 + dmg/90)`.
+pub fn add_camera_shake(shake: &mut CameraShake, amount: f32) {
+    if amount > 0.0 {
+        shake.trauma = (shake.trauma + amount).clamp(0.0, 1.0);
+    }
+}
+
+/// Offset + roll do shake para um dado trauma/altura do ruído. Puro para
+/// testes. `t` em segundos (relógio REAL, frequências altas ~24 Hz).
+pub fn shake_offset_roll(trauma: f32, t: f32) -> (Vec3, f32) {
+    let amp = trauma * trauma;
+    if amp <= 1e-5 {
+        return (Vec3::ZERO, 0.0);
+    }
+    let offset = Vec3::new(
+        noise_pm1(t * 24.0 * 1.3, 21) * SHAKE_MAX_OFFSET,
+        noise_pm1(t * 24.0 * 1.7, 22) * SHAKE_MAX_OFFSET * 0.8,
+        noise_pm1(t * 24.0 * 1.1, 23) * SHAKE_MAX_OFFSET * 0.6,
+    ) * amp;
+    let roll = noise_pm1(t * 24.0 * 1.9, 24) * SHAKE_MAX_ROLL * amp;
+    (offset, roll)
+}
+
+// ── FOV kick (punch de velocidade/impacto) ──────────────────────────────
+
+/// Duração do decay do FOV kick (s) — linear de volta ao FOV base.
+pub const FOV_KICK_DECAY: f32 = 0.3;
+/// Kick do dash [C] (graus) — a rajada de velocidade alarga o ângulo.
+pub const FOV_KICK_DASH: f32 = 8.0;
+/// Kick do land/kill do melee (graus).
+pub const FOV_KICK_IMPACT: f32 = 5.0;
+
+/// FOV kick em curso: graus extra sobre o FOV base da câmara. Pedidos por
+/// [`fov_kick`] (dash, land/kill do melee); consumidos por
+/// [`fov_kick_system`].
+#[derive(Debug, Clone, Resource, Default)]
+pub struct CameraFx {
+    kick: f32,
+    peak: f32,
+    age: f32,
+}
+
+/// Pede um kick de FOV (graus). Pedidos ≤ kick em curso são ignorados (o
+/// impacto dentro do dash não encolhe o punch); maiores recomeçam o decay no
+/// novo pico. Zero/negativo é no-op.
+pub fn fov_kick(fx: &mut CameraFx, deg: f32) {
+    if deg <= 0.0 || deg <= fx.kick {
+        return;
+    }
+    fx.kick = deg;
+    fx.peak = deg;
+    fx.age = 0.0;
+}
+
+/// Kick restante para um pico e um tempo decorrido — decay linear de `peak`
+/// a 0 em [`FOV_KICK_DECAY`] (puro para testes).
+pub fn fov_kick_remaining(peak: f32, elapsed: f32) -> f32 {
+    if peak <= 0.0 || elapsed >= FOV_KICK_DECAY {
+        0.0
+    } else {
+        peak * (1.0 - elapsed / FOV_KICK_DECAY)
+    }
+}
+
+impl CameraFx {
+    /// Avança o decay `dt` segundos e devolve o kick atual (graus).
+    pub fn step(&mut self, dt: f32) -> f32 {
+        self.age += dt;
+        self.kick = fov_kick_remaining(self.peak, self.age);
+        self.kick
+    }
+}
+
+/// FOV base capturado por câmara (rad). Capturado do `Projection` vivo a
+/// descontar o kick em curso — respeita o `fov` autoral do
+/// `ThirdPersonCamera`/`OrbitCamera` (o simple-rpg pede 64°) sem o assumir.
+/// `pub` só porque aparece na assinatura do sistema público; tratar como
+/// interno (o [`fov_kick_system`] é quem o cria e consome).
+#[derive(Debug, Component)]
+pub struct BaseFov(pub(crate) f32);
+
+/// Aplica o kick ao FOV de todas as câmaras orbitais. Nada mais escreve o
+/// `Projection` por frame, logo não há disputa.
+#[allow(clippy::type_complexity)]
+pub fn fov_kick_system(
+    time: Res<Time>,
+    mut fx: ResMut<CameraFx>,
+    mut cameras: Query<(Entity, &mut Projection, Option<&BaseFov>), With<OrbitCamera>>,
+    mut commands: Commands,
+) {
+    let kick_rad = fx.step(time.delta_secs()).to_radians();
+    for (entity, mut projection, base) in &mut cameras {
+        let Projection::Perspective(persp) = projection.as_mut() else {
+            continue;
+        };
+        let base_rad = match base {
+            Some(b) => b.0,
+            None => {
+                // Primeira vista: o FOV vivo menos o kick desta frame é a base.
+                let b = persp.fov - kick_rad;
+                commands.entity(entity).insert(BaseFov(b));
+                b
+            }
+        };
+        persp.fov = base_rad + kick_rad;
+    }
+}
+
+// ── camera kick (solavanco direcional do impacto) ───────────────────────
+
+/// Rigidez da mola do kick (1/s²) — ω ≈ 11.4 rad/s, assenta em ~0.3 s.
+pub const KICK_STIFFNESS: f32 = 130.0;
+/// Amortecimento da mola (1/s) — subamortecida (ζ ≈ 0.6): um solavanco com
+/// leve overshoot lê-se como impacto; criticamente amortecido parece mola
+/// de porta.
+pub const KICK_DAMPING: f32 = 14.0;
+
+/// Solavanco DIRECIONAL da câmara: um impulso de velocidade na direção do
+/// golpe integrado por uma mola subamortecida — a câmara dá um solavanco
+/// para o alvo e regressa. Complemento do shake (ruído omnidirecional) e do
+/// FOV kick ([`CameraFx`]): o kick é o que faz o golpe "empurrar" a imagem.
+#[derive(Debug, Clone, Resource, Default)]
+pub struct CameraKick {
+    pub offset: Vec3,
+    pub vel: Vec3,
+}
+
+/// Soma um impulso de kick (m/s) — chamar no frame do impacto; a direção
+/// típica é a mira do golpe (`aim × força + Vec3::Y × 0.3`).
+pub fn add_camera_kick(kick: &mut CameraKick, impulse: Vec3) {
+    kick.vel += impulse;
+}
+
+/// Passo da mola do kick (puro para testes). dt virtual: durante o hit-stop
+/// o solavanco quase não anda — o shake (tempo real) cobre essa janela.
+pub fn kick_spring_step(offset: Vec3, vel: Vec3, dt: f32) -> (Vec3, Vec3) {
+    let accel = -KICK_STIFFNESS * offset - KICK_DAMPING * vel;
+    let vel = vel + accel * dt;
+    (offset + vel * dt, vel)
+}
+
 /// Decoupled third-person follow for target-less `<OrbitCamera>`s (worlds
 /// with a player). Cameras with an explicit `target` stay on the rigid
 /// follow in [`crate::recipes::spawn::orbit_camera_follow`].
@@ -246,6 +405,9 @@ pub fn noise_pm1(t: f32, seed: u32) -> f32 {
 #[allow(clippy::type_complexity)]
 pub fn third_person_camera(
     time: Res<Time>,
+    real: Res<Time<Real>>,
+    mut shake: ResMut<CameraShake>,
+    mut kick: ResMut<CameraKick>,
     mut cameras: Query<(&mut Transform, &mut OrbitCamera)>,
     players: Query<(&GlobalTransform, &Player), With<Player>>,
     runtime: Option<Res<TerrainRuntime>>,
@@ -256,6 +418,15 @@ pub fn third_person_camera(
     let target_pos = target.translation();
     let dt = time.delta_secs();
     let now = time.elapsed_secs();
+    // Shake decora em tempo REAL (não-escalado): durante o hit-stop a câmara
+    // continua a tremer — é o slow-motion pushback do VibeGame.
+    shake.trauma = (shake.trauma - SHAKE_DECAY * real.delta_secs()).max(0.0);
+    let (shake_off, shake_roll) = shake_offset_roll(shake.trauma, real.elapsed_secs());
+    // Solavanco direcional: mola subamortecida em dt virtual (no hit-stop
+    // quase não anda — o shake cobre essa janela em tempo real).
+    let (kick_off, kick_vel) = kick_spring_step(kick.offset, kick.vel, dt);
+    kick.offset = kick_off;
+    kick.vel = kick_vel;
     for (mut transform, mut cam) in &mut cameras {
         if cam.target.is_some() {
             continue; // named-target camera: rigid follow owns it
@@ -376,8 +547,13 @@ pub fn third_person_camera(
             noise_pm1(now * 0.3, 2) * 0.04,
             noise_pm1(now * 0.35, 3) * 0.05 + noise_pm1(now * 1.1, 8) * 0.02,
         );
-        transform.translation = cam.current_pos + sway;
+        transform.translation = cam.current_pos + sway + shake_off + kick.offset;
         transform.look_at(cam.follow_point + Vec3::Y * LOOK_PIVOT_HEIGHT, Vec3::Y);
+        // Roll do shake em torno do eixo de vista (após o look_at).
+        if shake_roll.abs() > 1e-5 {
+            let view = transform.forward();
+            transform.rotate_axis(view, shake_roll);
+        }
     }
 }
 
@@ -387,6 +563,42 @@ mod tests {
 
     fn approx(a: f32, b: f32) -> bool {
         (a - b).abs() < 1e-4
+    }
+
+    #[test]
+    fn test_kick_spring_settles_back_to_rest() {
+        // Um impulso de impacto tem de assentar a ~zero em 2 s (mola
+        // subamortecida: pode ultrapassar uma vez, nunca divergir).
+        let mut offset = Vec3::ZERO;
+        let mut vel = Vec3::new(2.6, 0.3, 0.0);
+        let dt = 1.0 / 60.0;
+        let mut peak = 0.0_f32;
+        let mut overshot = false;
+        for _ in 0..120 {
+            let (o, v) = kick_spring_step(offset, vel, dt);
+            offset = o;
+            vel = v;
+            peak = peak.max(offset.length());
+            if offset.x < 0.0 {
+                overshot = true;
+            }
+            assert!(offset.length() < 1.0, "kick divergiu: {offset:?}");
+        }
+        assert!(overshot, "subamortecido: espera-se 1 overshoot");
+        assert!(peak > 0.05, "o solavanco tem de se notar: peak {peak}");
+        assert!(
+            offset.length() < 0.01 && vel.length() < 0.05,
+            "assenta em ~0.3 s: offset {offset:?} vel {vel:?}"
+        );
+    }
+
+    #[test]
+    fn test_add_camera_kick_sums_impulses() {
+        let mut kick = CameraKick::default();
+        add_camera_kick(&mut kick, Vec3::new(1.0, 0.0, 0.0));
+        add_camera_kick(&mut kick, Vec3::new(0.0, 0.3, 2.0));
+        assert!(approx(kick.vel.x, 1.0) && approx(kick.vel.y, 0.3) && approx(kick.vel.z, 2.0));
+        assert_eq!(kick.offset, Vec3::ZERO);
     }
 
     #[test]
@@ -700,6 +912,56 @@ mod tests {
     }
 
     #[test]
+    fn test_shake_offset_roll_bounded_and_zero_at_rest() {
+        // Sem trauma: nada se move.
+        let (off, roll) = shake_offset_roll(0.0, 12.0);
+        assert_eq!(off, Vec3::ZERO);
+        assert_eq!(roll, 0.0);
+        // Com trauma, dentro dos limites e dependente do tempo (tremor).
+        let (off1, roll1) = shake_offset_roll(0.5, 1.0);
+        let (off2, _) = shake_offset_roll(0.5, 1.04);
+        assert!(off1.max_element() <= SHAKE_MAX_OFFSET + 1e-4);
+        assert!(roll1.abs() <= SHAKE_MAX_ROLL + 1e-5);
+        assert!(off1.distance(off2) > 1e-4, "treme entre frames");
+        // trauma²: 0.25 de trauma é 4× mais fraco que 0.5.
+        let (soft, _) = shake_offset_roll(0.25, 1.0);
+        assert!(soft.length() < off1.length() / 2.5);
+    }
+
+    #[test]
+    fn test_fov_kick_max_rule_decay_and_guards() {
+        let mut fx = CameraFx::default();
+        // Zero/negativo: no-op.
+        fov_kick(&mut fx, 0.0);
+        fov_kick(&mut fx, -3.0);
+        assert_eq!(fx.kick, 0.0);
+        // Pico no instante do pedido.
+        fov_kick(&mut fx, FOV_KICK_DASH);
+        assert!((fx.step(0.0) - FOV_KICK_DASH).abs() < 1e-5);
+        // Impacto (5°) dentro do dash (8°) NÃO encolhe nem recomeça o decay.
+        fov_kick(&mut fx, FOV_KICK_IMPACT);
+        let half = fx.step(FOV_KICK_DECAY / 2.0);
+        assert!((half - FOV_KICK_DASH * 0.5).abs() < 1e-4, "decay pela metade: {half}");
+        // Kick maior recomeça do novo pico.
+        fov_kick(&mut fx, FOV_KICK_DASH);
+        assert!((fx.kick - FOV_KICK_DASH).abs() < 1e-5);
+        assert!(fx.age < 1e-6, "idade zerada no restart");
+        // Esgota EXATAMENTE no fim do decay e fica em 0.
+        assert!((fx.step(FOV_KICK_DECAY)).abs() < 1e-6);
+        assert_eq!(fx.step(FOV_KICK_DECAY), 0.0);
+    }
+
+    #[test]
+    fn test_fov_kick_remaining_pure() {
+        assert!((fov_kick_remaining(8.0, 0.0) - 8.0).abs() < 1e-6);
+        assert!((fov_kick_remaining(8.0, 0.075) - 6.0).abs() < 1e-4);
+        assert_eq!(fov_kick_remaining(8.0, FOV_KICK_DECAY), 0.0);
+        assert_eq!(fov_kick_remaining(8.0, 10.0), 0.0, "passado o decay");
+        assert_eq!(fov_kick_remaining(0.0, 0.0), 0.0);
+        assert_eq!(fov_kick_remaining(-1.0, 0.0), 0.0);
+    }
+
+    #[test]
     fn test_follow_point_converges_and_lags() {
         // A sprinting character: the follow point must lag behind, then catch up.
         let mut follow = Vec3::ZERO;
@@ -757,6 +1019,8 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(bevy::app::TaskPoolPlugin::default())
             .add_plugins(bevy::time::TimePlugin);
+        app.init_resource::<CameraShake>();
+        app.init_resource::<CameraKick>();
         app.add_systems(bevy::app::Update, third_person_camera);
         app.world_mut().spawn((
             crate::player::Player::default(),

@@ -2,21 +2,25 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
+use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use bevy::app::PluginGroup;
 use bevy::ecs::schedule::IntoScheduleConfigs;
 use clap::{CommandFactory, Parser, Subcommand};
+use serde_json::Value;
 
 use viber::bridge::{self, client::BridgeClient};
 use viber::combat;
 use viber::luau;
 use viber::recipes::ParsedWorld;
 use viber::recipes::spawn::{self, PendingWorld};
+use viber::ui;
 use viber::{
-    ambient, animation, camera, economy, feedback, hud, menus, meshopt, music, particles, physics,
-    physics_fx, player, postfx, profiler, quests, recipes, save, scaffold, skills, sky, spawner,
-    terrain, textures, travel, vitals, worldsys, xml,
+    ai, ambient, animation, audit, camera, economy, feedback, grass, harvest, hud, impact,
+    menus, meshopt, music, particles, physics, physics_fx, player, postfx, profiler, prop_tint,
+    quests, recipes, render_lod, save, scaffold, skills, sky, spawner, terrain, textures, trail,
+    travel, vitals, worldsys, xml,
 };
 
 /// Native Bevy engine for AiGameKit declarative worlds.
@@ -41,8 +45,13 @@ enum Command {
         /// Expose the debug bridge (BRP over HTTP; default port 15702)
         #[arg(long, default_missing_value = "15702", num_args = 0..=1)]
         bridge: Option<u16>,
-        /// Delegate with `cargo run --release` when inside a Viber checkout
+        /// Build with the dev profile instead of release (faster to compile,
+        /// several times slower to play — the engine is dominated by Bevy
+        /// and Rapier, which only get fast when optimized)
         #[arg(long)]
+        debug: bool,
+        /// Accepted for compatibility — release is now the default
+        #[arg(long, hide = true)]
         release: bool,
         /// Always use this binary — never delegate to cargo in a checkout
         #[arg(long)]
@@ -60,6 +69,11 @@ enum Command {
     Debug {
         #[command(subcommand)]
         command: DebugCommand,
+    },
+    /// Sessão partilhada de QA: engine única por mundo com lease de uso
+    Session {
+        #[command(subcommand)]
+        command: SessionCommand,
     },
 }
 
@@ -96,10 +110,37 @@ enum DebugCommand {
         json: bool,
     },
     /// Profiler snapshot from the running engine (fps, frame time, entities,
-    /// active Luau scripts, particle emitters, terrain chunks)
+    /// active Luau scripts, particle emitters, terrain chunks, LOD swaps).
+    ///
+    /// Cheap: safe to poll in a loop. `viber.debug.stats()` is NOT — it walks
+    /// every entity and costs ~100 ms on a 60k-entity world, which shows up
+    /// in the very frame times you are trying to measure.
     Prof {
         #[arg(long)]
         port: Option<u16>,
+        #[arg(long)]
+        json: bool,
+        /// Number of samples to average. The engine's `fps` field is the
+        /// instantaneous frame rate and swings wildly while chunks stream —
+        /// a run of samples is the number worth quoting in a report.
+        #[arg(long, default_value_t = 1)]
+        samples: u32,
+        /// Delay between samples, milliseconds
+        #[arg(long, default_value_t = 500)]
+        interval_ms: u64,
+    },
+    /// Execute Luau na engine (`viber.lua`): mover/teleportar o player,
+    /// desativar/despawnar entidades, dar itens… API completa: `viber.debug.*`
+    /// (ver AGENTS.md). Ex.: `viber debug lua 'return viber.debug.player().x'`
+    Lua {
+        /// Código Luau (globals persistem entre chamadas — REPL)
+        code: Option<String>,
+        /// Ler o código de um ficheiro em vez do argumento
+        #[arg(short, long)]
+        file: Option<PathBuf>,
+        #[arg(long)]
+        port: Option<u16>,
+        /// Imprime a resposta JSON completa (ok/result/applied/warnings)
         #[arg(long)]
         json: bool,
     },
@@ -134,6 +175,65 @@ enum DebugCommand {
         y: f32,
         #[arg(long)]
         port: Option<u16>,
+    },
+}
+
+/// Sessão partilhada de QA: uma engine por mundo + lease de uso para agentes
+/// paralelos ("liberado" / "ocupado, aguarde"). Protocolo no AGENTS.md.
+#[derive(Subcommand)]
+enum SessionCommand {
+    /// Estado da sessão do mundo (default: world.xml no cwd)
+    Status {
+        #[arg(long)]
+        world: Option<PathBuf>,
+    },
+    /// Reclama exclusividade (exit 3 = ocupado, com quem/quanto falta)
+    Claim {
+        /// Nome da tarefa/agente (aparece no "ocupado por …")
+        #[arg(long, default_value = "anon")]
+        owner: String,
+        /// TTL em segundos (auto-expira se o agente morrer)
+        #[arg(long, default_value_t = viber::session::DEFAULT_TTL_SECS)]
+        ttl: u64,
+        /// Espera até N segundos pela libertação em vez de falhar logo
+        #[arg(long)]
+        wait: Option<u64>,
+        #[arg(long)]
+        world: Option<PathBuf>,
+    },
+    /// Renova o lease do dono
+    Touch {
+        /// Nome usado no claim
+        #[arg(long)]
+        owner: Option<String>,
+        #[arg(long, default_value_t = viber::session::DEFAULT_TTL_SECS)]
+        ttl: u64,
+        #[arg(long)]
+        world: Option<PathBuf>,
+    },
+    /// Liberta a sessão (passe o mesmo --owner do claim)
+    Release {
+        /// Nome usado no claim
+        #[arg(long)]
+        owner: Option<String>,
+        #[arg(long)]
+        world: Option<PathBuf>,
+    },
+    /// Sobe a engine partilhada (bloqueia o lease durante o boot)
+    Up {
+        #[arg(long)]
+        world: Option<PathBuf>,
+        /// Porta do bridge. Sem valor, procura a primeira livre a partir de
+        /// 15702 — duas sessões (mundos diferentes) deixam de colidir.
+        #[arg(long)]
+        port: Option<u16>,
+    },
+    /// Lista todas as sessões conhecidas (mundo, porta, estado, dono)
+    List,
+    /// Desce a engine partilhada (não pode haver lease ativo de outro)
+    Down {
+        #[arg(long)]
+        world: Option<PathBuf>,
     },
 }
 
@@ -205,7 +305,7 @@ fn viber_checkout_root(from: &Path) -> Option<PathBuf> {
 /// para correr o motor a partir do código-fonte (como `vibegame run` reconstrói
 /// a engine). Devolve `Ok(None)` quando não há delegação (sem checkout, cargo
 /// ausente ou guard activo) — o chamador corre in-process.
-fn delegate_run_to_cargo(world: &Path, release: bool, bridge: Option<u16>) -> Result<Option<i32>> {
+fn delegate_run_to_cargo(world: &Path, debug: bool, bridge: Option<u16>) -> Result<Option<i32>> {
     if std::env::var_os(CARGO_DELEGATE_GUARD).is_some() {
         return Ok(None);
     }
@@ -216,18 +316,23 @@ fn delegate_run_to_cargo(world: &Path, release: bool, bridge: Option<u16>) -> Re
     let world = std::path::absolute(world)?;
     let mut command = StdCommand::new("cargo");
     command.current_dir(&root);
-    if release {
+    // `--release` is an argument of `cargo run`, not of `cargo`: emitting it
+    // before the subcommand made `viber run --release` fail outright, which
+    // is why every checkout run so far was an unoptimized dev build.
+    command.arg("run");
+    if !debug {
         command.arg("--release");
     }
-    command.arg("run").arg("--").arg("run").arg(&world);
+    command.arg("--").arg("run").arg(&world);
     if let Some(port) = bridge {
         command.arg("--bridge").arg(port.to_string());
     }
+    command.arg("--no-cargo");
     command.env(CARGO_DELEGATE_GUARD, "1");
     eprintln!(
         "viber: Viber checkout detected at {} — delegating to `cargo run{}`",
         root.display(),
-        if release { " --release" } else { "" }
+        if debug { "" } else { " --release" }
     );
     match command.status() {
         Ok(status) => Ok(Some(status.code().unwrap_or(1))),
@@ -252,6 +357,7 @@ fn create(name: &str) -> Result<()> {
 }
 
 fn analyze(path: &Path, strict: bool) -> Result<()> {
+    let path = &std::path::absolute(path)?;
     let world = load_world(path)?;
     let summary = recipes::summarize(&world);
     println!("Viber world: {}", path.display());
@@ -275,18 +381,30 @@ fn analyze(path: &Path, strict: bool) -> Result<()> {
     );
     if summary.terrain > 0 || summary.ground_features() > 0 {
         println!(
-            "  terrain: heightfield {}, ground features {} (pads {}, lakes {}, rivers {}, roads {} + networks {})",
+            "  terrain: heightfield {}, ground features {} (pads {}, lakes {}, rivers {}, cliffs {}, caves {}, arches {}, roads {} + networks {}, decals {})",
             summary.terrain,
             summary.ground_features(),
             summary.terrain_pads,
             summary.lakes,
             summary.rivers,
+            summary.cliffs,
+            summary.caves,
+            summary.arches,
             summary.roads,
-            summary.road_networks
+            summary.road_networks,
+            summary.ground_decals
         );
     }
     if summary.players > 0 {
         println!("  players: {}", summary.players);
+    }
+    // Report de UI fora do bloco dos players: um mundo pode ter UiRoot sem
+    // PlayerGLTF (HUD autoral, câmara orbital) e tinha de aparecer aqui.
+    if summary.ui_roots > 0 || summary.ui_stylesheets > 0 {
+        println!(
+            "  declarative ui: {} root(s), {} elements, {} stylesheet(s)",
+            summary.ui_roots, summary.ui_elements, summary.ui_stylesheets
+        );
     }
     if summary.static_spawners > 0
         || summary.dynamic_spawners > 0
@@ -317,6 +435,38 @@ fn analyze(path: &Path, strict: bool) -> Result<()> {
             if entries.len() > 15 { ", …" } else { "" }
         );
     }
+    // Auditoria de assets: ausentes, compressões/formatos não suportados,
+    // colliders ausentes em glTF — lê só cabeçalhos, sem engine.
+    let (world_dir, asset_root) = world_asset_dirs(path);
+    let report = audit::audit(&world, &world_dir, &asset_root);
+    if report.references > 0 || !report.colliderless.is_empty() {
+        println!(
+            "  assets: {} referência(s) auditada(s), {} problema(s)",
+            report.references,
+            report.issues.len()
+        );
+        for issue in &report.issues {
+            let glyph = match issue.severity {
+                audit::Severity::Missing => "✗",
+                audit::Severity::Warning => "⚠",
+                audit::Severity::Info => "ℹ",
+            };
+            println!("    {glyph} {}", issue.message);
+        }
+        if !report.colliderless.is_empty() {
+            let top: Vec<String> = report.colliderless.iter().take(8).cloned().collect();
+            println!(
+                "    ℹ {} modelo(s) glTF sem collider (passam através): {}{}",
+                report.colliderless.len(),
+                top.join(", "),
+                if report.colliderless.len() > 8 {
+                    ", …"
+                } else {
+                    ""
+                }
+            );
+        }
+    }
     for warning in &world.warnings {
         eprintln!("warning: {warning}");
     }
@@ -327,8 +477,26 @@ fn analyze(path: &Path, strict: bool) -> Result<()> {
             total_skipped(&world)
         );
     }
+    if strict && report.missing_count() > 0 {
+        anyhow::bail!(
+            "strict mode: {} asset(s) ausente(s) — ver os ✗ na secção assets",
+            report.missing_count()
+        );
+    }
     println!("OK");
     Ok(())
+}
+
+/// world_dir (scripts/estilos relativos) + asset root (a pasta que CONTÉM
+/// `assets/`) — a mesma resolução do `run`.
+fn world_asset_dirs(path: &Path) -> (PathBuf, PathBuf) {
+    let world_dir = world_base_dir(path).unwrap_or_else(|| PathBuf::from("."));
+    let asset_root = match world_base_dir(path) {
+        Some(dir) if dir.join("assets").is_dir() => dir,
+        Some(dir) if dir.join("public").is_dir() => dir.join("public"),
+        _ => PathBuf::from("assets"),
+    };
+    (world_dir, asset_root)
 }
 
 fn total_skipped(world: &ParsedWorld) -> usize {
@@ -344,26 +512,51 @@ fn run(path: &Path, bridge_port: Option<u16>) -> Result<()> {
         "Viber — {}",
         path.file_name().and_then(|n| n.to_str()).unwrap_or("world")
     );
-    // O shader do céu viaja embutido e é escrito no asset root do mundo
-    // (materiais custom resolvem "shaders/sky.wgsl" pela asset root).
-    let world_dir = world_base_dir(path).unwrap_or_else(|| PathBuf::from("."));
-    let shaders_dir = world_dir.join("shaders");
-    let _ = std::fs::create_dir_all(&shaders_dir);
-    // O shader do céu é ESPECIALIZADO por mundo: a config do <Sky>/<DayCycle>/
-    // <Weather> é injectada como consts WGSL (o uniform de material custom no
-    // Bevy 0.19 nunca re-uploads — ver sky.rs).
-    let sky_config = sky::SkyConfig::from_world(&world.entities);
-    let _ = std::fs::write(
-        shaders_dir.join("sky.wgsl"),
-        sky_config.render_world_shader(),
-    );
     // Asset root: the folder that CONTAINS `assets/` — the world dir itself
     // when it has one (mirrored assets), else its `public/`, else default.
+    // Calculada ANTES de escrever o shader — materiais custom resolvem
+    // "shaders/sky.wgsl" pela asset root, e escrever em world_dir/shaders
+    // com layout public/ deixava o domo do céu inteiro sem renderizar.
+    let world_dir = world_base_dir(path).unwrap_or_else(|| PathBuf::from("."));
     let asset_root = match world_base_dir(path) {
         Some(dir) if dir.join("assets").is_dir() => dir,
         Some(dir) if dir.join("public").is_dir() => dir.join("public"),
-        _ => PathBuf::from("assets"),
+        // Fallback relativo: o Bevy resolve raiz de assets RELATIVA contra o
+        // exe (target/debug/assets) — o write dos shaders e o leitor de assets
+        // têm de ver o mesmo sítio; absolutizar contra o CWD.
+        _ => std::path::absolute("assets")?,
     };
+    // O shader do céu é ESPECIALIZADO por mundo: a config do <Sky>/<DayCycle>/
+    // <Weather> é injectada como consts WGSL (o uniform de material custom no
+    // Bevy 0.19 nunca re-uploads — ver sky.rs). O mesmo para a água (relógio
+    // do glint + vento das ondas) e para o blend de camadas do terreno
+    // (world span dos splats) — este último só se algum <Terrain> pedir
+    // `layers`; mundos sem camadas nem tocam no ficheiro.
+    let sky_config = sky::SkyConfig::from_world(&world.entities);
+    let water_config = terrain::water_material::WaterSurfaceConfig::from_world(&world.entities);
+    let layers_config = terrain::layer_material::TerrainChunkConfig::from_world(&world.entities);
+    let shaders_dir = asset_root.join("shaders");
+    let _ = std::fs::create_dir_all(&shaders_dir);
+    if let Err(e) = std::fs::write(
+        shaders_dir.join("sky.wgsl"),
+        sky_config.render_world_shader(),
+    ) {
+        eprintln!("viber: falha ao escrever shaders/sky.wgsl: {e}");
+    }
+    if let Err(e) = std::fs::write(
+        shaders_dir.join("water.wgsl"),
+        water_config.render_world_shader(),
+    ) {
+        eprintln!("viber: falha ao escrever shaders/water.wgsl: {e}");
+    }
+    if let Some(layers_config) = &layers_config {
+        if let Err(e) = std::fs::write(
+            shaders_dir.join("terrain_chunk.wgsl"),
+            layers_config.render_world_shader(),
+        ) {
+            eprintln!("viber: falha ao escrever shaders/terrain_chunk.wgsl: {e}");
+        }
+    }
     let mut app = bevy::app::App::new();
     // Registered before `AssetPlugin`, which snapshots the sources when it
     // builds. The reader expands `EXT_meshopt_compression` so the engine can
@@ -388,6 +581,29 @@ fn run(path: &Path, bridge_port: Option<u16>) -> Result<()> {
     app.add_plugins(plugins);
     if let Some(port) = bridge_port {
         app.add_plugins(bridge::BridgePlugin { port });
+        // Regista a engine no registo de sessões MESMO fora de `session up`:
+        // assim qualquer `viber debug …` descobre a porta sozinho. Se já há
+        // uma engine viva registada (sessão de outro agente), não mexe — o
+        // descobridor encontra-a a ela.
+        let session = viber::session::SessionPaths::for_world(path);
+        let register = match session.engine_info() {
+            Some(existing) if existing.pid != std::process::id() => {
+                !bridge::client::port_alive(existing.port)
+            }
+            _ => true,
+        };
+        if register {
+            let _ = session.write_engine(&viber::session::EngineInfo {
+                pid: std::process::id(),
+                port,
+                world: path.display().to_string(),
+                started_at_ms: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0),
+                log: String::new(),
+            });
+        }
         eprintln!("viber: debug bridge at http://127.0.0.1:{port} (try `viber debug probe`)");
     }
     app.insert_resource(PendingWorld {
@@ -397,9 +613,24 @@ fn run(path: &Path, bridge_port: Option<u16>) -> Result<()> {
     // `worldsys::sun_drive` aims the directional light from it; nothing was
     // creating it, so that system failed parameter validation.
     app.init_resource::<worldsys::SunState>();
+    // `hud_menu_system` corre sempre (main loop), mas o `HudMenuState` só
+    // nascia dentro de `build_menu` — mundos sem `TabbedModal` (o HUD é agora
+    // declarativo) panicas na validação do `ResMut` todos os frames.
+    app.init_resource::<hud::menu::HudMenuState>();
     // `sky::spawn_sky` needs `Assets<SkyMaterial>`; without this plugin the
     // startup system panics and leaves `Assets<Mesh>` taken out of the world.
+    // O mesmo para o material de água (`Assets<WaterMaterial>` no bootstrap
+    // do terreno).
     app.add_plugins(bevy::pbr::MaterialPlugin::<sky::SkyMaterial>::default());
+    app.add_plugins(bevy::pbr::MaterialPlugin::<
+        terrain::water_material::WaterMaterial,
+    >::default());
+    // O material das camadas de terreno POR CHUNK (`layers="…"`): o
+    // bootstrap precisa de `Assets<TerrainChunkMaterial>` — sem este plugin
+    // um mundo com camadas degradaria para o caminho legado.
+    app.add_plugins(bevy::pbr::MaterialPlugin::<
+        terrain::layer_material::TerrainChunkMaterial,
+    >::default());
     app.add_plugins(animation::AnimationPlugin);
     app.add_plugins(physics::PhysicsPlugin {
         debug: std::env::var_os("VIBER_PHYSICS_DEBUG").is_some(),
@@ -409,11 +640,24 @@ fn run(path: &Path, bridge_port: Option<u16>) -> Result<()> {
     app.add_plugins(postfx::PostFxPlugin);
     app.add_plugins(terrain::TerrainPlugin);
     app.add_plugins(terrain::runtime::TerrainFeaturesPlugin);
+    // Sub-bosque instanciado (a relva que o `<Vegetation>` não consegue ser):
+    // tiles de lâminas fundidas a 16 m à volta da câmara, vento no vertex
+    // shader, paleta por bioma. `VIBER_GRASS=0` desliga; `VIBER_GRASS_DENSITY`
+    // escala as densidades.
+    app.add_plugins(grass::GrassPlugin);
+    // Escritor único de samplers/mipmaps das texturas carregadas (o registro
+    // `WorldTiledTextures` é consumido aqui; escrever o sampler noutro
+    // sistema reabria a corrida clamp/REPEAT das texturas de chão).
+    app.add_plugins(textures::TexturesPlugin);
     // Fase 2: Luau — scripts de `world_dir/scripts/` com `on_update(dt)`.
     app.add_plugins(luau::LuauScriptPlugin {
         scripts_dir: world_dir.join("scripts"),
     });
     app.add_plugins(combat::CombatPlugin);
+    // Vitals juice (passe de juice r1): deteção robusta de level-up (qualquer
+    // fonte de XP) + fanfarra — bursts magic/sparkle, toast, kick de
+    // exposição e SFX.
+    app.add_plugins(vitals::VitalsPlugin);
     // Feedback de combate (loop 2): dano flutuante, vignette/i-frames,
     // TargetBar/BossBar reais, respawn, status effects.
     app.add_plugins(feedback::FeedbackPlugin);
@@ -432,20 +676,106 @@ fn run(path: &Path, bridge_port: Option<u16>) -> Result<()> {
     // Mundo vivo (loop 9): fog/tint por BiomeRegion, orçamento de luzes,
     // gestos idle de NPC, SFX.
     app.add_plugins(ambient::AmbientPlugin);
+    // day_tint para os materiais dos GltfScene (copas/casas/props) — sem
+    // isto ficam com albedo de dia sob o luar e leem-se "recortados" à noite
+    // (peça exploração, r10; mecanismo documentado no módulo).
+    app.add_plugins(prop_tint::PropTintPlugin);
     // Física Fase 3 (loop 10): knockback cinemático + destrutíveis com queda.
     app.add_plugins(physics_fx::PhysicsFxPlugin);
+    // Colheita nativa (port do plugin `destructible`): árvores/rochas
+    // destrutíveis — ferramenta na mão, quedas, estilhaços, loot no vault.
+    app.add_plugins(harvest::HarvestPlugin);
+    // Sword trace (ribbon da lâmina) + bursts one-shot de partícula.
+    app.add_plugins(trail::TrailPlugin);
+    app.add_plugins(particles::BurstPlugin);
+    // FX de impacto de combate: recoil (squash-and-stretch) do inimigo
+    // atingido + anéis de onda de choque (finisher/slam/bomba/abate).
+    app.add_plugins(impact::ImpactFxPlugin);
+    // FX de água: splash na entrada/saída e esteira de ondas de quem
+    // caminha dentro do lago/rio (a lâmina é estática — o rasto tem de
+    // viver no ECS, ver `terrain::water_fx`).
+    app.add_plugins(terrain::water_fx::WaterFxPlugin);
+    // Trauma da camera shake — o melee (e o dano recebido) somam aqui.
+    app.init_resource::<camera::CameraShake>();
+    // Solavanco direcional da câmara no impacto (mola; o combate soma impulsos).
+    app.init_resource::<camera::CameraKick>();
     // Quests & diálogo (loop 3): 21 quests JSON, flow [E] nos DialogueNPC,
     // QuestTracker, hooks viber.quest_* p/ Luau.
     app.add_plugins(quests::QuestsPlugin);
+    // IA (FSM Rust + respawn): criaturas de <DynamicSpawner> SEM script caem
+    // aqui — sem este plugin nasciam estátuas eternas e a RespawnQueue
+    // nunca drenava.
+    app.add_plugins(ai::AiPlugin);
+    // LOD de render: culling por distância nas instâncias de spawner +
+    // orçamento de sombras. Sem isto as ~9700 cenas glTF do simple-rpg
+    // (60k entidades) entram todas nas 4 cascatas de sombra a cada frame.
+    // `VIBER_RENDER_LOD=0` desliga o culling + a ladder de LOD: é o A/B
+    // honesto para medir o ganho sem trocar de binário.
+    if std::env::var("VIBER_RENDER_LOD").as_deref() != Ok("0") {
+        app.add_plugins(render_lod::RenderLodPlugin);
+    }
     // Profiler: overlay F3 (fps/frame/entidades/scripts ativos) + `viber.profiler`.
     app.add_plugins(profiler::ProfilerPlugin);
+    // UI declarativa (XML + folha de estilo + `viber.ui` no Luau): o HUD do
+    // mundo é autoria, não código.
+    app.add_plugins(ui::UiPlugin);
+    // A instalação de `viber.ui` tem de ganhar ao runtime Luau: sem ordem,
+    // um script activado no frame 1 via `luau_on_add` podia ver `viber.ui`
+    // nil (morria — `Added` dispara 1×) ou queimar o warn-once.
+    app.add_systems(
+        bevy::app::Update,
+        ui::install_ui_script_api
+            .before(luau::luau_on_add)
+            .before(luau::luau_update),
+    );
+    // As mutações que os scripts enfileiram via `viber.ui.*` têm de ser
+    // aplicadas DEPOIS de `luau_update` as produzir — sem ordem, chegavam um
+    // frame tarde (ou em corrida com o produtor). Ordena-se o SET: o
+    // `apply_ui_commands` já vive no `UiSet::Script` e re-adicioná-lo aqui
+    // duplicava a instância no schedule (pânico "more than one instance").
+    // Sem ciclo: a chain luau não referencia UiSets.
+    app.configure_sets(
+        bevy::app::Update,
+        ui::UiSet::Script.after(luau::luau_update),
+    );
+    // E a UI PUBLICA antes dos scripts lerem: os cliques de um frame chegam
+    // ao `on_update` NO MESMO frame, haja como for a ordem arbitrária entre
+    // plugins — sem isto, `viber.ui.clicked(…)` perdia cliques por corrida
+    // (o publish rodava depois do script e limpava a vista).
+    app.configure_sets(
+        bevy::app::Update,
+        (ui::UiSet::Collect, ui::UiSet::Build, ui::UiSet::Bind).before(luau::luau_update),
+    );
+    // O espelho `UiModalsOpen`→`MenusOpen` lê o valor que o driver dos modais
+    // declarativos escreve neste frame (UiSet::Script) — sem ordem, os
+    // consumos de `MenusOpen` (hotbar/movimento/câmara) viam o frame anterior.
+    app.add_systems(
+        bevy::app::Update,
+        menus::mirror_ui_modals_open.after(ui::UiSet::Script),
+    );
+    // O melee lê o `HarvestContext` do MESMO frame (gate colheita-melee):
+    // sem ordem, um press [J] ao ENTRAR no alcance colhia e golpeava com
+    // contexto stale, e ao SAIR perdia o press. A ordenação vai pelo
+    // `HarvestSet` (o conjunto inteiro da colheita) — re-adicionar o
+    // `harvest_context_system` aqui duplicava a instância no schedule e
+    // panica ("more than one instance").
+    app.add_systems(
+        bevy::app::Update,
+        combat::player_melee_attack.after(harvest::HarvestSet),
+    );
     app.add_systems(bevy::app::Startup, spawn::startup);
     app.add_systems(
         bevy::app::Update,
         (
-            hud::hud_minimap_update,
             hud::hud_health_sync,
             hud::hud_xp_sync,
+            // Balão de diálogo: única via que decrementa o timer e volta a
+            // esconder — sem registo, o balão ficava no ecrã para sempre.
+            hud::hud_balloon_update,
+            // Janela do profiler (tecla P): toggle + refresh ao vivo.
+            hud::profiler_window::hud_profiler_window,
+            // Modal [Q]: sincroniza abas/conteúdos e trata cliques.
+            hud::menu::hud_menu_system,
         ),
     );
     app.add_systems(
@@ -466,18 +796,25 @@ fn run(path: &Path, bridge_port: Option<u16>) -> Result<()> {
             hud::hud_prompt_update,
             hud::compass::hud_compass_update,
             hud::hud_minimap_update,
-            // BISECT hud::hud_nametags_update,
+            // Pool de nametags (8 pílulas): re-ligadas — com "!" de quest,
+            // hostis em vermelho e alpha por distância (45→60 m).
+            hud::hud_nametags_update,
             music::music_driver,
             worldsys::daycycle_drive,
             worldsys::sun_drive,
-            worldsys::world_border_clamp,
+            // Clamp da borda DEPOIS do movimento/dash do player (mesmo frame) —
+            // sem ordem, o clamp viajava um frame atrás do WASD.
+            worldsys::world_border_clamp
+                .after(player::player_movement)
+                .after(skills::abilities_system),
             sky::sky_follow_camera,
-            textures::generate_mipmaps_on_load,
             worldsys::seat_statics_once,
             hud::hud_toggle,
             particles::particle_emitter_update,
             spawner::instantiate_spawn_groups,
             vitals::debug_damage,
+            // Dano recebido também abana a câmara (peso ∝ dano).
+            feedback::shake_on_player_hurt,
         ),
     );
     app.run();
@@ -490,12 +827,13 @@ fn dispatch(command: Command) -> Result<std::process::ExitCode> {
         Command::Run {
             path,
             bridge,
-            release,
+            debug,
+            release: _,
             no_cargo,
         } => {
             let world = resolve_world_path(path)?;
             if !no_cargo {
-                if let Some(code) = delegate_run_to_cargo(&world, release, bridge)? {
+                if let Some(code) = delegate_run_to_cargo(&world, debug, bridge)? {
                     return Ok(std::process::ExitCode::from(code as u8));
                 }
             }
@@ -509,7 +847,343 @@ fn dispatch(command: Command) -> Result<std::process::ExitCode> {
                 .with_context(|| format!("analyzing {}", world.display()))
         }),
         Command::Debug { command } => run_debug(command).map(|_| std::process::ExitCode::SUCCESS),
+        Command::Session { command } => run_session(command),
     }
+}
+
+// ---------------------------------------------------------------- session
+
+/// Exit code convencionado para "ocupado, aguarde" — agentes usam-no para
+/// decidir fazer outro trabalho em vez de girar.
+const EXIT_BUSY: u8 = 3;
+
+fn probe_engine(port: u16) -> bool {
+    bridge::client::BridgeClient::localhost(port)
+        .probe()
+        .is_ok()
+}
+
+fn session_paths(world: Option<&PathBuf>) -> Result<(viber::session::SessionPaths, PathBuf)> {
+    // Flag vazia (unwrap_or_default nos chamadores) = auto-descoberta.
+    let flag = world.filter(|p| !p.as_os_str().is_empty()).cloned();
+    let world = resolve_world_path(flag)?;
+    Ok((
+        viber::session::SessionPaths::for_world(&world),
+        std::path::absolute(&world)?,
+    ))
+}
+
+fn run_session(command: SessionCommand) -> Result<std::process::ExitCode> {
+    use std::process::ExitCode;
+    match command {
+        SessionCommand::Status { world } => {
+            let (paths, world_abs) = session_paths(Some(&world.unwrap_or_default()))?;
+            let lease = paths.busy();
+            let engine = paths.engine_info();
+            match (&engine, &lease) {
+                (Some(engine), Some((owner, remaining))) => {
+                    if probe_engine(engine.port) {
+                        println!(
+                            "OCUPADO por '{owner}' (expira em ~{} s) — engine viva em :{} ({})",
+                            remaining.as_secs(),
+                            engine.port,
+                            world_abs.display()
+                        );
+                    } else {
+                        println!(
+                            "OCUPADO por '{owner}' MAS a engine em :{} não responde — `{oil}`",
+                            engine.port,
+                            oil = "viber session down && viber session up"
+                        );
+                    }
+                }
+                (Some(engine), None) => {
+                    if probe_engine(engine.port) {
+                        println!(
+                            "LIBERADO — engine viva em :{} ({})",
+                            engine.port,
+                            world_abs.display()
+                        );
+                    } else {
+                        println!(
+                            "LIBERADO, mas a engine em :{} está MORTA — `viber session down && viber session up`",
+                            engine.port
+                        );
+                    }
+                }
+                (None, lease) => {
+                    if let Some((owner, remaining)) = lease {
+                        println!(
+                            "SEM engine (não há engine.json) mas OCUPADO por '{owner}' (~{} s)",
+                            remaining.as_secs()
+                        );
+                    } else {
+                        println!(
+                            "SEM SESSÃO — suba a engine partilhada: `viber session up` ({})",
+                            world_abs.display()
+                        );
+                    }
+                }
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        SessionCommand::Claim {
+            owner,
+            ttl,
+            wait,
+            world,
+        } => {
+            let (paths, _) = session_paths(Some(&world.unwrap_or_default()))?;
+            match paths.claim(
+                &owner,
+                Duration::from_secs(ttl),
+                wait.map(Duration::from_secs),
+            )? {
+                viber::session::ClaimOutcome::Acquired { ttl } => {
+                    println!(
+                        "RECLAMADO por '{owner}' (TTL {ttl:?}) — faça o QA e `viber session release`"
+                    );
+                    Ok(ExitCode::SUCCESS)
+                }
+                viber::session::ClaimOutcome::Busy {
+                    owner: busy,
+                    remaining,
+                } => {
+                    println!(
+                        "OCUPADO por '{busy}' (expira em ~{} s) — aguarde ou faça outro trabalho",
+                        remaining.as_secs()
+                    );
+                    Ok(ExitCode::from(EXIT_BUSY))
+                }
+            }
+        }
+        SessionCommand::Touch { owner, ttl, world } => {
+            let (paths, _) = session_paths(Some(&world.unwrap_or_default()))?;
+            let renewed = paths.touch(owner.as_deref(), Duration::from_secs(ttl))?;
+            println!("RENOVADO por {renewed:?}");
+            Ok(ExitCode::SUCCESS)
+        }
+        SessionCommand::Release { owner, world } => {
+            let (paths, _) = session_paths(Some(&world.unwrap_or_default()))?;
+            if paths.release(owner.as_deref())? {
+                println!("LIBERTADO — sessão disponível para o próximo agente");
+            } else {
+                println!("não havia lease ativo");
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        SessionCommand::List => session_list().map(|_| ExitCode::SUCCESS),
+        SessionCommand::Up { world, port } => {
+            session_up(world.as_ref().map(PathBuf::as_path), port).map(|_| ExitCode::SUCCESS)
+        }
+        SessionCommand::Down { world } => {
+            session_down(world.as_ref().map(PathBuf::as_path)).map(|_| ExitCode::SUCCESS)
+        }
+    }
+}
+
+/// Sobe a engine partilhada do mundo: reclama o lease durante o boot,
+/// spawna `viber run <mundo> --no-cargo --bridge <porta>` destacado com log
+/// em ficheiro e espera o bridge responder. No fim liberta o lease.
+/// Primeira porta livre a partir de `start`: nem o SO a tem ocupada, nem
+/// outra sessão a reclamou no seu `engine.json`.
+///
+/// Sem isto, `viber session up` usava sempre 15702 e a segunda sessão (outro
+/// mundo) subia com o bridge morto — o cliente falava com a engine errada.
+fn free_bridge_port(start: u16) -> Result<u16> {
+    let taken: Vec<u16> = viber::session::SessionPaths::all()
+        .iter()
+        .filter_map(|(_, paths)| paths.engine_info())
+        .filter(|engine| probe_engine(engine.port))
+        .map(|engine| engine.port)
+        .collect();
+    for port in start..start.saturating_add(64) {
+        if taken.contains(&port) {
+            continue;
+        }
+        if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
+            return Ok(port);
+        }
+    }
+    bail!(
+        "nenhuma porta livre entre {start} e {}",
+        start.saturating_add(64)
+    )
+}
+
+/// Estado de todas as sessões — o mapa que um agente paralelo precisa antes
+/// de decidir onde trabalhar.
+fn session_list() -> Result<()> {
+    let sessions = viber::session::SessionPaths::all();
+    if sessions.is_empty() {
+        println!("sem sessões — `viber session up` cria a primeira");
+        return Ok(());
+    }
+    for (slug, paths) in sessions {
+        let engine = paths.engine_info();
+        let state = match &engine {
+            Some(engine) if probe_engine(engine.port) => format!("viva :{}", engine.port),
+            Some(engine) => format!("MORTA (registada :{})", engine.port),
+            None => "sem engine".to_string(),
+        };
+        let lease = match paths.busy() {
+            Some((owner, remaining)) => {
+                format!("ocupada por '{owner}' (~{}s)", remaining.as_secs())
+            }
+            None => "liberada".to_string(),
+        };
+        let world = engine
+            .as_ref()
+            .map(|engine| engine.world.clone())
+            .unwrap_or_else(|| "?".to_string());
+        println!("{slug}: {state} — {lease} — {world}");
+    }
+    Ok(())
+}
+
+fn session_up(world: Option<&Path>, port: Option<u16>) -> Result<()> {
+    let (paths, world_abs) = session_paths(world.map(PathBuf::from).as_ref())?;
+    // Claim curto só para serializar boot — falha se outro agente está em QA.
+    match paths.claim("session-up", std::time::Duration::from_secs(120), None)? {
+        viber::session::ClaimOutcome::Busy { owner, remaining } => bail!(
+            "sessão ocupada por '{owner}' (~{} s) — engine provavelmente já viva; veja `viber session status`",
+            remaining.as_secs()
+        ),
+        viber::session::ClaimOutcome::Acquired { .. } => {}
+    }
+    let result = (|| -> Result<()> {
+        if let Some(engine) = paths.engine_info() {
+            if probe_engine(engine.port) {
+                bail!(
+                    "engine já viva em :{} ({}) — use-a em vez de subir outra (GPU!)",
+                    engine.port,
+                    engine.world
+                );
+            }
+            eprintln!("viber session: engine anterior morta — a substituir");
+        }
+        let port = match port {
+            Some(port) => port,
+            None => free_bridge_port(viber::bridge::DEFAULT_BRIDGE_PORT)?,
+        };
+        let log = paths.log_file();
+        if let Some(parent) = log.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let log_file = std::fs::File::create(&log)
+            .with_context(|| format!("a criar log {}", log.display()))?;
+        let exe = std::env::current_exe()?;
+        println!(
+            "viber session: a arrancar {} --bridge {} (log: {})",
+            world_abs.display(),
+            port,
+            log.display()
+        );
+        let mut child = std::process::Command::new(exe)
+            .arg("run")
+            .arg(&world_abs)
+            .arg("--no-cargo")
+            .arg("--bridge")
+            .arg(port.to_string())
+            .stdin(std::process::Stdio::null())
+            .stdout(log_file.try_clone()?)
+            .stderr(log_file)
+            .spawn()
+            .context("a spawnar a engine partilhada")?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
+        loop {
+            if let Ok(Some(status)) = child.try_wait() {
+                paths.clear_engine();
+                bail!(
+                    "engine saiu durante o boot ({status}) — veja o log {}",
+                    log.display()
+                );
+            }
+            if probe_engine(port) {
+                paths.write_engine(&viber::session::EngineInfo {
+                    pid: child.id(),
+                    port,
+                    world: world_abs.display().to_string(),
+                    started_at_ms: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or(0),
+                    log: log.display().to_string(),
+                })?;
+                println!(
+                    "viber session: engine viva em :{port} (pid {}) — `viber session claim` antes de usar",
+                    child.id()
+                );
+                return Ok(());
+            }
+            if std::time::Instant::now() > deadline {
+                let _ = child.kill();
+                paths.clear_engine();
+                bail!(
+                    "bridge em :{port} não respondeu em 90 s — veja o log {}",
+                    log.display()
+                );
+            }
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+    })();
+    let _ = paths.release(Some("session-up"));
+    result
+}
+
+/// Desce a engine partilhada (SIGTERM via `kill`; o lease tem de estar livre
+/// ou ser nosso).
+fn session_down(world: Option<&Path>) -> Result<()> {
+    let (paths, _) = session_paths(world.map(PathBuf::from).as_ref())?;
+    if let Some((owner, remaining)) = paths.busy() {
+        if remaining > std::time::Duration::ZERO {
+            bail!(
+                "sessão ocupada por '{owner}' (~{} s) — `release` do dono ou espere o TTL",
+                remaining.as_secs()
+            );
+        }
+    }
+    let Some(engine) = paths.engine_info() else {
+        println!("viber session: nenhuma engine registada — nada a fazer");
+        return Ok(());
+    };
+    // Identidade antes do sinal: um PID reutilizado pode ser um processo
+    // inocente. O cmdline da engine é o binário `viber` (spawn via
+    // `current_exe()`), portanto tem de o conter. Se o processo já morreu, o
+    // /proc nem existe — mantemos o fluxo antigo de limpar os metadados.
+    let cmdline = Path::new("/proc")
+        .join(engine.pid.to_string())
+        .join("cmdline");
+    if let Ok(command) = std::fs::read_to_string(&cmdline) {
+        if !command.contains("viber") {
+            bail!(
+                "pid {} não parece uma engine viber (PID reutilizado?) — engine.json mantido; limpe à mão se confirmar",
+                engine.pid
+            );
+        }
+    }
+    let kill = std::process::Command::new("kill")
+        .arg(engine.pid.to_string())
+        .status();
+    match kill {
+        Ok(status) if status.success() => {
+            println!("viber session: engine pid {} desligada", engine.pid)
+        }
+        _ if cmdline.exists() => {
+            // O kill falhou mas o processo continua vivo — típico de EPERM
+            // (engine de outro utilizador). Não é "já morta": NÃO limpar.
+            bail!(
+                "sem permissão para sinalizar o pid {} — engine.json mantido",
+                engine.pid
+            );
+        }
+        _ => eprintln!(
+            "viber session: kill {} falhou (já morta?) — meta-dados limpos na mesma",
+            engine.pid
+        ),
+    }
+    paths.clear_engine();
+    Ok(())
 }
 
 // ---------------------------------------------------------------- debug client
@@ -617,6 +1291,69 @@ fn print_logs(logs: &serde_json::Value) {
     }
 }
 
+/// Samples the profiler `samples` times and reports the distribution.
+///
+/// One `prof` call is a snapshot of a single frame; a world that streams
+/// terrain and drains a spawner can read 12 fps and 60 fps seconds apart.
+/// Averaging (and reporting the worst sample) is what makes a before/after
+/// comparison mean anything.
+fn print_prof_samples(
+    client: &BridgeClient,
+    samples: u32,
+    interval_ms: u64,
+    json: bool,
+) -> Result<()> {
+    // `--samples 4294967295` não pode tentar pré-alocar ~68 GB (abort do
+    // processo): cap razoável + crescimento on-demand.
+    let samples = samples.min(10_000);
+    let mut fps = Vec::new();
+    let mut frame_ms = Vec::new();
+    let mut last = Value::Null;
+    for index in 0..samples {
+        if index > 0 {
+            std::thread::sleep(Duration::from_millis(interval_ms));
+        }
+        let prof = client.prof()?;
+        if let Some(value) = prof.get("fps").and_then(Value::as_f64) {
+            fps.push(value);
+        }
+        if let Some(value) = prof.get("frame_ms_avg").and_then(Value::as_f64) {
+            frame_ms.push(value);
+        }
+        last = prof;
+    }
+    if fps.is_empty() {
+        bail!("o profiler não devolveu `fps` em nenhuma amostra");
+    }
+    let mean = |values: &[f64]| values.iter().sum::<f64>() / values.len() as f64;
+    let worst = fps.iter().cloned().fold(f64::INFINITY, f64::min);
+    let best = fps.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    if json {
+        let summary = serde_json::json!({
+            "samples": fps.len(),
+            "interval_ms": interval_ms,
+            "fps_avg": mean(&fps),
+            "fps_min": worst,
+            "fps_max": best,
+            "frame_ms_avg": mean(&frame_ms),
+            "last": last,
+        });
+        println!("{summary:#}");
+    } else {
+        println!(
+            "fps  média {:.1}  |  pior {:.1}  |  melhor {:.1}   ({} amostras a cada {} ms)",
+            mean(&fps),
+            worst,
+            best,
+            fps.len(),
+            interval_ms
+        );
+        println!("frame média {:.2} ms", mean(&frame_ms));
+        print_prof(&last);
+    }
+    Ok(())
+}
+
 fn run_debug(command: DebugCommand) -> Result<()> {
     match command {
         DebugCommand::Probe { port } => {
@@ -651,13 +1388,22 @@ fn run_debug(command: DebugCommand) -> Result<()> {
                 print_logs(&logs);
             }
         }
-        DebugCommand::Prof { port, json } => {
+        DebugCommand::Prof {
+            port,
+            json,
+            samples,
+            interval_ms,
+        } => {
             let client = BridgeClient::localhost(bridge::client::resolve_port(port));
-            let prof = client.prof()?;
-            if json {
-                println!("{prof:#}");
+            if samples <= 1 {
+                let prof = client.prof()?;
+                if json {
+                    println!("{prof:#}");
+                } else {
+                    print_prof(&prof);
+                }
             } else {
-                print_prof(&prof);
+                print_prof_samples(&client, samples, interval_ms, json)?;
             }
         }
         DebugCommand::Key {
@@ -680,6 +1426,60 @@ fn run_debug(command: DebugCommand) -> Result<()> {
         DebugCommand::Move { x, y, port } => {
             let client = BridgeClient::localhost(bridge::client::resolve_port(port));
             client.move_cursor(x, y)?;
+        }
+        DebugCommand::Lua {
+            code,
+            file,
+            port,
+            json,
+        } => {
+            let source = match (code, file) {
+                (Some(code), _) => code,
+                (None, Some(path)) => std::fs::read_to_string(&path)
+                    .with_context(|| format!("a ler {}", path.display()))?,
+                (None, None) => {
+                    eprintln!("uso: viber debug lua '<código>' | --file <ficheiro.lua>");
+                    return Ok(());
+                }
+            };
+            let client = BridgeClient::localhost(bridge::client::resolve_port(port));
+            let response = client.lua(&source)?;
+            let ok = response.get("ok").and_then(Value::as_bool).unwrap_or(false);
+            if json {
+                println!("{response:#}");
+            } else if ok {
+                match response.get("result") {
+                    Some(Value::Null) | None => println!("(nil)"),
+                    Some(value) => println!("{value:#}"),
+                }
+                if let Some(applied) = response.get("applied").and_then(Value::as_u64) {
+                    if applied > 0 {
+                        eprintln!("({applied} operações aplicadas)");
+                    }
+                }
+                for warning in response
+                    .get("warnings")
+                    .and_then(Value::as_array)
+                    .map(Vec::as_slice)
+                    .unwrap_or_default()
+                {
+                    eprintln!("aviso: {warning}");
+                }
+            } else {
+                let error = response
+                    .get("error")
+                    .and_then(Value::as_str)
+                    .unwrap_or("erro desconhecido");
+                for warning in response
+                    .get("warnings")
+                    .and_then(Value::as_array)
+                    .map(Vec::as_slice)
+                    .unwrap_or_default()
+                {
+                    eprintln!("aviso: {warning}");
+                }
+                bail!("erro Luau: {error}");
+            }
         }
     }
     Ok(())

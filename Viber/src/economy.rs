@@ -27,6 +27,11 @@ use crate::vitals::Health;
 pub const POTION_HEAL: f32 = 50.0;
 /// Cooldown entre usos da hotbar (s).
 pub const HOTBAR_COOLDOWN: f32 = 1.0;
+/// Ouro inicial do herói (onboarding — nascia com 0 g, sem conseguir sequer
+/// comprar uma poção de 25 g).
+pub const STARTING_GOLD: u32 = 30;
+/// Poções iniciais do herói: 1 uso imediato da hotbar [1].
+pub const STARTING_POTIONS: u32 = 1;
 
 // ── vault ───────────────────────────────────────────────────────────────
 
@@ -65,7 +70,9 @@ impl Vault {
     /// Adiciona `amount` unidades de um item (max stack 99, como no TS).
     pub fn item_add(&mut self, id: &str, amount: u32) {
         let entry = self.items.entry(normalize_item(id)).or_default();
-        *entry = (*entry + amount).min(99);
+        // saturating: um entry alto vindo de save corrompido não pode dar
+        // overflow (panic em dev/test, wrap em release) antes do `.min`.
+        *entry = entry.saturating_add(amount).min(99);
     }
 
     pub fn item_count(&self, id: &str) -> u32 {
@@ -127,90 +134,77 @@ pub fn normalize_item(raw: &str) -> String {
     raw.trim().to_lowercase()
 }
 
-// ── markers de UI ───────────────────────────────────────────────────────
+// ── plugin ──────────────────────────────────────────────────────────────
 
-/// Slot da hotbar ([1] poção / [2] antídoto).
-#[derive(Component)]
-struct HotbarSlot {
-    item: &'static str,
-    key_hint: &'static str,
-    label: &'static str,
+/// Kit de arranque do herói: [`STARTING_GOLD`] de ouro + [`STARTING_POTIONS`]
+/// poção. Vive num sistema Startup (NÃO em `Vault::default()`) para o save
+/// antigo carregado não voltar a receber o kit — o `apply_save` escreve por
+/// cima de qualquer valor aqui depositado.
+pub fn apply_starting_kit(vault: &mut Vault) {
+    vault.add_resource("gold", STARTING_GOLD);
+    vault.item_add("potion", STARTING_POTIONS);
 }
 
-// ── plugin ──────────────────────────────────────────────────────────────
+fn starting_kit_system(mut vault: ResMut<Vault>) {
+    apply_starting_kit(&mut vault);
+}
 
 pub struct EconomyPlugin;
 
 impl Plugin for EconomyPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Vault>()
-            .add_systems(Startup, spawn_hotbar)
+            // Idempotente com o Ambient/Combat (apps mínimas auto-suficientes).
+            .add_message::<crate::ambient::SfxEvent>()
+            .add_systems(Startup, starting_kit_system)
             .add_systems(
                 Update,
                 (
                     hotbar_use_system,
-                    hotbar_sync_system,
                     vault_chips_system,
+                    vault_loot_sfx_system,
                     debug_give_system,
                 ),
             );
     }
 }
 
-// ── hotbar ──────────────────────────────────────────────────────────────
-
-fn spawn_hotbar(mut commands: Commands) {
-    commands
-        .spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                bottom: Val::Px(52.0),
-                left: Val::Px(12.0),
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(4.0),
-                ..Default::default()
-            },
-            Name::new("fx:hotbar"),
-        ))
-        .with_children(|bar| {
-            for slot in [
-                HotbarSlot {
-                    item: "potion",
-                    key_hint: "[1]",
-                    label: "Poção",
-                },
-                HotbarSlot {
-                    item: "antidote",
-                    key_hint: "[2]",
-                    label: "Antídoto",
-                },
-            ] {
-                bar.spawn((
-                    Node {
-                        flex_direction: FlexDirection::Row,
-                        column_gap: Val::Px(6.0),
-                        padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
-                        border_radius: BorderRadius::all(Val::Px(9.0)),
-                        ..Default::default()
-                    },
-                    BackgroundColor(Color::srgba(0.08, 0.08, 0.07, 0.8)),
-                    Name::new(format!("hotbar:{}", slot.item)),
-                    slot,
-                ))
-                .with_children(|slot_node| {
-                    slot_node.spawn((
-                        Text::new(""),
-                        TextColor(Color::srgba(0.95, 0.93, 0.85, 0.9)),
-                        TextFont::from_font_size(13.0),
-                        HotbarCount,
-                    ));
+/// SFX de loot (passe de juice r1): o vault CRESCER toca o clip de loot —
+/// uma vez por frame de alteração, de QUALQUER fonte (colheita, baús,
+/// recompensas, debug, scripts), porque vigia o total do vault e não os
+/// caminhos de entrada. A primeira observação (kit de arranque, save
+/// carregado) não fanfarra.
+fn vault_loot_sfx_system(
+    vault: Res<Vault>,
+    mut previous: Local<Option<u64>>,
+    mut sfx: MessageWriter<crate::ambient::SfxEvent>,
+) {
+    if !vault.is_changed() {
+        return;
+    }
+    let total: u64 = vault.gold as u64
+        + vault.wood as u64
+        + vault.stone as u64
+        + vault.items.values().map(|&n| n as u64).sum::<u64>();
+    match *previous {
+        None => *previous = Some(total),
+        Some(prev) => {
+            if total > prev {
+                sfx.write(crate::ambient::SfxEvent {
+                    clip: crate::ambient::SfxClip::Loot,
+                    position: None,
                 });
             }
-        });
+            *previous = Some(total);
+        }
+    }
 }
 
-#[derive(Component)]
-struct HotbarCount;
+// ── hotbar ──────────────────────────────────────────────────────────────
+// As linhas de texto ("[1] Poção x0", "[2] Antídoto x0") saíram do ecrã: as
+// contagens são agora pips do HUD declarativo, ligados aos bindings `potion`
+// e `antidote` (`src/ui/bind.rs`). As teclas continuam a ser [1] e [2] — o
+// jogador vê o stock, não a legenda.
 
 /// `[1]/[2]`: usar poção (cura 50) / antídoto (limpa veneno).
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
@@ -243,15 +237,17 @@ fn hotbar_use_system(
     } else {
         ("antidote", "Antídoto")
     };
+    // O player vem PRIMEIRO: sem herói (ausente/Disabled) o item não pode
+    // ser consumido sem efeito nenhum.
+    let Ok((mut health, effects)) = players.single_mut() else {
+        return;
+    };
     if !vault.item_take(item) {
         toasts.write(ScriptToast(format!("{label}: sem stock no inventário")));
         *cooldown = HOTBAR_COOLDOWN;
         return;
     }
     *cooldown = HOTBAR_COOLDOWN;
-    let Ok((mut health, effects)) = players.single_mut() else {
-        return;
-    };
     if potion {
         let healed = POTION_HEAL.min(health.max - health.current);
         health.current = (health.current + POTION_HEAL).min(health.max);
@@ -262,7 +258,10 @@ fn hotbar_use_system(
                 color: Color::srgb(0.4, 1.0, 0.45),
             });
         }
-        toasts.write(ScriptToast(format!("Poção usada (+{} HP)", healed.round() as i32)));
+        toasts.write(ScriptToast(format!(
+            "Poção usada (+{} HP)",
+            healed.round() as i32
+        )));
     } else if let Some(mut effects) = effects {
         if effects.venom > 0.0 {
             effects.venom = 0.0;
@@ -292,32 +291,6 @@ fn debug_give_system(
     toasts.write(ScriptToast(
         "QA: +10 ouro, +6 madeira, +6 pedra, poção, antídoto, bomba".into(),
     ));
-}
-
-/// Contagens da hotbar em tempo real.
-fn hotbar_sync_system(
-    vault: Res<Vault>,
-    slots: Query<(&HotbarSlot, &Children)>,
-    mut counts: Query<&mut Text, With<HotbarCount>>,
-) {
-    if !vault.is_changed() {
-        return;
-    }
-    for (slot, children) in &slots {
-        for child in children.iter() {
-            if let Ok(mut text) = counts.get_mut(child) {
-                let wanted = format!(
-                    "{} {} x{}",
-                    slot.key_hint,
-                    slot.label,
-                    vault.item_count(slot.item)
-                );
-                if text.0 != wanted {
-                    text.0 = wanted;
-                }
-            }
-        }
-    }
 }
 
 /// Chips `chip:gold|wood|stone` do HUD mostram o vault real.
@@ -388,5 +361,17 @@ mod tests {
             vault.add_resource(kind, 1);
             assert_eq!(vault.resource(kind), 1);
         }
+    }
+
+    #[test]
+    fn test_starting_kit_gives_gold_and_potion() {
+        // O Vault::default() continua VAZIO (o kit é do boot, não do tipo —
+        // senão carregar um save antigo voltava a dar 30 g).
+        let mut vault = Vault::default();
+        assert_eq!(vault.gold, 0);
+        assert_eq!(vault.item_count("potion"), 0);
+        apply_starting_kit(&mut vault);
+        assert_eq!(vault.gold, STARTING_GOLD);
+        assert_eq!(vault.item_count("potion"), STARTING_POTIONS);
     }
 }

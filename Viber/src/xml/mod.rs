@@ -20,6 +20,10 @@ use anyhow::{Context, Result};
 pub struct XmlNode {
     pub tag: String,
     pub attrs: Vec<(String, String)>,
+    /// Direct text content, whitespace-trimmed and with child elements
+    /// removed — what `<UiText>100/100</UiText>` puts between the tags.
+    /// Empty for the structural tags that carry none.
+    pub text: String,
     pub children: Vec<XmlNode>,
 }
 
@@ -42,8 +46,26 @@ pub struct XmlDocument {
     pub children: Vec<XmlNode>,
 }
 
+/// Cap de tamanho por ficheiro XML (world raiz e includes). Sem teto,
+/// `<Include src="/dev/zero">`/um world.xml gigante ia parar inteiro à RAM
+/// (e um FIFO pendurava a leitura para sempre). Mundos reais ficam longe
+/// disto; 64 MB já é patológico.
+const MAX_WORLD_FILE_BYTES: u64 = 64 << 20;
+
 /// Read and parse an XML file.
 pub fn parse_file(path: &Path) -> Result<XmlDocument> {
+    let meta = std::fs::metadata(path).with_context(|| format!("reading {}", path.display()))?;
+    if !meta.is_file() {
+        anyhow::bail!("não é um ficheiro regular: {}", path.display());
+    }
+    let len = meta.len();
+    if len > MAX_WORLD_FILE_BYTES {
+        anyhow::bail!(
+            "ficheiro demasiado grande: {len} bytes (cap {} MB): {}",
+            MAX_WORLD_FILE_BYTES / (1 << 20),
+            path.display()
+        );
+    }
     let raw =
         std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     parse_str_with_context(&normalize_bare_bools(&raw), path)
@@ -56,7 +78,7 @@ fn parse_str_with_context(src: &str, path: &Path) -> Result<XmlDocument> {
     Ok(XmlDocument {
         root_tag: root.tag_name().name().to_ascii_lowercase(),
         root_attrs: collect_attrs(root),
-        children: collect_children(root),
+        children: collect_children(root)?,
     })
 }
 
@@ -66,13 +88,38 @@ fn collect_attrs(node: roxmltree::Node) -> Vec<(String, String)> {
         .collect()
 }
 
-fn collect_children(node: roxmltree::Node) -> Vec<XmlNode> {
+/// Concatenates an element's own text nodes (not its descendants').
+fn collect_text(node: roxmltree::Node) -> String {
+    let mut out = String::new();
+    for child in node.children().filter(|c| c.is_text()) {
+        out.push_str(child.text().unwrap_or_default());
+    }
+    out.trim().to_string()
+}
+
+/// Cap de profundidade do aninhamento de elementos. XML gerado profundo
+/// demais estourava a stack na recursão de [`collect_children`] — e o Drop
+/// recursivo de `XmlNode` também é recursivo, por isso o cap tem de ser do
+/// mesmo lado. Mundos reais não passam de ~20 níveis (includes: 8).
+const MAX_XML_DEPTH: usize = 256;
+
+fn collect_children(node: roxmltree::Node) -> Result<Vec<XmlNode>> {
+    collect_children_at(node, 0)
+}
+
+fn collect_children_at(node: roxmltree::Node, depth: usize) -> Result<Vec<XmlNode>> {
+    if depth > MAX_XML_DEPTH {
+        anyhow::bail!("XML aninhado além de {MAX_XML_DEPTH} níveis — recursão recusada");
+    }
     node.children()
         .filter(|n| n.is_element())
-        .map(|n| XmlNode {
-            tag: n.tag_name().name().to_string(),
-            attrs: collect_attrs(n),
-            children: collect_children(n),
+        .map(|n| {
+            Ok(XmlNode {
+                tag: n.tag_name().name().to_string(),
+                attrs: collect_attrs(n),
+                text: collect_text(n),
+                children: collect_children_at(n, depth + 1)?,
+            })
         })
         .collect()
 }
@@ -161,6 +208,29 @@ pub fn normalize_bare_bools(src: &str) -> String {
                 out.push('>');
                 i += 1;
             }
+        } else if b[i..].starts_with(b"<!--") {
+            // Comment: copy verbatim até `-->` — sem isto, `<Entity foo>`
+            // dentro de um comentário era reescrito como foo="true".
+            let start = i;
+            i += 4;
+            while i + 3 <= b.len() && &b[i..i + 3] != b"-->" {
+                i += 1;
+            }
+            if i + 3 <= b.len() {
+                i += 3; // include o fecho
+            }
+            out.push_str(&src[start..i]);
+        } else if b[i..].starts_with(b"<![CDATA[") {
+            // CDATA: copy verbatim até `]]>`, pelo mesmo motivo.
+            let start = i;
+            i += 9;
+            while i + 3 <= b.len() && &b[i..i + 3] != b"]]>" {
+                i += 1;
+            }
+            if i + 3 <= b.len() {
+                i += 3; // include o fecho
+            }
+            out.push_str(&src[start..i]);
         } else {
             // Not a tag start (`<!--`, `</`, `<?`, stray `<`): copy verbatim.
             // Step past this '<' first or a leading one would loop forever.
@@ -226,6 +296,14 @@ mod tests {
     }
 
     #[test]
+    fn test_normalize_skips_tags_inside_comments_and_cdata() {
+        // Regression: tags com bools bare dentro de comentários/CDATA eram
+        // reescritas (foo → foo="true") dentro do bloco verbatim.
+        let src = "<!-- <Entity shadows> -->\n<world><![CDATA[<Fog enabled>]]></world>";
+        assert_eq!(roundtrip(src), src);
+    }
+
+    #[test]
     fn test_parse_file_returns_root_tag() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("bad.xml");
@@ -259,6 +337,18 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_file_rejects_non_regular_file() {
+        // Diretoria: `read_to_string` dava erro confuso; agora bail limpo
+        // (o mesmo gate recusa /dev/zero e FIFOs).
+        let dir = tempfile::tempdir().unwrap();
+        let err = parse_file(dir.path()).unwrap_err();
+        assert!(
+            err.to_string().contains("não é um ficheiro regular"),
+            "{err}"
+        );
+    }
+
+    #[test]
     fn test_parse_file_accepts_bare_bool_attrs_end_to_end() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("w.xml");
@@ -272,6 +362,7 @@ mod tests {
         let node = XmlNode {
             tag: "Entity".into(),
             attrs: vec![("name".into(), "hero".into())],
+            text: String::new(),
             children: vec![],
         };
         assert_eq!(node.attr("name"), Some("hero"));

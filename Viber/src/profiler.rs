@@ -187,6 +187,10 @@ pub fn snapshot(world: &mut World) -> serde_json::Value {
         .get_resource::<Time>()
         .map(Time::elapsed_secs)
         .unwrap_or(0.0);
+    let lod = world
+        .get_resource::<crate::render_lod::MeshLodStats>()
+        .copied()
+        .unwrap_or_default();
 
     json!({
         "fps": fps,
@@ -200,6 +204,12 @@ pub fn snapshot(world: &mut World) -> serde_json::Value {
         },
         "particle_emitters": counters.particle_emitters,
         "terrain_chunks": counters.terrain_chunks,
+        // LOD de render: barato (um recurso), ao contrário do `stats()` do
+        // bridge — este é o caminho a amostrar em ciclo.
+        "render_lod": {
+            "swaps_last_frame": lod.swaps_last_frame,
+            "pending": lod.pending,
+        },
         "uptime_s": uptime,
     })
 }
@@ -288,12 +298,15 @@ fn spawn_overlay(mut commands: Commands) {
         });
 }
 
-/// Toggle **F3** + reescrita do corpo do overlay (throttle `OVERLAY_REFRESH`).
+/// Toggle **F3** (documentado; **P** funciona como alias) + reescrita do
+/// corpo do overlay (throttle `OVERLAY_REFRESH`). Sem menus abertos — o P
+/// é a tecla de aprender skill na tab Skills.
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn profiler_overlay_update(
     mut state: ResMut<HudState>,
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
+    menus: Res<crate::menus::MenusOpen>,
     mut q_text: Query<&mut Text, With<ProfilerText>>,
     mut q_root: Query<&mut Visibility, With<ProfilerOverlay>>,
     stats: Res<FrameStats>,
@@ -304,7 +317,8 @@ fn profiler_overlay_update(
     emitters: Query<(), With<ParticleEmitter>>,
     chunks: Query<(), With<TerrainChunk>>,
 ) {
-    if keys.just_pressed(KeyCode::KeyP) {
+    let toggled = keys.just_pressed(KeyCode::F3) || keys.just_pressed(KeyCode::KeyP);
+    if toggled && !menus.any() {
         state.visible = !state.visible;
     }
     let wanted = if state.visible {

@@ -24,8 +24,8 @@ use serde::Deserialize;
 
 use crate::hud::HudBalloon;
 use crate::luau::{LuaScriptRef, ScriptInteraction, ScriptToast};
-use crate::vitals::Health;
 use crate::player::Player;
+use crate::vitals::Health;
 use crate::vitals::Xp;
 
 /// Alcance do diálogo com `<DialogueNPC>` (mesmo do prompt do HUD).
@@ -62,6 +62,10 @@ pub struct QuestObjective {
     /// espaços de nomes de entidades.
     pub target: String,
     pub count: u32,
+    /// visit: raio autoral de proximidade (m) — os JSON trazem 9-12.
+    /// Ausente → fallback [`VISIT_RADIUS_M`].
+    #[serde(default)]
+    pub radius: Option<f32>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -140,6 +144,14 @@ impl Default for QuestLog {
             states: HashMap::new(),
             done: Vec::new(),
         }
+    }
+}
+
+impl QuestDef {
+    /// Raio efetivo do objetivo visit: o `radius` do JSON com fallback
+    /// [`VISIT_RADIUS_M`] (questões antigas sem o campo).
+    pub fn visit_radius(&self) -> f32 {
+        self.objective.radius.unwrap_or(VISIT_RADIUS_M)
     }
 }
 
@@ -243,8 +255,7 @@ impl QuestLog {
             .defs
             .iter()
             .filter(|d| {
-                d.objective.kind == "kill"
-                    && normalize_target(&d.objective.target) == wanted
+                d.objective.kind == "kill" && normalize_target(&d.objective.target) == wanted
             })
             .filter(|d| self.states.contains_key(&d.id))
             .map(|d| (d.id.clone(), d.objective.count))
@@ -317,9 +328,17 @@ impl QuestLog {
         match def.objective.kind.as_str() {
             "visit" => format!("{}/{}", active.visited.len(), def.objective.count),
             "collect" => {
-                format!("{}/{}", self.collect_progress(def, vault), def.objective.count)
+                format!(
+                    "{}/{}",
+                    self.collect_progress(def, vault),
+                    def.objective.count
+                )
             }
-            _ => format!("{}/{}", active.progress.min(def.objective.count), def.objective.count),
+            _ => format!(
+                "{}/{}",
+                active.progress.min(def.objective.count),
+                def.objective.count
+            ),
         }
     }
 }
@@ -342,11 +361,15 @@ pub struct QuestsPlugin;
 impl Plugin for QuestsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<QuestLog>()
-            .add_systems(Startup, spawn_tracker)
+            // Idempotente com o Ambient/Combat/Vitals (apps mínimas de teste
+            // ficam auto-suficientes — mesmo padrão do `CombatPlugin`).
+            .add_message::<crate::ambient::SfxEvent>()
+            .add_systems(Startup, (spawn_tracker, spawn_quest_banner))
             .add_systems(
                 Update,
                 (
                     quest_dialogue_system,
+                    quest_banner_drive,
                     quest_visit_system,
                     quest_tracker_system,
                     quest_debug_teleport,
@@ -388,10 +411,7 @@ fn quest_debug_nearest(
     };
     let x = target.x + 1.6;
     let z = target.z + 1.6;
-    let y = terrain
-        .as_ref()
-        .map(|t| t.sample(x, z))
-        .unwrap_or(target.y);
+    let y = terrain.as_ref().map(|t| t.sample(x, z)).unwrap_or(target.y);
     transform.translation = Vec3::new(x, y + 0.1, z);
     toasts.write(ScriptToast("QA: teleport ao NPC mais próximo".into()));
 }
@@ -418,14 +438,11 @@ fn quest_debug_hostile(
     };
     let player_pos = player_global.translation();
     // hostil = script de inimigo/boss (townsfolk/POIs ficam de fora)
-    let is_hostile = |path: &str| {
-        path.contains("enemies/") || path.contains("bosses/") || path.contains("boss")
-    };
+    let is_hostile =
+        |path: &str| path.contains("enemies/") || path.contains("bosses/") || path.contains("boss");
     let Some(target) = creatures
         .iter()
-        .filter(|(_, script, interaction)| {
-            interaction.is_none() && is_hostile(&script.path)
-        })
+        .filter(|(_, script, interaction)| interaction.is_none() && is_hostile(&script.path))
         .min_by(|(a, _, _), (b, _, _)| {
             a.translation()
                 .distance_squared(player_pos)
@@ -438,10 +455,7 @@ fn quest_debug_hostile(
     };
     let x = target.x + 1.8;
     let z = target.z + 1.8;
-    let y = terrain
-        .as_ref()
-        .map(|t| t.sample(x, z))
-        .unwrap_or(target.y);
+    let y = terrain.as_ref().map(|t| t.sample(x, z)).unwrap_or(target.y);
     transform.translation = Vec3::new(x, y + 0.1, z);
     toasts.write(ScriptToast("QA: teleport à criatura mais próxima".into()));
 }
@@ -523,10 +537,7 @@ fn quest_debug_teleport(
     let target = list[index];
     let x = target.x + 1.6;
     let z = target.z + 1.6;
-    let y = terrain
-        .as_ref()
-        .map(|t| t.sample(x, z))
-        .unwrap_or(target.y);
+    let y = terrain.as_ref().map(|t| t.sample(x, z)).unwrap_or(target.y);
     transform.translation = Vec3::new(x, y + 0.1, z);
     toasts.write(ScriptToast(format!("QA: teleport para npc #{index}")));
 }
@@ -547,6 +558,11 @@ fn quest_dialogue_system(
     mut vault: Option<ResMut<crate::economy::Vault>>,
     mut heroes: Query<&mut Xp, With<Player>>,
     mut toasts: MessageWriter<ScriptToast>,
+    mut sfx: MessageWriter<crate::ambient::SfxEvent>,
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut banners: Query<(&mut QuestDoneBanner, &Children)>,
     mut balloons: Query<(&mut Visibility, &mut HudBalloon, &Children)>,
     mut texts: Query<&mut Text>,
 ) {
@@ -556,9 +572,17 @@ fn quest_dialogue_system(
     let Some(player) = players.iter().next() else {
         return;
     };
+    let player_pos = player.translation();
+    // O MAIS PRÓXIMO em alcance (o `find` first-hit era order-dependent —
+    // com 2 NPCs a <3,5 m entregava/aceitava a quest do errado).
     let Some((_, npc)) = npcs
         .iter()
-        .find(|(t, _)| t.translation().distance(player.translation()) < DIALOGUE_RANGE_M)
+        .filter(|(t, _)| t.translation().distance(player_pos) < DIALOGUE_RANGE_M)
+        .min_by(|(a, _), (b, _)| {
+            a.translation()
+                .distance_squared(player_pos)
+                .total_cmp(&b.translation().distance_squared(player_pos))
+        })
     else {
         return;
     };
@@ -569,6 +593,10 @@ fn quest_dialogue_system(
         QuestStatus::NotTaken => {
             log.accept(&id);
             info!(target: "viber::quests", "quest '{id}' aceita via diálogo");
+            sfx.write(crate::ambient::SfxEvent {
+                clip: crate::ambient::SfxClip::QuestAccept,
+                position: None,
+            });
             join_lines(
                 &log.def(&id)
                     .map(|d| d.lines_intro.clone())
@@ -591,37 +619,48 @@ fn quest_dialogue_system(
             if log.status(&id, vault.as_deref()) == QuestStatus::Ready {
                 info!(target: "viber::quests", "entrega de '{id}'");
                 if let Some(rewards) = log.turn_in(&id, vault.as_deref_mut()) {
-                        if let Ok(mut xp) = heroes.single_mut() {
-                            crate::vitals::gain_xp(&mut xp, rewards.xp);
+                    if let Ok(mut xp) = heroes.single_mut() {
+                        crate::vitals::gain_xp(&mut xp, rewards.xp);
+                    }
+                    if rewards.gold > 0 {
+                        if let Some(vault) = vault.as_deref_mut() {
+                            vault.add_resource("gold", rewards.gold);
                         }
-                        if rewards.gold > 0 {
+                    }
+                    for item in &rewards.items {
+                        if let Some((id, n)) = parse_item_reward(item) {
                             if let Some(vault) = vault.as_deref_mut() {
-                                vault.add_resource("gold", rewards.gold);
+                                vault.item_add(&id, n);
                             }
                         }
-                        for item in &rewards.items {
-                            if let Some((id, n)) = parse_item_reward(item) {
-                                if let Some(vault) = vault.as_deref_mut() {
-                                    vault.item_add(&id, n);
-                                }
-                            }
+                    }
+                    toasts.write(ScriptToast(format!(
+                        "Quest concluída: {} (+{} XP{})",
+                        title,
+                        rewards.xp,
+                        if rewards.gold > 0 {
+                            format!(", +{} ouro", rewards.gold)
+                        } else {
+                            String::new()
                         }
-                        toasts.write(ScriptToast(format!(
-                            "Quest concluída: {} (+{} XP{})",
-                            title,
-                            rewards.xp,
-                            if rewards.gold > 0 {
-                                format!(", +{} ouro", rewards.gold)
-                            } else {
-                                String::new()
-                            }
-                        )));
+                    )));
+                    // Fanfare do passe de juice: banner autoral "MISSÃO
+                    // CONCLUÍDA" + faíscas no herói + SFX de missão feita.
+                    quest_done_fanfare(
+                        &mut commands,
+                        &mut meshes,
+                        &mut materials,
+                        &mut sfx,
+                        &mut banners,
+                        &mut texts,
+                        player_pos,
+                        &title,
+                    );
                 }
                 join_lines(&complete_lines)
             } else {
-                let remaining = count.saturating_sub(
-                    log.states.get(&id).map(|a| a.progress).unwrap_or(0),
-                );
+                let remaining =
+                    count.saturating_sub(log.states.get(&id).map(|a| a.progress).unwrap_or(0));
                 join_lines(&progress_lines).replace("{remaining}", &remaining.to_string())
             }
         }
@@ -661,7 +700,181 @@ fn show_balloon(
     }
 }
 
+// ── fanfare de quest concluída (passe de juice r1) ──────────────────────
+
+/// Vida total do banner "MISSÃO CONCLUÍDA" (s), fades incluídos.
+pub const QUEST_BANNER_SECS: f32 = 2.5;
+/// Fade de entrada (s).
+const QUEST_BANNER_FADE_IN: f32 = 0.22;
+/// Fade de saída (s) — um pouco mais longo: o banner sai de cena.
+const QUEST_BANNER_FADE_OUT: f32 = 0.5;
+
+/// Banner autoral de turn-in (padrão `CampfireBanner` do menus): UM nó
+/// pré-spawnado em Startup, invisível; o turn-in só arranca o timer e
+/// escreve o subtítulo. Sem spawn/despawn por entrega.
+#[derive(Component)]
+struct QuestDoneBanner {
+    timer: f32,
+}
+
+#[derive(Component)]
+struct BannerTitle;
+
+#[derive(Component)]
+struct BannerSubtitle;
+
+/// Alpha do banner com `remaining` s de vida — a mesma curva do toast
+/// (`menus::toast_alpha`): entra rápido, segura opaco, sai devagar.
+/// Puro para os testes.
+pub fn quest_banner_alpha(remaining: f32) -> f32 {
+    if remaining <= 0.0 {
+        return 0.0;
+    }
+    let elapsed = QUEST_BANNER_SECS - remaining;
+    ((elapsed / QUEST_BANNER_FADE_IN)
+        .min(1.0)
+        .min((remaining / QUEST_BANNER_FADE_OUT).min(1.0)))
+    .clamp(0.0, 1.0)
+}
+
+/// Fanfare de entrega: burst `sparkle` no herói, `SfxEvent::QuestDone`
+/// (interface, volume cheio) e o banner com o título da quest.
+#[allow(clippy::type_complexity)]
+fn quest_done_fanfare(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    sfx: &mut MessageWriter<crate::ambient::SfxEvent>,
+    banners: &mut Query<(&mut QuestDoneBanner, &Children)>,
+    texts: &mut Query<&mut Text>,
+    player_pos: Vec3,
+    title: &str,
+) {
+    sfx.write(crate::ambient::SfxEvent {
+        clip: crate::ambient::SfxClip::QuestDone,
+        position: None,
+    });
+    crate::particles::spawn_burst(
+        commands,
+        meshes,
+        materials,
+        &crate::vitals::juice_spec(
+            "sparkle",
+            (0.15, 0.4),
+            (0.4, 0.8),
+            (1.5, 3.5),
+            Some([1.0, 0.85, 0.4]),
+        ),
+        player_pos + Vec3::Y * 1.2,
+        18,
+    );
+    if let Ok((mut banner, children)) = banners.single_mut() {
+        banner.timer = QUEST_BANNER_SECS;
+        // children[0] = "MISSÃO CONCLUÍDA" (fixo), children[1] = subtítulo.
+        if let Some(&subtitle) = children.get(1) {
+            if let Ok(mut text) = texts.get_mut(subtitle) {
+                text.0 = format!("✦ {title}");
+            }
+        }
+    }
+}
+
+/// Banner centro-topo: "MISSÃO CONCLUÍDA" + título da quest.
+fn spawn_quest_banner(mut commands: Commands) {
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                top: Val::Percent(18.0),
+                left: Val::Px(0.0),
+                right: Val::Px(0.0),
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Center,
+                row_gap: Val::Px(4.0),
+                ..Default::default()
+            },
+            Visibility::Hidden,
+            Name::new("ui:quest-done"),
+            QuestDoneBanner { timer: 0.0 },
+        ))
+        .with_children(|wrap| {
+            wrap.spawn((
+                Text::new("MISSÃO CONCLUÍDA"),
+                TextColor(Color::srgba(0.98, 0.8, 0.4, 0.0)),
+                TextFont::from_font_size(22.0),
+                bevy::ui::widget::TextShadow {
+                    offset: Vec2::splat(1.0),
+                    color: Color::srgba(0.0, 0.0, 0.0, 0.0),
+                },
+                BannerTitle,
+            ));
+            wrap.spawn((
+                Text::new(""),
+                TextColor(Color::srgba(0.95, 0.93, 0.85, 0.0)),
+                TextFont::from_font_size(15.0),
+                bevy::ui::widget::TextShadow {
+                    offset: Vec2::splat(1.0),
+                    color: Color::srgba(0.0, 0.0, 0.0, 0.0),
+                },
+                BannerSubtitle,
+            ));
+        });
+}
+
+/// Vida e fade do banner. O alpha RECOMPUTA-SE de constantes por frame (como
+/// o fade dos toasts) — multiplicar o alpha corrente por si mesmo derivava
+/// para preto; a sombra acompanha para não deixar fantasma invisível.
+#[allow(clippy::type_complexity)]
+fn quest_banner_drive(
+    time: Res<Time>,
+    mut banner: Query<(&mut QuestDoneBanner, &mut Visibility)>,
+    // Sem `Without<>` os pares Title/Subtitle conflitavam em TextColor e
+    // TextShadow (B0001: um nó de texto podia teoricamente ter os dois
+    // markers) — o pânico morria no 1.º frame de qualquer mundo com HUD.
+    mut titles: Query<&mut TextColor, (With<BannerTitle>, Without<BannerSubtitle>)>,
+    mut subtitles: Query<&mut TextColor, (With<BannerSubtitle>, Without<BannerTitle>)>,
+    mut title_shadows: Query<
+        &mut bevy::ui::widget::TextShadow,
+        (With<BannerTitle>, Without<BannerSubtitle>),
+    >,
+    mut subtitle_shadows: Query<
+        &mut bevy::ui::widget::TextShadow,
+        (With<BannerSubtitle>, Without<BannerTitle>),
+    >,
+) {
+    let Ok((mut banner, mut visibility)) = banner.single_mut() else {
+        return;
+    };
+    if banner.timer > 0.0 {
+        banner.timer -= time.delta_secs();
+    }
+    let alpha = quest_banner_alpha(banner.timer);
+    let wanted = if alpha > 0.0 {
+        Visibility::Visible
+    } else {
+        Visibility::Hidden
+    };
+    if *visibility != wanted {
+        *visibility = wanted;
+    }
+    for mut color in &mut titles {
+        color.0.set_alpha(alpha);
+    }
+    for mut color in &mut subtitles {
+        color.0.set_alpha(alpha);
+    }
+    for mut shadow in &mut title_shadows {
+        shadow.color = Color::srgba(0.0, 0.0, 0.0, 0.7 * alpha);
+    }
+    for mut shadow in &mut subtitle_shadows {
+        shadow.color = Color::srgba(0.0, 0.0, 0.0, 0.7 * alpha);
+    }
+}
+
 /// Visit quests: proximidade a entidades com o nome do alvo (throttle 0,5 s).
+/// O raio é POR QUEST (`radius` do JSON, fallback [`VISIT_RADIUS_M`]) —
+/// antes era 25 m fixos e marcos com raio autoral 9-12 registavam a visita
+/// de longe.
 fn quest_visit_system(
     mut throttle: Local<f32>,
     time: Res<Time>,
@@ -679,12 +892,10 @@ fn quest_visit_system(
         return;
     };
     let player_pos = player.translation();
-    let visit_targets: Vec<(String, Vec<String>)> = log
+    let visit_targets: Vec<(String, Vec<String>, f32)> = log
         .defs
         .iter()
-        .filter(|d| {
-            d.objective.kind == "visit" && log.status(&d.id, None) == QuestStatus::Active
-        })
+        .filter(|d| d.objective.kind == "visit" && log.status(&d.id, None) == QuestStatus::Active)
         .map(|d| {
             (
                 d.id.clone(),
@@ -693,19 +904,20 @@ fn quest_visit_system(
                     .split_whitespace()
                     .map(normalize_target)
                     .collect(),
+                d.visit_radius(),
             )
         })
         .collect();
     if visit_targets.is_empty() {
         return;
     }
-    for (name, transform) in &named {
-        let name_norm = normalize_target(name);
-        if transform.translation().distance(player_pos) > VISIT_RADIUS_M {
-            continue;
-        }
-        for (_id, targets) in &visit_targets {
+    for (_id, targets, radius) in &visit_targets {
+        for (name, transform) in &named {
+            let name_norm = normalize_target(name);
             if !targets.contains(&name_norm) {
+                continue;
+            }
+            if transform.translation().distance(player_pos) > *radius {
                 continue;
             }
             for became_ready in log.report_visit(name) {
@@ -769,7 +981,11 @@ fn quest_tracker_system(
             .get(i)
             .and_then(|id| log.def(id))
             .map(|def| {
-                format!("{}  [{}]", def.title, log.progress_text(&def.id, vault.as_deref()))
+                format!(
+                    "{}  [{}]",
+                    def.title,
+                    log.progress_text(&def.id, vault.as_deref())
+                )
             })
             .unwrap_or_default();
         if text.0 != wanted {
@@ -784,8 +1000,28 @@ mod tests {
 
     fn log() -> QuestLog {
         let log = QuestLog::default();
-        assert!(log.defs.len() >= 21, "21 quests carregadas, {:?}", log.defs.len());
+        assert!(
+            log.defs.len() >= 21,
+            "21 quests carregadas, {:?}",
+            log.defs.len()
+        );
         log
+    }
+
+    #[test]
+    fn test_quest_banner_alpha_curve() {
+        // Acabado de arrancar: ainda a entrar (curva do toast).
+        assert!(quest_banner_alpha(QUEST_BANNER_SECS) < 0.05);
+        // Meio da vida: opaco.
+        assert!((quest_banner_alpha(QUEST_BANNER_SECS * 0.5) - 1.0).abs() < 1e-4);
+        // A sair (metade do fade-out).
+        let leaving = quest_banner_alpha(QUEST_BANNER_FADE_OUT * 0.5);
+        assert!(leaving > 0.0 && leaving < 0.6, "alpha={leaving}");
+        // Fim determinístico; lixo não fabrica alpha.
+        assert_eq!(quest_banner_alpha(0.0), 0.0);
+        assert_eq!(quest_banner_alpha(-1.0), 0.0);
+        // O banner dura ~2.5 s: tempo total coerente com os fades.
+        assert!(QUEST_BANNER_SECS > QUEST_BANNER_FADE_IN + QUEST_BANNER_FADE_OUT);
     }
 
     #[test]
@@ -808,8 +1044,32 @@ mod tests {
     }
 
     #[test]
+    fn test_visit_radius_reads_json_with_fallback() {
+        let log = log();
+        // Os JSON de visita trazem radius 9-12 (desert 12, mountain 9,
+        // dark-forest 10, swamp 11) — o parse deixou de descartá-lo.
+        for (id, expected) in [
+            ("desert_survey", 12.0),
+            ("peaks_survey", 9.0),
+            ("forest_survey", 10.0),
+            ("swamp_survey", 11.0),
+        ] {
+            let def = log.def(id).unwrap_or_else(|| panic!("{id} ausente"));
+            assert_eq!(def.objective.radius, Some(expected), "radius de {id}");
+            assert!((def.visit_radius() - expected).abs() < 1e-4);
+        }
+        // Quest sem campo radius (kill/collect/JSON antigo) → fallback 25.
+        let def = log.def("forest_wolves").expect("forest_wolves ausente");
+        assert_eq!(def.objective.radius, None);
+        assert!((def.visit_radius() - VISIT_RADIUS_M).abs() < 1e-4);
+    }
+
+    #[test]
     fn test_normalize_target_matches_boss_aliases() {
-        assert_eq!(normalize_target("boss_bogwarden"), normalize_target("Bog-Warden"));
+        assert_eq!(
+            normalize_target("boss_bogwarden"),
+            normalize_target("Bog-Warden")
+        );
         assert_eq!(normalize_target("Wolf"), normalize_target("wolf"));
         assert_ne!(normalize_target("wolf"), normalize_target("shade"));
     }
@@ -862,7 +1122,10 @@ mod tests {
         // nomes com variações normalizam
         assert!(log.report_visit("Forest-Outpost-Tower").is_empty());
         assert_eq!(log.progress_text("forest_survey", None), "1/3");
-        assert!(log.report_visit("forest-outpost-tower").is_empty(), "revisita não duplica");
+        assert!(
+            log.report_visit("forest-outpost-tower").is_empty(),
+            "revisita não duplica"
+        );
         assert!(log.report_visit("forest-crossroads-well").is_empty());
         assert_eq!(
             log.report_visit("forest-stone-circle"),
@@ -880,10 +1143,7 @@ mod tests {
         assert_eq!(log.progress_text("city_stone", Some(&vault)), "0/10");
         // colheita deposita no vault — o objetivo lê o inventário
         vault.add_resource("stone", 7);
-        assert_eq!(
-            log.progress_text("city_stone", Some(&vault)),
-            "7/10"
-        );
+        assert_eq!(log.progress_text("city_stone", Some(&vault)), "7/10");
         assert_eq!(log.status("city_stone", Some(&vault)), QuestStatus::Active);
         vault.add_resource("stone", 3);
         assert_eq!(log.status("city_stone", Some(&vault)), QuestStatus::Ready);
