@@ -14,6 +14,15 @@ use serde_json::{Value, json};
 /// pode fazer OOM do CLI num `read_to_end` sem limite.
 const MAX_RESPONSE: u64 = 256 << 20;
 
+/// Timeout de leitura normal — respostas grandes (screenshots em base64)
+/// precisam de folga.
+const READ_TIMEOUT: Duration = Duration::from_secs(30);
+/// Probe da descoberta de sessão: uma engine saudável responde ao ping em
+/// ms; uma PENDURADA (TCP aceita, frame congelado — ex.: `while true do end`
+/// na REPL) nunca responde, e o timeout normal bloqueava a descoberta 30 s
+/// por sessão antes de passar à seguinte.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
 pub struct BridgeClient {
     pub host: String,
     pub port: u16,
@@ -29,6 +38,16 @@ impl BridgeClient {
 
     /// POST JSON-RPC e devolve o campo `result` (bail no `error` BRP).
     pub fn call(&self, method: &str, params: Value) -> Result<Value> {
+        self.call_timeout(method, params, READ_TIMEOUT)
+    }
+
+    /// `call` com timeout de LEITURA próprio (o connect mantém os seus 2 s).
+    fn call_timeout(
+        &self,
+        method: &str,
+        params: Value,
+        read_timeout: Duration,
+    ) -> Result<Value> {
         let request = json!({
             "jsonrpc": "2.0",
             "id": 0,
@@ -37,6 +56,7 @@ impl BridgeClient {
         });
         let body = serde_json::to_vec(&request)?;
         let mut stream = self.connect()?;
+        stream.set_read_timeout(Some(read_timeout))?;
         let http = format!(
             "POST / HTTP/1.1\r\nHost: {}:{}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
             self.host,
@@ -100,7 +120,7 @@ impl BridgeClient {
         for attempt in 0..ATTEMPTS {
             match TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT) {
                 Ok(stream) => {
-                    stream.set_read_timeout(Some(Duration::from_secs(30)))?;
+                    stream.set_read_timeout(Some(READ_TIMEOUT))?;
                     stream.set_write_timeout(Some(Duration::from_secs(30)))?;
                     return Ok(stream);
                 }
@@ -185,6 +205,14 @@ impl BridgeClient {
         self.call("viber.ping", json!({}))
     }
 
+    /// Probe da descoberta — ping com [`PROBE_TIMEOUT`] curto; devolve true
+    /// se o bridge responde. Uma engine pendurada falha cedo em vez de
+    /// bloquear a descoberta com o timeout de leitura normal.
+    fn probe_quick(&self) -> bool {
+        self.call_timeout("viber.ping", json!({}), PROBE_TIMEOUT)
+            .is_ok()
+    }
+
     pub fn tree(&self) -> Result<Value> {
         self.call("viber.tree", json!({}))
     }
@@ -259,10 +287,15 @@ fn is_chunked(headers: &[u8]) -> bool {
 }
 
 /// Decode de corpo HTTP chunked byte-a-byte (tamanhos de chunk são em bytes).
+/// Só termina bem com o chunk terminador "0" — EOF sem ele é resposta
+/// truncada e devolve ERRO em vez de dados parciais como bons.
 fn decode_chunked(body: &[u8]) -> Result<Vec<u8>> {
     let mut out = Vec::new();
     let mut rest = body;
-    while let Some(pos) = rest.windows(2).position(|window| window == b"\r\n") {
+    loop {
+        let Some(pos) = rest.windows(2).position(|window| window == b"\r\n") else {
+            bail!("resposta chunked truncada (sem chunk terminador)");
+        };
         let size_line = &rest[..pos];
         let size_text = std::str::from_utf8(size_line)
             .map_err(|_| anyhow::anyhow!("chunk size inválido"))?
@@ -414,7 +447,7 @@ fn session_port() -> Option<(u16, String)> {
         .collect();
     live.sort();
     for (_, port, world) in &live {
-        if BridgeClient::localhost(*port).probe().is_ok() {
+        if BridgeClient::localhost(*port).probe_quick() {
             return Some((*port, world.clone()));
         }
     }

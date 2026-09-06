@@ -323,6 +323,14 @@ fn process_capture_requests(world: &mut World) {
 
 // ---------------------------------------------------------------- helpers
 
+/// PNG completo: assinatura de 8 bytes + chunk terminador IEND no fim
+/// (o IEND ocupa os últimos 12 bytes: length 0 + "IEND" + CRC).
+fn png_complete(bytes: &[u8]) -> bool {
+    bytes.len() >= 12
+        && bytes.starts_with(b"\x89PNG\r\n\x1a\n")
+        && bytes[bytes.len() - 8..].starts_with(b"IEND")
+}
+
 fn parse_params<T: DeserializeOwned>(params: Option<Value>) -> BrpResult<T> {
     let value = params.unwrap_or(Value::Null);
     serde_json::from_value(value).map_err(|error| BrpError {
@@ -384,13 +392,20 @@ fn screenshot_status(params: In<Option<Value>>, world: &mut World) -> BrpResult 
         let path = PathBuf::from(&info.path);
         if path.is_file() {
             match std::fs::read(&path) {
-                Ok(bytes) => {
+                // Só `captured` com PNG COMPLETO: o `save_to_disk` do Bevy
+                // escreve com create+write (não atómico) e um poll pode ler
+                // o ficheiro a meio — codificar essa leitura selava o estado
+                // `captured` com um PNG truncado, para sempre.
+                Ok(bytes) if png_complete(&bytes) => {
                     let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
                     let info = store
                         .mark_captured(params.id, bytes.len(), encoded)
                         .expect("id existe");
                     return Ok(serde_json::to_value(info).expect("serialize"));
                 }
+                // PNG ainda a meio da escrita → continua pending; o próximo
+                // poll relê. Erro real de leitura → status de erro.
+                Ok(_) => {}
                 Err(error) => {
                     if let Some(info) = store.captures.get_mut(&params.id) {
                         // status="error" + causa: o cliente sai logo em vez
@@ -725,6 +740,26 @@ fn letter_keycode(char: char) -> KeyCode {
         'x' => KeyCode::KeyX,
         'y' => KeyCode::KeyY,
         _ => KeyCode::KeyZ,
+    }
+}
+
+#[cfg(test)]
+mod png_tests {
+    use super::png_complete;
+
+    #[test]
+    fn test_png_complete_needs_iend_no_fim() {
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        assert!(!png_complete(&png), "só a assinatura é incompleto");
+        png.extend_from_slice(b"\x00\x00\x00\x0dIHDR....");
+        assert!(!png_complete(&png), "sem IEND é incompleto");
+        png.extend_from_slice(&[0, 0, 0, 0]);
+        png.extend_from_slice(b"IEND");
+        png.extend_from_slice(&[0xae, 0x42, 0x60, 0x82]);
+        assert!(png_complete(&png), "IEND + CRC no fim = completo");
+        png.truncate(png.len() - 1);
+        assert!(!png_complete(&png), "cortado a meio do CRC é incompleto");
+        assert!(!png_complete(b""), "vazio é incompleto");
     }
 }
 
