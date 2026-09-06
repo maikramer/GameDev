@@ -170,6 +170,7 @@ fn adopt_chunks(
 
 /// Per-frame LOD pass: reselect (gated by camera movement), rebuild within
 /// the frame budget, and render-distance culling/respawn.
+#[allow(clippy::too_many_arguments)]
 fn update_chunk_lods(
     mut state: ResMut<ChunkLodState>,
     runtime: Option<Res<TerrainRuntime>>,
@@ -261,7 +262,15 @@ fn update_chunk_lods(
             }
             continue;
         }
-        match rebuild(grid, spec, chunk.coords, edge, chunk.lod, cliff_mask_opt) {
+        match rebuild(
+            grid,
+            spec,
+            chunk.coords,
+            edge,
+            chunk.lod,
+            cliff_mask_opt,
+            &runtime.voxel,
+        ) {
             Some(data) => {
                 *mesh = Mesh3d(meshes.add(to_bevy_mesh(&data)));
                 chunk.built_lod = chunk.lod;
@@ -339,7 +348,15 @@ fn update_chunk_lods(
             // precisam; a re-seleção para o LOD certo só chegava em passes
             // seguintes (gate de 6 m).
             let lod = raw_lod(dist, spec.lod_distance(), max_lod);
-            let Some(data) = rebuild(grid, spec, coords, edge, lod, cliff_mask_opt) else {
+            let Some(data) = rebuild(
+                grid,
+                spec,
+                coords,
+                edge,
+                lod,
+                cliff_mask_opt,
+                &runtime.voxel,
+            ) else {
                 continue;
             };
             let handle = meshes.add(to_bevy_mesh(&data));
@@ -391,6 +408,7 @@ fn rebuild(
     edge: f32,
     lod: u8,
     cliff: Option<&super::cliffs::CliffMask>,
+    voxel: &super::voxel::VoxelField,
 ) -> Option<ChunkMeshData> {
     let step = lod0_step(spec) << lod;
     let half = spec.world_size * 0.5;
@@ -411,6 +429,8 @@ fn rebuild(
         world_size: spec.world_size,
         tint: spec.chunk_tint(),
         cliff_angle: spec.cliff_angle,
+        volumetric_edges: voxel.volumetric_neighbors(origin.x, origin.z, edge),
+        volumetric_seal: super::runtime::volumetric_seal(lod0_step(spec) as f32),
     };
     build_chunk_mesh(grid, &params, cliff).ok().flatten()
 }
