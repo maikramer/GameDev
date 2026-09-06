@@ -134,9 +134,15 @@ export function createMysticObject(cfg: MysticConfig): MysticBehaviour {
     if (!player) return;
     const dx = Transform.posX[player] - x;
     const dz = Transform.posZ[player] - z;
-    if (dx * dx + dz * dz >= readRangeSq) return;
-
     const f = isKeyDown('KeyF');
+    // Track the key edge even out of range (same convention as the well/
+    // chest/healer): otherwise holding F while walking in would consume the
+    // one-time read — and its reward — without a fresh press.
+    if (dx * dx + dz * dz >= readRangeSq) {
+      fPressed = f;
+      return;
+    }
+
     if (f && !fPressed) {
       read = true;
       for (const m of emissiveMats) m.emissiveIntensity = 0;

@@ -33,6 +33,11 @@ use crate::grass::day_tint;
 struct PropTintState {
     originals: HashMap<AssetId<StandardMaterial>, LinearRgba>,
     last_tint: Option<[f32; 3]>,
+    /// Nº de materiais na última passada: um roster maior (glTF a carregar
+    /// depois de o tint estabilizar) força uma passada fora do early-out de
+    /// drift — sem isto, o prop novo ficava ao albedo de dia sob luar até o
+    /// relógio mexer 1e-3.
+    last_len: usize,
     throttle: f32,
 }
 
@@ -60,6 +65,11 @@ fn prop_daynight_tint(
     }
     state.throttle = 0.25;
 
+    // ids são Copy — o Vec termina o borrow imutável antes do get_mut.
+    let ids: Vec<_> = materials.ids().collect();
+    let roster_changed = ids.len() != state.last_len;
+    state.last_len = ids.len();
+
     let day = clock
         .as_deref()
         .map(|clock| {
@@ -72,7 +82,8 @@ fn prop_daynight_tint(
         .unwrap_or(1.0);
     let tint = day_tint(day);
     if let Some(last) = state.last_tint {
-        if (tint[0] - last[0]).abs() < 1e-3
+        if !roster_changed
+            && (tint[0] - last[0]).abs() < 1e-3
             && (tint[1] - last[1]).abs() < 1e-3
             && (tint[2] - last[2]).abs() < 1e-3
         {
@@ -80,8 +91,6 @@ fn prop_daynight_tint(
         }
     }
 
-    // ids são Copy — o Vec termina o borrow imutável antes do get_mut.
-    let ids: Vec<_> = materials.ids().collect();
     for id in ids {
         let Some(mut material) = materials.get_mut(id) else {
             continue;

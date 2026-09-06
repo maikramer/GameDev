@@ -83,6 +83,12 @@ fn parse_biomes(meta: &serde_json::Value) -> BiomeField {
 
 /// Base wavelength (meters) of the procedural FBM: ~1 noise cycle per 128 m.
 const FBM_BASE_WAVELENGTH: f32 = 128.0;
+/// Teto do `worldSize` que um `.ahgt` pode declarar: o meta só é
+/// autoridade dentro de mundos declaráveis (WorldBorder 3800 m,
+/// simple-rpg 4000 m) — um header corrupto com ~1e9 sobrevivia ao
+/// `spec.validate()` do parse (corre ANTES do override) e multiplicava a
+/// grelha de chunks no bootstrap.
+const MAX_AHGT_WORLD_SIZE: f32 = 65536.0;
 /// FBM octave count.
 const FBM_OCTAVES: u32 = 5;
 /// Frequency multiplier between FBM octaves.
@@ -156,6 +162,11 @@ impl HeightMapU16 {
         let max_height = meta["maxHeight"].as_f64().unwrap_or(0.0) as f32;
         if world_size <= 0.0 || max_height <= 0.0 {
             bail!("AHGT: metadata missing worldSize/maxHeight");
+        }
+        if !world_size.is_finite() || world_size > MAX_AHGT_WORLD_SIZE {
+            bail!(
+                "AHGT: worldSize {world_size} above the {MAX_AHGT_WORLD_SIZE} m cap (corrupt meta?)"
+            );
         }
 
         // The payload accepts both raw deflate and the RFC1950 zlib wrapper.
@@ -730,6 +741,32 @@ mod tests {
         assert!(
             msg.contains("too small") || msg.contains("refusing"),
             "clean error (no abort): {msg}"
+        );
+    }
+
+    #[test]
+    fn test_from_ahgt_rejects_corrupt_world_size_cleanly() {
+        use std::io::Write;
+        // Grid 4×4 válida, mas o meta declara um worldSize ~1e9: sem
+        // `world-size` autoral o override multiplicaria a grelha de chunks —
+        // tem de falhar limpo para o fallback procedural.
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&0x5447_4841_u32.to_le_bytes()); // "AHGT"
+        bytes.extend_from_slice(&1_u16.to_le_bytes()); // version
+        bytes.extend_from_slice(&4_u16.to_le_bytes()); // width
+        bytes.extend_from_slice(&4_u16.to_le_bytes()); // depth
+        bytes.extend_from_slice(&[0_u8; 6]); // reserved
+        let meta = br#"{"worldSize":1e9,"maxHeight":50}"#;
+        bytes.extend_from_slice(&(meta.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(meta);
+        let mut enc = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        enc.write_all(&[0_u8; 32]).expect("zlib write");
+        bytes.extend_from_slice(&enc.finish().expect("zlib finish"));
+
+        let err = HeightMapU16::from_ahgt(&bytes).expect_err("corrupt worldSize must be refused");
+        assert!(
+            err.to_string().contains("worldSize"),
+            "clean error naming the field: {err}"
         );
     }
 

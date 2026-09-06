@@ -1488,6 +1488,18 @@ pub fn cast_fireball(
     ));
 }
 
+/// Paridade com o melee (`MeleeFx`): o impacto da fireball também fixa o
+/// alvo da TargetBar ([`crate::feedback::CombatTarget`]) e partilha os pesos
+/// globais de impacto (hit-stop/shake/kick/pós-processo).
+#[derive(bevy::ecs::system::SystemParam)]
+struct FireballFx<'w> {
+    hit_stop: ResMut<'w, HitStop>,
+    shake: ResMut<'w, crate::camera::CameraShake>,
+    kick: ResMut<'w, crate::camera::CameraKick>,
+    postfx: ResMut<'w, crate::postfx::PostFxState>,
+    combat_target: ResMut<'w, crate::feedback::CombatTarget>,
+}
+
 /// Move a bola de fogo, detecta impacto e aplica dano em área. O impacto tem
 /// a paridade do melee: hit-stop + shake + solavanco + punch de pós-processo
 /// globais, flash + recoil por inimigo (o projétil é um golpe, não um número).
@@ -1497,10 +1509,7 @@ pub fn fireball_step(
     time: Res<Time>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut hit_stop: ResMut<HitStop>,
-    mut shake: ResMut<crate::camera::CameraShake>,
-    mut kick: ResMut<crate::camera::CameraKick>,
-    mut postfx: ResMut<crate::postfx::PostFxState>,
+    mut fx: FireballFx,
     mut balls: Query<(Entity, &mut Transform, &mut Fireball)>,
     mut enemies: Query<
         (
@@ -1563,20 +1572,25 @@ pub fn fireball_step(
                 8,
             );
             // Peso de impacto global (classe hit normal).
-            request_hit_stop(&mut hit_stop, HIT_STOP_NORMAL);
-            crate::camera::add_camera_shake(&mut shake, SHAKE_HIT);
+            request_hit_stop(&mut fx.hit_stop, HIT_STOP_NORMAL);
+            crate::camera::add_camera_shake(&mut fx.shake, SHAKE_HIT);
             let ball_dir = ball.vel.with_y(0.0).normalize_or_zero();
             crate::camera::add_camera_kick(
-                &mut kick,
+                &mut fx.kick,
                 ball_dir * KICK_HIT + Vec3::Y * KICK_UP,
             );
-            crate::postfx::punch_impact(&mut postfx, PUNCH_HIT_STOPS, PUNCH_HIT_BLOOM);
+            crate::postfx::punch_impact(&mut fx.postfx, PUNCH_HIT_STOPS, PUNCH_HIT_BLOOM);
             // Dano em área; abates via kill_creature (paridade melee/strike/
             // bomba: XP, quests, alerta de aggro — antes a fireball não
             // reportava kills nem acordava aliados).
             let mut kills: Vec<(Entity, Option<&LuaScriptRef>, Vec3)> = Vec::new();
+            let mut hit_any = false;
             for (target, t, mut health, script, recoil) in &mut enemies {
                 if t.translation().distance(center) <= FIREBALL_RADIUS {
+                    hit_any = true;
+                    // Paridade do melee: acertar fixa o alvo da TargetBar.
+                    fx.combat_target.entity = Some(target);
+                    fx.combat_target.timer = crate::feedback::TARGET_TTL;
                     apply_damage(&mut health, FIREBALL_DAMAGE);
                     commands.entity(target).insert(crate::feedback::HitFlash {
                         timer: crate::feedback::HIT_FLASH_SECS,
@@ -1596,7 +1610,10 @@ pub fn fireball_step(
                     }
                 }
             }
-            if !kills.is_empty() {
+            // Paridade do melee: o alerta de aggro sai em QUALQUER hit (o
+            // contrato `on_player_attack` é "quando o herói acerta"), não só
+            // quando o hit mata.
+            if hit_any {
                 alerts.write(crate::feedback::AttackAlert { position: center });
             }
             for (target, script, position) in kills {

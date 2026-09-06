@@ -204,11 +204,13 @@ pub fn apply_save(
     vault.wood = game.wood;
     vault.stone = game.stone;
     // Item de save editado (ex.: 4 000 000 000) não entra sem o cap de stack
-    // — rebentava a aritmética a jusante.
+    // — rebentava a aritmética a jusante. Ids normalizados como em TODA a
+    // escrita do vault (`item_add`): um save com "Potion" ficava visível no
+    // inventário mas invisível para hotbar/loja/quests (lookups normalizam).
     vault.items = game
         .items
         .iter()
-        .map(|(id, &n)| (id.clone(), n.min(99)))
+        .map(|(id, &n)| (crate::economy::normalize_item(id), n.min(99)))
         .collect();
     quests.states.clear();
     for (id, (progress, visited)) in &game.quest_states {

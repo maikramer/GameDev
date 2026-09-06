@@ -591,14 +591,23 @@ fn tick_status_system(
 /// Morte do herói → espera → respawn no ponto mais próximo, HP cheio.
 #[allow(clippy::type_complexity)]
 fn respawn_system(
-    mut players: Query<(Entity, &mut Health, &mut Transform, Option<&mut Dying>), With<Player>>,
+    mut players: Query<
+        (
+            Entity,
+            &mut Health,
+            &mut Transform,
+            Option<&mut Dying>,
+            Option<&mut StatusEffects>,
+        ),
+        With<Player>,
+    >,
     terrain: Option<Res<crate::terrain::runtime::TerrainRuntime>>,
     time: Res<Time>,
     mut commands: Commands,
     mut toasts: MessageWriter<ScriptToast>,
 ) {
     let dt = time.delta_secs();
-    for (entity, mut health, mut transform, dying) in &mut players {
+    for (entity, mut health, mut transform, dying, mut status) in &mut players {
         match dying {
             Some(mut state) => {
                 state.timer -= dt;
@@ -611,6 +620,12 @@ fn respawn_system(
                         .unwrap_or(transform.translation.y);
                     transform.translation = Vec3::new(point.x, y, point.y);
                     health.current = health.max;
+                    // Morte limpa status: renascer envenenado punha o herói a
+                    // perder o HP cheio no ponto de respawn sem inimigo algum.
+                    if let Some(mut effects) = status.as_deref_mut() {
+                        effects.venom = 0.0;
+                        effects.venom_tick = 0.0;
+                    }
                     commands.entity(entity).remove::<Dying>();
                     commands.entity(entity).insert(Invulnerable {
                         timer: RESPAWN_DELAY,

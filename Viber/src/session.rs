@@ -4,8 +4,10 @@
 //! por agente causou OOM de VRAM a 2026-09-02).
 //!
 //! Contrato (o mutex é o SO, não convenção):
-//! - `<cache>/viber/session-<slug>/lease.json` criado com `create_new` —
-//!   atómico; dois `claim` concorrentes → um ganha, o outro recebe `Busy`.
+//! - `<cache>/viber/session-<slug>/lease.json` publicado com hard link
+//!   atómico (`publish_new`: só cria se o destino não existe, conteúdo
+//!   COMPLETO desde o primeiro instante); dois `claim` concorrentes → um
+//!   ganha, o outro recebe `Busy`.
 //! - Lease com TTL (`expires_at`): agente que morre sem `release` não
 //!   bloqueia ninguém — o próximo `claim` rouba o lease expirado.
 //! - `engine.json` guarda pid/porta/mundo/log da engine partilhada; é
@@ -13,9 +15,9 @@
 //!
 //! CLI: `viber session status|up|down|claim|touch|release` (glue em `main.rs`).
 
-use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
@@ -171,20 +173,55 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// Escrita atómica: `<path>.tmp` + `sync_all` + rename no mesmo diretório.
-/// Um crash a meio não deixa JSON parcial no disco — que seria lido como
-/// "corrupto = livre/sem sessão" pelos outros processos.
-fn write_atomic(path: &Path, contents: &str) -> Result<()> {
+/// Nome de ficheiro tmp ÚNICO por processo+chamada — um `.tmp` partilhado
+/// entre dois processos a escrever o MESMO destino interpolava as duas
+/// escritas (o 2.º `File::create` truncava o 1.º a meio) e o segundo
+/// `rename` falhava com ENOENT.
+fn unique_tmp(path: &Path) -> PathBuf {
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     let mut name = path.file_name().unwrap_or_default().to_os_string();
-    name.push(".tmp");
-    let tmp = path.with_file_name(name);
-    let mut file =
-        std::fs::File::create(&tmp).with_context(|| format!("a criar {}", tmp.display()))?;
+    name.push(format!(".{}.{}.tmp", std::process::id(), seq));
+    path.with_file_name(name)
+}
+
+fn write_tmp(tmp: &Path, contents: &str) -> Result<()> {
+    let mut file = std::fs::File::create(tmp)
+        .with_context(|| format!("a criar {}", tmp.display()))?;
     file.write_all(contents.as_bytes())?;
     file.sync_all()?;
     drop(file);
+    Ok(())
+}
+
+/// Escrita atómica (SOBRESCREVE o destino): tmp único + `sync_all` + rename
+/// no mesmo diretório. Um crash a meio não deixa JSON parcial no disco —
+/// que seria lido como "corrupto = livre/sem sessão" pelos outros processos.
+fn write_atomic(path: &Path, contents: &str) -> Result<()> {
+    let tmp = unique_tmp(path);
+    write_tmp(&tmp, contents)?;
     std::fs::rename(&tmp, path)
         .with_context(|| format!("a promover {} → {}", tmp.display(), path.display()))
+}
+
+/// Publica um ficheiro NOVO com árbitro atómico: conteúdo completo num tmp
+/// único + hard link para o destino (`link` falha com `AlreadyExists` se o
+/// destino já existe). O par `create_new` + rename anterior deixava o
+/// destino VAZIO entre um e outro — um `claim` concorrente lia JSON vazio,
+/// tratava-o como corrupto, apagava o lease acabado de criar e ganhava
+/// TAMBÉM: dois donos para a mesma sessão.
+fn publish_new(path: &Path, contents: &str) -> Result<bool> {
+    let tmp = unique_tmp(path);
+    let outcome = write_tmp(&tmp, contents).and_then(|_| {
+        match std::fs::hard_link(&tmp, path) {
+            Ok(()) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+            Err(error) => Err(error)
+                .with_context(|| format!("a ligar {} → {}", tmp.display(), path.display())),
+        }
+    });
+    let _ = std::fs::remove_file(&tmp);
+    outcome
 }
 
 /// O nome do dono tem de bater para `release`/`touch` — protege contra
@@ -288,44 +325,20 @@ impl SessionPaths {
             pid: std::process::id(),
             expires_at_ms: now_ms() + ttl.as_millis() as u64,
         };
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(self.lease_file())
-        {
-            Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                // Perdeu a corrida — re-ler para devolver quem ganhou.
-                let Some(lease) = self.read_lease() else {
-                    return Ok(ClaimOutcome::Busy {
-                        owner: "?".into(),
-                        remaining: ttl,
-                    });
-                };
-                let remaining = lease.expires_at_ms.saturating_sub(now_ms());
-                return Ok(ClaimOutcome::Busy {
-                    owner: lease.owner,
-                    remaining: Duration::from_millis(remaining),
-                });
-            }
-            Err(error) => return Err(error).context("a criar lease.json"),
-        };
-        // O `create_new` fez de arbiter; o conteúdo entra com escrita atómica.
         let raw = serde_json::to_string(&lease).context("a escrever lease.json")?;
-        write_atomic(&self.lease_file(), &raw)?;
-        // Confirmar que o conteúdo visível continua O NOSSO — se outro
-        // processo o sobrescreveu entretanto, perdemos a corrida.
-        if let Some(atual) = self.read_lease() {
-            if atual.owner != lease.owner
-                || atual.pid != lease.pid
-                || atual.expires_at_ms != lease.expires_at_ms
-            {
-                let remaining = atual.expires_at_ms.saturating_sub(now_ms());
+        if !publish_new(&self.lease_file(), &raw)? {
+            // Perdeu a corrida do `link` — re-ler para devolver quem ganhou.
+            let Some(lease) = self.read_lease() else {
                 return Ok(ClaimOutcome::Busy {
-                    owner: atual.owner,
-                    remaining: Duration::from_millis(remaining),
+                    owner: "?".into(),
+                    remaining: ttl,
                 });
-            }
+            };
+            let remaining = lease.expires_at_ms.saturating_sub(now_ms());
+            return Ok(ClaimOutcome::Busy {
+                owner: lease.owner,
+                remaining: Duration::from_millis(remaining),
+            });
         }
         Ok(ClaimOutcome::Acquired { ttl })
     }
@@ -515,6 +528,35 @@ mod tests {
             .claim("agente", Duration::from_secs(60), None)
             .expect("claim sobre lease corrupto");
         assert!(matches!(claim, ClaimOutcome::Acquired { .. }));
+    }
+
+    #[test]
+    fn test_publish_new_never_overwrites_and_leaves_no_tmp() {
+        let (_dir, paths) = tmp_session("publish");
+        paths.ensure_dir().unwrap();
+        let lease = paths.lease_file();
+        std::fs::write(&lease, r#"{"owner":"a"}"#).unwrap();
+        // Destino existente → perde a corrida, e NÃO sobrescreve o dono.
+        assert!(!publish_new(&lease, r#"{"owner":"b"}"#).expect("publish"));
+        assert_eq!(
+            std::fs::read_to_string(&lease).unwrap(),
+            r#"{"owner":"a"}"#,
+            "dono original intacto"
+        );
+        // Destino ausente → ganha, com o conteúdo COMPLETO visível de imediato.
+        std::fs::remove_file(&lease).unwrap();
+        assert!(publish_new(&lease, r#"{"owner":"c","pid":1}"#).expect("publish"));
+        assert_eq!(
+            std::fs::read_to_string(&lease).unwrap(),
+            r#"{"owner":"c","pid":1}"#
+        );
+        let leftovers: Vec<String> = std::fs::read_dir(paths.base.clone())
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter_map(|entry| entry.file_name().to_str().map(str::to_string))
+            .filter(|name| name.ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "tmps órfãos: {leftovers:?}");
     }
 
     #[test]

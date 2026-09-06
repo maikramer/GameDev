@@ -891,6 +891,11 @@ pub fn world_border_clamp(
         return;
     };
     let limit = border.radius - border.margin;
+    // radius <= margin (ex.: radius="0") não tem disco interior: o scale
+    // negativo espelhava o herói para o lado oposto do mundo.
+    if limit <= 0.0 {
+        return;
+    }
     for mut transform in &mut players {
         let pos = transform.translation;
         let dist_sq = pos.x * pos.x + pos.z * pos.z;

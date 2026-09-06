@@ -102,6 +102,12 @@ const SPAWN_RING_MIN_RADIUS: f32 = 1.5;
 /// montar um degrau/terraço — o gate de declive não apanha degraus que
 /// cruzam a pegada com declive médio baixo.
 const SPAWN_LEDGE_DROP: f32 = 2.0;
+/// Discos com raio acima disto entram na lista `large` de [`SpawnOccupancy`]
+/// e são testados directamente (distância centro-a-centro), não por células:
+/// um raio patológico do XML (ex.: `<SpawnExclusion radius="100000">`)
+/// bucketizado são centenas de milhões de entradas. O teste em `is_free` é
+/// idêntico ao das células — só o índice muda.
+const LARGE_DISK_RADIUS: f32 = 256.0;
 
 /// Registo de ocupação XZ partilhado por TODOS os spawners do mundo (port do
 /// `occupancy.ts` do VibeGame): cada instância colocada (e cada
@@ -114,6 +120,8 @@ const SPAWN_LEDGE_DROP: f32 = 2.0;
 /// tocar — uma lista plana tornava a geração quadrática no nº de props.
 pub struct SpawnOccupancy {
     cells: HashMap<i64, Vec<(f32, f32, f32)>>,
+    /// Discos gigantes (exclusões "mundiais"), testados sem células.
+    large: Vec<(f32, f32, f32)>,
 }
 
 impl Default for SpawnOccupancy {
@@ -126,6 +134,7 @@ impl SpawnOccupancy {
     pub fn new() -> Self {
         Self {
             cells: HashMap::new(),
+            large: Vec::new(),
         }
     }
 
@@ -139,6 +148,10 @@ impl SpawnOccupancy {
     /// uma consulta que caia em qualquer delas o encontrar.
     pub fn register(&mut self, x: f32, z: f32, radius: f32) {
         if !(radius > 0.0) {
+            return;
+        }
+        if radius > LARGE_DISK_RADIUS {
+            self.large.push((x, z, radius));
             return;
         }
         let x0 = ((x - radius) / OCCUPANCY_CELL).floor() as i32;
@@ -161,8 +174,17 @@ impl SpawnOccupancy {
     /// AABBs dos dois cobrem a célula desse ponto — partilham sempre um
     /// bucket, mesmo que o disco registado seja muito maior.
     pub fn is_free(&self, x: f32, z: f32, radius: f32) -> bool {
-        if self.cells.is_empty() {
+        if self.cells.is_empty() && self.large.is_empty() {
             return true;
+        }
+        // Discos gigantes: o mesmo teste geométrico dos buckets, sem célula.
+        for &(fx, fz, fr) in &self.large {
+            let dx = fx - x;
+            let dz = fz - z;
+            let min_dist = fr + radius + SPAWN_CLEARANCE;
+            if dx * dx + dz * dz < min_dist * min_dist {
+                return false;
+            }
         }
         let reach = radius + SPAWN_CLEARANCE;
         let x0 = ((x - reach) / OCCUPANCY_CELL).floor() as i32;
@@ -1417,6 +1439,18 @@ mod tests {
         assert!(!big.is_free(10.0, 0.0, 0.0));
         assert!(!big.is_free(-48.0, 0.0, 0.0));
         assert!(big.is_free(51.5, 0.0, 0.0));
+    }
+
+    #[test]
+    fn test_occupancy_giant_radius_rejected_without_world_sized_buckets() {
+        // Exclusão "mundial": o disco vai para a lista `large` (sem iterar
+        // milhões de células) e o teste geométrico é idêntico ao das células.
+        let mut occ = SpawnOccupancy::new();
+        occ.register(0.0, 0.0, 100_000.0);
+        assert!(!occ.is_free(0.0, 0.0, 0.0), "inside the giant exclusion");
+        assert!(!occ.is_free(50_000.0, 0.0, 1.0), "50 km out is still inside");
+        // Raio + folga do disco: além disso (100000 + 1 + 0.6), livre.
+        assert!(occ.is_free(100_002.0, 0.0, 1.0));
     }
 
     /// `footprint-radius` × escala: o teste usa a escala máxima (conservador)

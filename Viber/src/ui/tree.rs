@@ -405,6 +405,11 @@ fn build_cooldown(world: &mut World, node: &XmlNode, slot: Entity) {
 fn build_slider(world: &mut World, node: &XmlNode, track: Entity) {
     let min = attr_f32(node, "min").unwrap_or(0.0);
     let max = attr_f32(node, "max").unwrap_or(1.0);
+    let (min, max) = if min.is_finite() && max.is_finite() {
+        (min.min(max), min.max(max))
+    } else {
+        (0.0, 1.0)
+    };
     let value = attr_f32(node, "value").unwrap_or(max);
     let vertical = attr(node, "direction").is_some_and(|d| d.eq_ignore_ascii_case("vertical"));
     let mut fill_classes = UiClasses::parse(attr(node, "fill-class").unwrap_or_default());
@@ -899,6 +904,31 @@ mod tests {
                 attr(&node, "bind").unwrap_or_default()
             );
         }
+    }
+
+    #[test]
+    fn test_slider_normalizes_a_garbled_range_instead_of_panicking() {
+        let mut app = tree_app();
+        let mut node = test_node("uislider", "inverted");
+        node.attrs.push(("min".into(), "100".into()));
+        node.attrs.push(("max".into(), "0".into()));
+        node.attrs.push(("value".into(), "50".into()));
+        let entity = build_test_node(&mut app, &node);
+        let slider = app
+            .world()
+            .get::<UiSlider>(entity)
+            .expect("slider built with an inverted range");
+        assert!(slider.min <= slider.max);
+        assert!((slider.min - 0.0).abs() < 1e-6);
+        assert!((slider.max - 100.0).abs() < 1e-6);
+        assert!((slider.value - 50.0).abs() < 1e-6);
+        // NaN bounds fall back to the default 0..1 instead of poisoning clamp.
+        let mut node = test_node("uislider", "nan-range");
+        node.attrs.push(("min".into(), "nan".into()));
+        let entity = build_test_node(&mut app, &node);
+        let slider = app.world().get::<UiSlider>(entity).expect("slider built");
+        assert!(slider.min.is_finite() && slider.max.is_finite());
+        assert!(slider.min <= slider.max);
     }
 
     #[test]

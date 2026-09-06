@@ -341,13 +341,18 @@ fn nota_measure_system(
     };
     nota.marked.insert(name.clone());
     waypoint.label = Some(landmark.label);
-    waypoint.position = None; // re-preso na próxima passada (abaixo)
-    for (entity_name, transform) in &named {
-        if entity_name.to_string() == name {
-            waypoint.position = Some(transform.translation());
-            break;
-        }
-    }
+    // O twin MAIS PRÓXIMO do herói (não o primeiro da query): com nomes
+    // duplicados (includes repetidos), o primeiro podia estar do outro lado
+    // do mapa e o waypoint apontava para lá.
+    waypoint.position = named
+        .iter()
+        .filter(|(entity_name, _)| entity_name.to_string() == name)
+        .min_by(|(_, a), (_, b)| {
+            a.translation()
+                .distance_squared(player_pos)
+                .total_cmp(&b.translation().distance_squared(player_pos))
+        })
+        .map(|(_, t)| t.translation());
     let remaining_in_biome = LANDMARKS
         .iter()
         .filter(|l| l.biome == landmark.biome && !nota.marked.contains(l.name))

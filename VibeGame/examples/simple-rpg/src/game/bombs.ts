@@ -22,6 +22,9 @@ import { notifyPlayerHitLanded } from './combat-mechanics';
 const FUSE_SECONDS = 1.5;
 const BLAST_RADIUS = 6;
 const BLAST_DAMAGE = 90; // at the centre; linear falloff to 30% at the edge
+// Same vertical gate as the other radial AoEs (Power Strike, whirl): a blast
+// on a bridge/cliff ledge must not reach entities a floor above or below.
+const BLAST_VERTICAL = 3;
 const ARC_SEGMENTS = 18;
 
 interface Bomb {
@@ -213,8 +216,9 @@ function explode(state: State, b: Bomb): void {
     if (e === b.owner || e === merchantEid || isDead(e)) continue;
     const dx = Transform.posX[e] - b.x;
     const dz = Transform.posZ[e] - b.z;
+    const dy = Transform.posY[e] - b.y;
     const d2 = dx * dx + dz * dz;
-    if (d2 > r2) continue;
+    if (d2 > r2 || Math.abs(dy) > BLAST_VERTICAL) continue;
     const falloff = Math.max(0.3, 1 - Math.sqrt(d2) / BLAST_RADIUS);
     damageHealth(e, baseDamage * falloff);
     hits++;

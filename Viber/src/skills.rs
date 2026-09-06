@@ -775,7 +775,6 @@ fn bomb_throw_system(
 /// knockback radial já cá estava).
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn bomb_step_system(
-    time: Res<Time>,
     mut bombs: Query<(Entity, &mut Transform, &mut Bomb)>,
     mut creatures: Query<
         (
@@ -792,20 +791,28 @@ fn bomb_step_system(
     mut numbers: MessageWriter<DamageNumberEvent>,
     mut alerts: MessageWriter<AttackAlert>,
     mut toasts: MessageWriter<ScriptToast>,
-    mut sfx: MessageWriter<crate::ambient::SfxEvent>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut hit_stop: ResMut<crate::combat::HitStop>,
-    mut shake: ResMut<crate::camera::CameraShake>,
-    mut kick: ResMut<crate::camera::CameraKick>,
-    mut postfx: ResMut<crate::postfx::PostFxState>,
+    mut fx: AbilityFx,
+    terrain: Option<Res<crate::terrain::runtime::TerrainRuntime>>,
     mut quests: Option<ResMut<QuestLog>>,
 ) {
-    let dt = time.delta_secs();
+    let dt = fx.time.delta_secs();
     for (entity, mut transform, mut bomb) in &mut bombs {
         bomb.fuse -= dt;
         bomb.velocity.y -= 18.0 * dt;
         transform.translation += bomb.velocity * dt;
+        // Repouso no terreno: sem isto a bomba atravessava o chão em voo
+        // parabólico e detonava enterrada (centro do AoE sob a superfície —
+        // inimigos à boca do crater ficavam fora do raio em 3D).
+        if let Some(terrain) = terrain.as_ref() {
+            let ground = terrain.sample(transform.translation.x, transform.translation.z) + 0.18;
+            if transform.translation.y < ground {
+                transform.translation.y = ground;
+                bomb.velocity.y = bomb.velocity.y.max(0.0);
+                let damp = (1.0 - 6.0 * dt).max(0.0);
+                bomb.velocity.x *= damp;
+                bomb.velocity.z *= damp;
+            }
+        }
         if bomb.fuse > 0.0 {
             continue;
         }
@@ -825,8 +832,8 @@ fn bomb_step_system(
                 }
                 crate::particles::spawn_burst(
                     &mut commands,
-                    &mut meshes,
-                    &mut materials,
+                    &mut fx.meshes,
+                    &mut fx.materials,
                     &crate::combat::hit_sparks_spec(),
                     t.translation() + Vec3::Y * 1.0,
                     BOMB_SPARK_COUNT,
@@ -851,25 +858,25 @@ fn bomb_step_system(
                 &mut numbers,
                 &mut toasts,
                 &mut quests,
-                &mut sfx,
+                &mut fx.sfx,
             );
         }
         alerts.write(AttackAlert { position: center });
-        sfx.write(crate::ambient::SfxEvent {
+        fx.sfx.write(crate::ambient::SfxEvent {
             clip: crate::ambient::SfxClip::Hit,
             position: Some(center),
         });
         toasts.write(ScriptToast("BOOM!".into()));
         // Peso de explosão: hit-stop + shake + solavanco vertical + punch +
         // anel de choque (sempre — uma bomba detona, acerte ou não).
-        crate::combat::request_hit_stop(&mut hit_stop, crate::combat::HIT_STOP_HEAVY);
-        crate::camera::add_camera_shake(&mut shake, BOMB_SHAKE);
-        crate::camera::add_camera_kick(&mut kick, Vec3::Y * BOMB_KICK_UP);
-        crate::postfx::punch_impact(&mut postfx, BOMB_PUNCH_STOPS, BOMB_PUNCH_BLOOM);
+        crate::combat::request_hit_stop(&mut fx.hit_stop, crate::combat::HIT_STOP_HEAVY);
+        crate::camera::add_camera_shake(&mut fx.shake, BOMB_SHAKE);
+        crate::camera::add_camera_kick(&mut fx.kick, Vec3::Y * BOMB_KICK_UP);
+        crate::postfx::punch_impact(&mut fx.postfx, BOMB_PUNCH_STOPS, BOMB_PUNCH_BLOOM);
         crate::impact::spawn_impact_ring(
             &mut commands,
-            &mut meshes,
-            &mut materials,
+            &mut fx.meshes,
+            &mut fx.materials,
             center.with_y(center.y + 0.08),
             BOMB_RING_RADIUS,
             Color::srgb(1.0, 0.75, 0.45),
