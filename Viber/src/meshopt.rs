@@ -785,7 +785,10 @@ pub fn shared_asset_pool() -> Option<std::path::PathBuf> {
         root.join("../VibeGame/examples/shared-assets/public"),
     ]
     .into_iter()
-    .find(|candidate| candidate.is_dir())
+    // "Pool presente" = tem `assets/meshes`: num checkout sem os binários
+    // (GLBs não versionados) a raiz existe mas os testes têm de saltar
+    // limpo em vez de panicar no scan.
+    .find(|candidate| candidate.join("assets/meshes").is_dir())
 }
 
 #[cfg(test)]
