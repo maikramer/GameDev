@@ -2,3 +2,7 @@ worlds/shaders/
 # sky.wgsl é GERADO a cada `viber run` (especializado por mundo).
 examples/*/shaders/
 worlds/assets
+# Screenshots de QA/debug capturados na raiz do pacote não vão para o git
+# (ver `viber debug screenshot` / bridge); artefactos de sessão, não assets.
+/*.png
+/*.jpg
