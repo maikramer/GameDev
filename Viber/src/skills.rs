@@ -1023,6 +1023,21 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(SkillsPlugin);
+        // O SkillsPlugin regista sistemas que tocam em input, mensagens e
+        // assets — sem os plugins do motor (Asset/Input/Message), o app
+        // mínimo tem de inicializar tudo à mão, ou os sistemas falham a
+        // validação de parâmetros a cada update.
+        app.init_resource::<Assets<Mesh>>();
+        app.init_resource::<Assets<StandardMaterial>>();
+        app.insert_resource(ButtonInput::<KeyCode>::default());
+        app.insert_resource(ButtonInput::<MouseButton>::default());
+        app.insert_resource(crate::menus::MenusOpen::default());
+        app.insert_resource(Vault::default());
+        app.insert_resource(crate::music::CombatMusicState::default());
+        app.add_message::<DamageNumberEvent>();
+        app.add_message::<AttackAlert>();
+        app.add_message::<ScriptToast>();
+        app.add_message::<crate::ambient::SfxEvent>();
         let hero = app
             .world_mut()
             .spawn((

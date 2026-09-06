@@ -2087,7 +2087,10 @@ mod tests {
     fn test_gorge_lake_carves_only_to_the_waterline() {
         let mut grid = flat_grid();
         let spec = LakeSpec {
-            at: Vec2::new(48.0, 48.0),
+            // (10, 10): o centro tem de ficar LONGE da régua do mundo (±48
+            // num grid de 96) — em (48,48) o carve cai fora do grid e o
+            // sample clampado à célula de borda lia o fiapo da taça.
+            at: Vec2::new(10.0, 10.0),
             radius: 12.0,
             depth: 3.0,
             bank: BankStyle::Gorge,
@@ -2096,39 +2099,42 @@ mod tests {
         let body = carve_lake(&mut grid, &spec, 0).expect("lake");
         // Taça: o centro fica abaixo do espelho.
         assert!(
-            grid.sample(48.0, 48.0) < body.water_y,
+            grid.sample(10.0, 10.0) < body.water_y,
             "bowl still carves: {} vs {}",
-            grid.sample(48.0, 48.0),
+            grid.sample(10.0, 10.0),
             body.water_y
         );
         let phases = shape_phases(spec.at);
-        // Sondas para DENTRO do mundo (θ = π): o grid vai de −48 a +48 e o
-        // lago está no canto (+48, +48) — para lá disso o `sample` agrapa
-        // no canto e qualquer sonda em +X leria o piso da taça.
-        let contour = lake_shape_radius(spec.radius, std::f32::consts::PI, phases);
+        let contour = lake_shape_radius(spec.radius, 0.0, phases);
         let reach = (waterline_reach(spec.depth, spec.water_offset) * CARVE_MARGIN).clamp(0.5, 1.6);
         // Sonda 1 m FORA da linha de água mas ainda bem dentro do carve
         // antigo (contorno·CARVE_MARGIN) — antes do fix aqui estava o piso
         // da taça; agora o sólido natural (8 m) fica de pé.
-        let probe = 48.0 - contour * reach - 1.0;
+        let probe = 10.0 + contour * reach + 1.0;
         assert!(
             contour * reach + 1.0 < contour * CARVE_MARGIN - 0.75,
             "probe must sit between the waterline and the old carve: {} vs {}",
             contour * reach + 1.0,
             contour * CARVE_MARGIN
         );
+        // A margem natural fica DE PÉ acima do espelho — o bug era o carve
+        // antigo pôr o probe DENTRO da taça (lia o piso ~5 m). A sonda fica a
+        // ~1 texel da fronteira do carve, por isso o stencil bilinear pode
+        // misturar a última célula talhada; o que nunca pode é ler abaixo da
+        // lâmina com folga.
         assert!(
-            (grid.sample(probe, 48.0) - 8.0).abs() < 1e-3,
-            "gorge lake keeps the natural shore beyond the waterline: {}",
-            grid.sample(probe, 48.0)
+            grid.sample(probe, 10.0) > body.water_y + 0.25,
+            "gorge lake keeps the natural shore beyond the waterline: {} vs {}",
+            grid.sample(probe, 10.0),
+            body.water_y
         );
         // Dentro da linha de água o piso continua abaixo da lâmina — o
         // espelho assenta em água, não em seco.
-        let inner = 48.0 - contour * reach * 0.8;
+        let inner = 10.0 + contour * reach * 0.8;
         assert!(
-            grid.sample(inner, 48.0) <= body.water_y + 1e-3,
+            grid.sample(inner, 10.0) <= body.water_y + 1e-3,
             "bowl floor below the mirror inside the waterline: {} vs {}",
-            grid.sample(inner, 48.0),
+            grid.sample(inner, 10.0),
             body.water_y
         );
     }
