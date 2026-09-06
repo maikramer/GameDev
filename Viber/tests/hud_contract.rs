@@ -2,7 +2,7 @@
 use std::{collections::HashSet, path::Path};
 
 use viber::{
-    ui::bind::UiData,
+    ui::bind::{split_class_bind, UiData},
     xml::{self, XmlNode},
 };
 
@@ -25,13 +25,22 @@ fn shipped_hud_has_unique_ids_and_valid_bindings() {
             if let Some(id) = node.attr("id") {
                 assert!(ids.insert(id.to_owned()), "duplicate id {id}");
             }
-            if file == "world/hud.xml" {
-                if let Some(binding) = node.attr("bind") {
-                    assert!(
-                        UiData::default().get(binding).is_some(),
-                        "unknown binding {binding}"
-                    );
-                }
+                if file == "world/hud.xml" {
+                    if let Some(binding) = node.attr("bind") {
+                        // Class-binds (`expr:classe`) resolvem só a parte do
+                        // nome — a classe é aplicada, não lida do UiData.
+                        let name = match split_class_bind(binding) {
+                            Some((name, class)) => {
+                                assert!(!class.is_empty(), "class-bind {binding} sem classe");
+                                name
+                            }
+                            None => binding,
+                        };
+                        assert!(
+                            UiData::default().get(name).is_some(),
+                            "unknown binding {binding}"
+                        );
+                    }
                 if node.tag == "UiIcon" {
                     let src = node.attr("src").expect("icon source");
                     assert!(
@@ -65,22 +74,25 @@ fn shipped_hud_has_unique_ids_and_valid_bindings() {
 }
 
 #[test]
-fn hud_script_updates_danger_cooldowns_stock_and_opens_journal() {
+fn hud_script_opens_journal_and_punches_the_combo() {
+    // HUD v3: os toggles de estado são class-binds engine-driven (cobre o
+    // `apply_bind_classes` nos testes unitários do bind.rs) — o script só
+    // trata do clique do diário e do soco visual do combo.
     let lua = mlua::Lua::new();
     lua.load(
         r#"
-        values = {health=1, ["cd.dash"]=0, ["cd.heal"]=0.5, ["cd.strike"]=0,
-                  potion=2, antidote=0, bomb=1}
-        classes = {}
+        combo = ""
         state = {}
         click = false
+        anims = {}
+        opened = nil
         viber = {state=function() return state end, ui={
-            number=function(key) return values[key] or 0 end,
-            get=function(key) return "" end,
-            toggle_class=function(id, class, value) classes[id .. ":" .. class] = value end,
+            number=function(key) return 0 end,
+            get=function(key) return combo end,
+            toggle_class=function() assert(false, "toggles vivem em class-binds engine") end,
             clicked=function(id) return id == "open-journal" and click end,
             open=function(id) opened = id end,
-            set_anim=function() end
+            set_anim=function(id, anim) anims[id] = anim end
         }}
     "#,
     )
@@ -92,24 +104,20 @@ fn hud_script_updates_danger_cooldowns_stock_and_opens_journal() {
     lua.load(
         r#"
         on_update(0.016)
-        assert(classes["vitals:danger"] == false)
-        assert(classes["cd-dash:ready"] == true)
-        assert(classes["cd-heal:ready"] == false)
-        assert(classes["vial-potion:out-of-stock"] == false)
-        assert(classes["vial-antidote:out-of-stock"] == true)
-        assert(classes["vial-bomb:out-of-stock"] == false)
-        values.health = 0.2
-        values.potion = 0
-        values["cd.heal"] = 0
+        assert(opened == nil)
+        assert(anims["combo-text"] == "none")
+
         click = true
         on_update(0.016)
-        assert(classes["vitals:danger"] == true)
-        assert(classes["vial-potion:out-of-stock"] == true)
-        assert(classes["cd-heal:ready"] == true)
         assert(opened == "menu")
-        values.health = 1
+
+        combo = "x2"
         on_update(0.016)
-        assert(classes["vitals:danger"] == false)
+        assert(anims["combo-text"] == "shake 0.45 0.5")
+
+        combo = ""
+        on_update(0.016)
+        assert(anims["combo-text"] == "none")
     "#,
     )
     .exec()
