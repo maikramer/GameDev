@@ -18,6 +18,11 @@
 
 #import bevy_pbr::forward_io::{VertexOutput, FragmentOutput}
 #import bevy_pbr::mesh_view_bindings::view
+// `apply_fog(view_bindings::fog, …)` referencia o NAMESPACE — sem este
+// alias o compose falha com ImportNotFound("view_bindings") e o material
+// perde o pipeline (nenhum chunk desenha; só o clear-color aparece no
+// lugar do chão).
+#import bevy_pbr::mesh_view_bindings as view_bindings
 #import bevy_pbr::pbr_functions::apply_fog
 
 #ifdef BINDLESS

@@ -14,7 +14,7 @@
 use naga::valid::{Capabilities, ValidationFlags};
 
 /// Explicit minimal stubs for the `#import`s the chunk shader uses.
-const IMPORTS: [(&str, &str); 5] = [
+const IMPORTS: [(&str, &str); 6] = [
     (
         "#import bevy_pbr::forward_io::{VertexOutput, FragmentOutput}",
         "struct VertexOutput {\n\
@@ -30,9 +30,18 @@ const IMPORTS: [(&str, &str); 5] = [
         "#import bevy_pbr::mesh_view_bindings::view",
         "struct View { world_position: vec4<f32>, };\n\
          @group(1) @binding(0) var<uniform> view: View;\n\
-         // apply_fog lê `view_bindings::fog` — mesmo módulo fake.\n\
+         // apply_fog lê `view_bindings::fog` — o stub textual resolve a\n\
+         // referência para este var (ver REPLACE abaixo); o import REAL do\n\
+         // namespace `as view_bindings` é guardado por teste próprio.\n\
          struct FogStub { color: vec4<f32>, };\n\
          @group(1) @binding(1) var<uniform> fog: FogStub;",
+    ),
+    (
+        // O compose real (naga_oil) cria o módulo `view_bindings` a partir
+        // deste alias; no harness textual o `view_bindings::fog` é reescrito
+        // para o var `fog` do stub acima.
+        "#import bevy_pbr::mesh_view_bindings as view_bindings",
+        "",
     ),
     (
         "#import bevy_pbr::pbr_functions::apply_fog",
@@ -48,8 +57,10 @@ const IMPORTS: [(&str, &str); 5] = [
     ),
     (
         "#import bevy_render::bindless::{bindless_textures_2d, bindless_samplers_filtering}",
-        "@group(3) @binding(0) var bindless_textures_2d: binding_array<texture_2d<f32>>;\n\
-         @group(3) @binding(1) var bindless_samplers_filtering: binding_array<sampler>;",
+        // Grupo 4: o grupo 3 passou a ser o MATERIAL (MATERIAL_BIND_GROUP_INDEX)
+        // — os arrays de bindless do stub têm de ficar fora dele.
+        "@group(4) @binding(0) var bindless_textures_2d: binding_array<texture_2d<f32>>;\n\
+         @group(4) @binding(1) var bindless_samplers_filtering: binding_array<sampler>;",
     ),
     (
         "#import bevy_pbr::mesh_bindings::mesh",
@@ -84,20 +95,36 @@ fn standalone(source: &str, defines: &[&str]) -> String {
             continue;
         }
         if trimmed.starts_with("#import") {
-            let stub = IMPORTS.iter().find(|(import, _)| *import == trimmed)
+            let stub = IMPORTS
+                .iter()
+                .find(|(import, _)| *import == trimmed)
                 .unwrap_or_else(|| {
-                    panic!("unsupported shader directive: {line}; extend the explicit harness contract")
+                    panic!(
+                        "unsupported shader directive: {line}; extend the explicit harness contract"
+                    )
                 })
                 .1;
             out.push_str(stub);
             out.push('\n');
             continue;
         }
-        out.push_str(&line.replace("#{MATERIAL_BIND_GROUP}", "2"));
+        // O valor REAL que o bevy 0.19 substitui no runtime (material.rs:
+        // MATERIAL_BIND_GROUP_INDEX = 3) — manter o placeholder a sincronizar
+        // com esta constante nos dois lados.
+        out.push_str(
+            &line.replace(
+                "#{MATERIAL_BIND_GROUP}",
+                &bevy::pbr::MATERIAL_BIND_GROUP_INDEX.to_string(),
+            ),
+        );
         out.push('\n');
     }
     assert!(stack.is_empty(), "unbalanced #ifdef in the chunk shader");
-    out
+    // O stub do `view` declara `fog` ao nível de topo; no compose real é o
+    // módulo `view_bindings` (criado pelo import `as view_bindings`) que o
+    // expõe. Textualmente não há namespaces em WGSL — reescreve a
+    // referência para o stub.
+    out.replace("view_bindings::fog", "fog")
 }
 
 fn validate(source: &str) -> naga::Module {
@@ -114,11 +141,32 @@ fn chunk_shader_validates_in_every_define_combination() {
     let template = include_str!("../src/terrain/chunk.wgsl");
     for defines in [
         vec!["BINDLESS", "VERTEX_COLORS"], // the live `run` configuration
-        vec!["BINDLESS"],                  // chunk meshes always carry colors — but the gate compiles either way
-        vec!["VERTEX_COLORS"],             // portable non-bindless fallback
+        vec!["BINDLESS", "VERTEX_COLORS", "DISTANCE_FOG"], // idem, com câmara com `DistanceFog` (default do `run`)
+        vec!["BINDLESS"], // chunk meshes always carry colors — but the gate compiles either way
+        vec!["VERTEX_COLORS"], // portable non-bindless fallback
+        vec!["DISTANCE_FOG"], // fog sem bindless (câmara com DistanceFog, driver sem bindless)
         vec![],
     ] {
         validate(&standalone(template, &defines));
+    }
+}
+
+/// O bloco `#ifdef DISTANCE_FOG` chama `apply_fog(view_bindings::fog, …)` —
+/// a referência é ao NAMESPACE que só existe se o template importar
+/// `bevy_pbr::mesh_view_bindings as view_bindings`. Sem o alias, o compose
+/// (naga_oil) falha com `ImportNotFound("view_bindings")`, o material perde
+/// o pipeline e NENHUM chunk desenha (só o clear-color no lugar do chão —
+/// regressão de 2026-09-06). O harness textual não compõe namespaces, por
+/// isto fica preso aqui.
+#[test]
+fn fog_block_imports_the_view_bindings_namespace() {
+    let template = include_str!("../src/terrain/chunk.wgsl");
+    if template.contains("view_bindings::fog") {
+        assert!(
+            template.contains("#import bevy_pbr::mesh_view_bindings as view_bindings"),
+            "apply_fog(view_bindings::fog, …) sem o import `as view_bindings` \
+             quebra o compose do shader — terreno invisível no run"
+        );
     }
 }
 
