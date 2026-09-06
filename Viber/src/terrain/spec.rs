@@ -35,8 +35,38 @@ pub const DEFAULT_COLLISION_RESOLUTION: u32 = 64;
 /// `chunk_size / resolution` rounded to whole meters (the mesh builder works
 /// on integer steps); values finer than 1 m/vertex clamp to 1.
 pub const DEFAULT_RESOLUTION: u32 = 64;
+/// Cliff trigger angle (degrees): raw terrain steeper than this slope counts
+/// as cliff for the peak-preserving LOD and the wall shading.
+pub const DEFAULT_CLIFF_ANGLE: f32 = 50.0;
+/// Default trigger angle (degrees) of the opt-in sharpen pass.
+pub const DEFAULT_SHARPEN_ANGLE: f32 = 35.0;
+/// Region filter of the cliff mask: minimum component area (m²).
+pub const DEFAULT_CLIFF_MIN_AREA: f32 = 120.0;
+/// Region filter: minimum total drop inside the component (meters).
+pub const DEFAULT_CLIFF_MIN_DROP: f32 = 4.0;
+/// Region filter: minimum bbox extent of the component (meters).
+pub const DEFAULT_CLIFF_MIN_EXTENT: f32 = 8.0;
+/// Runoff streak strength on cliff walls (`cliff-streaks`): 0 = clean rock.
+pub const DEFAULT_CLIFF_STREAKS: f32 = 0.5;
+/// Procedural moss on cliff shoulders/ledges (`cliff-moss`): 0 = bare rock.
+pub const DEFAULT_CLIFF_MOSS: f32 = 0.35;
 /// Mesh chunks rebuilt per frame after the initial load (frame budget).
 pub const DEFAULT_MAX_MESH_BUILDS_PER_FRAME: u32 = 4;
+/// Chunks kept resident around the camera when the world does not author a
+/// `render-distance`. `None` used to mean "draw everything", which on a 4 km
+/// world is ~4 000 live chunk entities (and 15 625 when the heightmap file
+/// widened the world behind the author's back) — every one of them paying
+/// transform propagation, visibility and a draw call every frame. The budget
+/// is a chunk *count* rather than a distance so it scales with `chunk_size`
+/// instead of being tuned per world.
+pub const DEFAULT_RESIDENT_CHUNK_BUDGET: f32 = 2048.0;
+/// Sanity ceiling on the heightfield edge derived from a spec
+/// (`chunk_rows() × samples per chunk edge`). A tiny `chunk-size` (e.g. 0.01)
+/// passes the `> 0` attribute check but would otherwise ask the procedural
+/// generator and the chunk spawner for a grid millions of samples per edge —
+/// gigabyte allocations / abort. [`TerrainSpec::validate`] refuses such specs
+/// with a clear error; [`TerrainSpec::heightfield_edge`] degrades gracefully.
+pub const MAX_GRID_EDGE_VERTS: usize = 8192;
 
 /// Declarative terrain description parsed from a `<Terrain>` tag.
 #[derive(Debug, Clone, PartialEq)]
@@ -49,6 +79,11 @@ pub struct TerrainSpec {
     pub world_size: f32,
     /// Height of a fully-white heightmap sample (meters).
     pub max_height: f32,
+    /// `world-size` / `max-height` came from the world XML rather than from
+    /// [`TerrainSpec::default`]. A heightmap file carries its own coverage
+    /// metadata, but an authored value has to win over it: the XML is what the
+    /// pads, lakes, rivers, roads and biome polygons were laid out against.
+    pub extent_authored: bool,
     /// Chunk edge length (meters).
     pub chunk_size: f32,
     /// Number of LOD levels per chunk (minimum 1).
@@ -70,13 +105,58 @@ pub struct TerrainSpec {
     /// Mesh vertices per chunk edge at LOD 0 (see [`DEFAULT_RESOLUTION`]).
     pub resolution: u32,
     /// Optional tiled diffuse texture applied over the whole terrain.
+    /// Legacy path — when `layers` is non-empty the layer blend material
+    /// replaces it (and the height/slope tint) entirely.
     pub texture: Option<String>,
     /// Texture tile size in meters; `0.0` = auto (keeps texel density constant across LODs).
     pub texture_tile_size: f32,
-    /// Height/slope color tinting applied as vertex colors.
+    /// Terrain layer blend (`layers="grass vale_grass dirt …"`): pool aliases
+    /// (see [`crate::terrain::splat::DEFAULT_LAYERS`]) or raw texture paths,
+    /// bound to the 12 shader slots in order. Empty keeps the legacy
+    /// single-texture + height-tint path.
+    pub layers: Vec<String>,
+    /// Shore band width (meters): sand fades into the terrain textures over
+    /// this distance outside the lake/river waterline (`shore-width`).
+    pub shore_width: f32,
+    /// Splat map texel size in meters; `0.0` = auto (`world_size/2048`,
+    /// floor 1 m) (`splat-texel`).
+    pub splat_texel: f32,
+    /// Height/slope color tinting applied as vertex colors. Consumed by the
+    /// LEGACY path only — with `layers` active the vertex colors carry just
+    /// `base_color` and the splat map drives the ground look.
     pub tint: TerrainTint,
     /// Seed for the procedural heightfield (ignored when `heightmap` is set).
     pub seed: u64,
+    /// Climas do chão que a paleta do splat usa. Não vem do XML: é declarado
+    /// pelo próprio heightmap (bloco `biomes` do meta do `.ahgt`), porque o
+    /// campo de biomas e o campo de alturas TÊM de ser autorados juntos —
+    /// uma cunha de deserto sobre uma bacia húmida não é um mundo.
+    pub biomes: crate::terrain::splat::BiomeField,
+    /// Cliff trigger angle (degrees, `cliff-angle`): raw terrain steeper than
+    /// this slope reads as cliff — peak-preserving LOD and wall shading.
+    pub cliff_angle: f32,
+    /// Opt-in sharpen pass (`sharpen`): rewrite smooth steep ramps of the
+    /// final field into terraced cliff bands. Off by default — it changes
+    /// heights, so colliders, spawner placement and quest geometry move.
+    pub sharpen: bool,
+    /// Ramps steeper than this angle (degrees, `sharpen-angle`) are terraced.
+    pub sharpen_angle: f32,
+    /// Seed for the sharpen dither (`sharpen-seed`); `0` derives from `seed`.
+    pub sharpen_seed: u64,
+    /// Region filter: a slope component is a cliff only above this area (m²,
+    /// `cliff-min-area`).
+    pub cliff_min_area: f32,
+    /// Region filter: minimum total drop of the component (meters,
+    /// `cliff-min-drop`).
+    pub cliff_min_drop: f32,
+    /// Region filter: minimum bbox extent of the component (meters,
+    /// `cliff-min-extent`).
+    pub cliff_min_extent: f32,
+    /// Runoff streak strength on cliff walls (0..1, `cliff-streaks`) —
+    /// dark vertical water stains below drainage points.
+    pub cliff_streaks: f32,
+    /// Procedural moss on cliff shoulders and ledges (0..1, `cliff-moss`).
+    pub cliff_moss: f32,
 }
 
 impl Default for TerrainSpec {
@@ -85,6 +165,7 @@ impl Default for TerrainSpec {
             heightmap: None,
             world_size: DEFAULT_WORLD_SIZE,
             max_height: DEFAULT_MAX_HEIGHT,
+            extent_authored: false,
             chunk_size: DEFAULT_CHUNK_SIZE,
             levels: DEFAULT_LEVELS,
             lod_distance_ratio: DEFAULT_LOD_DISTANCE_RATIO,
@@ -97,8 +178,21 @@ impl Default for TerrainSpec {
             resolution: DEFAULT_RESOLUTION,
             texture: None,
             texture_tile_size: 0.0,
+            layers: Vec::new(),
+            shore_width: 5.0,
+            splat_texel: 0.0,
             tint: TerrainTint::default(),
             seed: 0,
+            biomes: crate::terrain::splat::BiomeField::default(),
+            cliff_angle: DEFAULT_CLIFF_ANGLE,
+            sharpen: false,
+            sharpen_angle: DEFAULT_SHARPEN_ANGLE,
+            sharpen_seed: 0,
+            cliff_min_area: DEFAULT_CLIFF_MIN_AREA,
+            cliff_min_drop: DEFAULT_CLIFF_MIN_DROP,
+            cliff_min_extent: DEFAULT_CLIFF_MIN_EXTENT,
+            cliff_streaks: DEFAULT_CLIFF_STREAKS,
+            cliff_moss: DEFAULT_CLIFF_MOSS,
         }
     }
 }
@@ -109,14 +203,93 @@ impl TerrainSpec {
         (self.world_size / self.chunk_size).ceil().max(1.0) as u32
     }
 
+    /// Heightfield samples per world edge for `samples_per_chunk_edge` samples
+    /// per chunk edge, capped at [`MAX_GRID_EDGE_VERTS`] with saturating
+    /// arithmetic — a tiny `chunk-size` saturates `chunk_rows()` and must not
+    /// overflow the product or explode the procedural allocation.
+    pub fn heightfield_edge(&self, samples_per_chunk_edge: usize) -> usize {
+        (self.chunk_rows() as usize)
+            .saturating_mul(samples_per_chunk_edge.max(1))
+            .min(MAX_GRID_EDGE_VERTS)
+            .max(1)
+    }
+
+    /// Parse-time sanity checks for the derived terrain geometry (shared by
+    /// the XML parser and the runtime).
+    ///
+    /// # Errors
+    /// Fails when the extent metrics are not finite/positive or when the
+    /// derived heightfield edge exceeds [`MAX_GRID_EDGE_VERTS`] — i.e. the
+    /// authored values themselves are unreasonable (raise `chunk-size` or
+    /// lower `resolution`).
+    pub fn validate(&self) -> Result<(), String> {
+        if !self.world_size.is_finite() || self.world_size <= 0.0 {
+            return Err(format!(
+                "terrain world-size must be finite and positive, got {}",
+                self.world_size
+            ));
+        }
+        if !self.max_height.is_finite() || self.max_height <= 0.0 {
+            return Err(format!(
+                "terrain max-height must be finite and positive, got {}",
+                self.max_height
+            ));
+        }
+        if !self.chunk_size.is_finite() || self.chunk_size <= 0.0 {
+            return Err(format!(
+                "terrain chunk-size must be finite and positive, got {}",
+                self.chunk_size
+            ));
+        }
+        let edge = (self.chunk_rows() as usize).saturating_mul(self.resolution.max(1) as usize);
+        if edge > MAX_GRID_EDGE_VERTS {
+            return Err(format!(
+                "terrain grid too dense: chunk_rows ({}) × resolution ({}) = {edge} samples \
+                 per edge exceeds the cap of {MAX_GRID_EDGE_VERTS} — raise chunk-size or \
+                 lower resolution",
+                self.chunk_rows(),
+                self.resolution
+            ));
+        }
+        Ok(())
+    }
+
     /// LOD distance threshold in meters for a chunk of this terrain.
     pub fn lod_distance(&self) -> f32 {
         self.chunk_size * self.lod_distance_ratio
     }
 
+    /// Tint folded into chunk vertex colors: the full height/slope banding
+    /// on the legacy single-texture path; with `layers` the splat blend
+    /// replaces the banding and only the authored `base-color` survives
+    /// (as the global multiplier of the blend). The bootstrap and the LOD
+    /// rebuilds must agree on this or neighboring chunks disagree at their
+    /// shared border.
+    pub fn chunk_tint(&self) -> crate::terrain::mesh::TintParams {
+        let mut tint = crate::terrain::mesh::TintParams::from(&self.tint);
+        if !self.layers.is_empty() {
+            tint.height_blend_strength = 0.0;
+        }
+        tint
+    }
+
     /// Skirt depth in meters for this terrain.
     pub fn skirt_depth_meters(&self) -> f32 {
         self.max_height * self.skirt_width * self.skirt_depth
+    }
+
+    /// Radius (meters) beyond which chunks are culled.
+    ///
+    /// An authored `render-distance` wins. Otherwise the radius is the one
+    /// that keeps [`DEFAULT_RESIDENT_CHUNK_BUDGET`] chunks inside the disc
+    /// (`π r² = budget · chunk_size²`). Worlds smaller than that radius are
+    /// unaffected — the whole field stays resident, as before.
+    pub fn effective_render_distance(&self) -> f32 {
+        if let Some(distance) = self.render_distance {
+            return distance;
+        }
+        let chunk = self.chunk_size.max(1.0);
+        (DEFAULT_RESIDENT_CHUNK_BUDGET / std::f32::consts::PI).sqrt() * chunk
     }
 }
 
@@ -209,6 +382,36 @@ mod tests {
     }
 
     #[test]
+    fn test_effective_render_distance_defaults_to_the_chunk_budget() {
+        let mut spec = TerrainSpec::default();
+        // An authored value always wins.
+        spec.render_distance = Some(700.0);
+        assert_eq!(spec.effective_render_distance(), 700.0);
+
+        // Without one, the radius is the disc that holds the chunk budget.
+        spec.render_distance = None;
+        spec.chunk_size = 64.0;
+        let r = spec.effective_render_distance();
+        let chunks_inside = std::f32::consts::PI * (r / spec.chunk_size).powi(2);
+        assert!(
+            (chunks_inside - DEFAULT_RESIDENT_CHUNK_BUDGET).abs() < 1.0,
+            "radius {r} holds {chunks_inside} chunks, budget is {DEFAULT_RESIDENT_CHUNK_BUDGET}"
+        );
+
+        // It scales with `chunk_size`: bigger chunks, fewer of them per disc,
+        // so the same budget reaches further.
+        spec.chunk_size = 128.0;
+        assert!(spec.effective_render_distance() > r);
+    }
+
+    #[test]
+    fn test_extent_authored_is_off_by_default() {
+        // The flag is what lets a heightmap file fill in the extent; it must
+        // start clear so a spec that never saw XML still takes the file's.
+        assert!(!TerrainSpec::default().extent_authored);
+    }
+
+    #[test]
     fn test_chunk_rows_rounds_up() {
         let mut spec = TerrainSpec::default();
         assert_eq!(spec.chunk_rows(), 4);
@@ -216,6 +419,29 @@ mod tests {
         assert_eq!(spec.chunk_rows(), 2);
         spec.world_size = 10.0;
         assert_eq!(spec.chunk_rows(), 1);
+    }
+
+    #[test]
+    fn test_validate_rejects_tiny_chunk_size() {
+        let mut spec = TerrainSpec::default();
+        assert!(spec.validate().is_ok(), "defaults validate");
+        // Passes the parser's `> 0` attribute check but derives a 25600-row
+        // grid — refused with a clear error, and the runtime path degrades to
+        // the capped edge instead of allocating it.
+        spec.chunk_size = 0.01;
+        assert!(spec.validate().is_err(), "grid too dense must be refused");
+        assert_eq!(spec.heightfield_edge(64), MAX_GRID_EDGE_VERTS);
+        spec.chunk_size = f32::NAN;
+        assert!(spec.validate().is_err(), "non-finite chunk-size is refused");
+    }
+
+    #[test]
+    fn test_heightfield_edge_caps_and_saturates() {
+        let mut spec = TerrainSpec::default(); // 4 chunk rows
+        assert_eq!(spec.heightfield_edge(64), 4 * 64);
+        // Saturated rows (chunk_size -> 0) must not overflow the product.
+        spec.chunk_size = 1e-9;
+        assert_eq!(spec.heightfield_edge(64), MAX_GRID_EDGE_VERTS);
     }
 
     #[test]

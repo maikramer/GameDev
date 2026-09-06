@@ -17,10 +17,12 @@
 use bevy::math::Vec2;
 
 use super::brush::BrushGrid;
+use super::cliffs::{CliffLine, CliffSpec};
+use super::decal::GroundDecalSpec;
 use super::roads::{RoadGuards, RoadNetworkSpec, RoadPath, RoadProfile, RoadSpec, carve_road};
 use super::sampler::ResolvedPad;
 use super::spec::TerrainPadSpec;
-use super::water::{LakeSpec, RiverSpec, WaterBody, carve_lake, carve_river};
+use super::water::{LakeSpec, RiverSpec, WaterBody, WaterKind, carve_lake, carve_river};
 
 /// All declarative ground features of a world.
 #[derive(Debug, Clone, Default)]
@@ -28,8 +30,20 @@ pub struct TerrainFeatures {
     pub pads: Vec<TerrainPadSpec>,
     pub lakes: Vec<LakeSpec>,
     pub rivers: Vec<RiverSpec>,
+    /// Cliff walls (`<Cliff>`) — the carve that wants the vertical step.
+    pub cliffs: Vec<CliffSpec>,
+    /// Tunnels (`<Cave>`) — NOT a carve. These never touch the heightfield;
+    /// they become subtractive mods in the voxel field, which is the only
+    /// representation that can put rock above the player's head.
+    pub caves: Vec<crate::terrain::voxel::CaveSpec>,
+    /// Free-standing rock portals (`<Arch>`) — union solids in the voxel
+    /// field, never a carve.
+    pub arches: Vec<crate::terrain::voxel::ArchSpec>,
     pub roads: Vec<RoadSpec>,
     pub networks: Vec<RoadNetworkSpec>,
+    /// Draped ground patches (`<GroundDecal>`) — plaza floors, market
+    /// aprons. Purely visual: they never touch the heightfield.
+    pub decals: Vec<GroundDecalSpec>,
 }
 
 impl TerrainFeatures {
@@ -38,8 +52,12 @@ impl TerrainFeatures {
         self.pads.is_empty()
             && self.lakes.is_empty()
             && self.rivers.is_empty()
+            && self.cliffs.is_empty()
+            && self.caves.is_empty()
+            && self.arches.is_empty()
             && self.roads.is_empty()
             && self.networks.is_empty()
+            && self.decals.is_empty()
     }
 
     /// Road count including network-expanded segments (for summaries).
@@ -58,6 +76,11 @@ impl TerrainFeatures {
 pub struct FeatureResult {
     /// Water bodies for `avoid-water` / `near-water` / surface queries.
     pub water: Vec<WaterBody>,
+    /// Spec de origem paralela a [`FeatureResult::water`] — `(é_lago,
+    /// índice_na_spec)`. Um lago/rio degenerado (carve falhou) não entra em
+    /// `water`; sem este alinhamento por identidade, o emparelhamento
+    /// posicional em `spawn_water` desalinha TODOS os corpos seguintes.
+    pub water_specs: Vec<(bool, usize)>,
     /// Carved roads for `isPointOnRoad` / `distanceToRoadAt`.
     pub roads: Vec<RoadPath>,
     /// The declarative specs parallel to [`FeatureResult::roads`] (ribbon
@@ -67,6 +90,10 @@ pub struct FeatureResult {
     pub pads: Vec<ResolvedPad>,
     /// Fusion discs for multi-arm junctions (VibeGame junctions.ts).
     pub road_junctions: Vec<super::roads::RoadJunction>,
+    /// Ground decals to render, in declaration order.
+    pub decals: Vec<GroundDecalSpec>,
+    /// Carved cliff walls, in declaration order (query registry).
+    pub cliffs: Vec<CliffLine>,
 }
 
 /// Applies all features in the canonical order and returns the registries.
@@ -92,17 +119,43 @@ pub fn apply_features(grid: &mut BrushGrid, features: &TerrainFeatures) -> Featu
         });
     }
 
-    // 2. Water — lakes then rivers, declaration order (lower-only).
+    // 2. Water — lakes then rivers, declaration order. Rivers recebem os
+    // lagos JÁ carvados: a confluência sobe as estações à cota do espelho.
     for (i, lake) in features.lakes.iter().enumerate() {
         if let Some(body) = carve_lake(grid, lake, i) {
             result.water.push(body);
+            result.water_specs.push((true, i));
         }
     }
     for (i, river) in features.rivers.iter().enumerate() {
-        if let Some(body) = carve_river(grid, river, i) {
+        // Cópia dos corpos de lago (poucos) — a confluência usa as cotas do
+        // registry, e `result.water` é mutado dentro do loop.
+        let lake_bodies: Vec<WaterBody> = result
+            .water
+            .iter()
+            .filter(|b| b.kind == WaterKind::Lake)
+            .cloned()
+            .collect();
+        if let Some(body) = carve_river(grid, river, i, &lake_bodies) {
             result.water.push(body);
+            result.water_specs.push((false, i));
         }
     }
+
+    // 2.5 Cliffs — NOT carved any more.
+    //
+    // A cliff is now a 3D solid in the voxel field
+    // (`src/terrain/voxel/cliff.rs`), built by the bootstrap from these same
+    // specs. Writing it into the height grid as well would be a second source
+    // of truth for the same wall, and the grid version is the one that cannot
+    // be vertical.
+    //
+    // Consequence to know about: cliffs used to carve BETWEEN water and roads
+    // precisely so a road survey read the finished wall and its `limit_grade`
+    // reacted to it. With the wall out of the grid, a road authored across a
+    // cliff no longer sees it. No shipped world does that — `simple-rpg` keeps
+    // its cliffs a documented ~30 m clear of every arterial — but a world that
+    // tried would drive its ribbon under the rock.
 
     // 3. Roads — expand networks, plain roads first, bridges last.
     let mut specs: Vec<RoadSpec> = features.roads.clone();
@@ -125,8 +178,23 @@ pub fn apply_features(grid: &mut BrushGrid, features: &TerrainFeatures) -> Featu
             result.road_specs.push(spec.clone());
         }
     }
+    // 4. Ground decals — visual only, so they run after every carve and read
+    //    the final heightfield.
+    result.decals = features.decals.clone();
+
+    // 5. Fusion discs, minus the ones a decal already hides. Stacking a disc
+    //    under a plaza floor put two alpha-blended cobble layers at almost
+    //    the same height over the same world-space UVs: the feather bands
+    //    double-blend into visible seams, and the pair z-fights. The plaza
+    //    floor covers the crossing on its own, so the disc is redundant
+    //    there — the discs that survive are the ones out on open ground.
     for network in &features.networks {
-        result.road_junctions.extend(network.junction_points());
+        for junction in network.junction_points() {
+            if result.decals.iter().any(|d| d.covers(junction.at)) {
+                continue;
+            }
+            result.road_junctions.push(junction);
+        }
     }
 
     result
@@ -135,6 +203,7 @@ pub fn apply_features(grid: &mut BrushGrid, features: &TerrainFeatures) -> Featu
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::terrain::decal::GroundDecalSpec;
     use crate::terrain::roads::{RoadNetworkSpec, RoadProfile, SegmentSpec, WaySpec};
 
     /// 128x128 grid, 128 m world (XZ in [-64, 64]), rolling hill.
@@ -155,6 +224,9 @@ mod tests {
 
     fn sample_features() -> TerrainFeatures {
         TerrainFeatures {
+            decals: Vec::new(),
+            caves: Vec::new(),
+            arches: Vec::new(),
             pads: vec![TerrainPadSpec {
                 at: Vec2::ZERO,
                 size: Vec2::splat(24.0),
@@ -172,6 +244,7 @@ mod tests {
                 width: 6.0,
                 ..RiverSpec::default()
             }],
+            cliffs: Vec::new(),
             roads: vec![RoadSpec {
                 name: Some("trail".into()),
                 path: vec![Vec2::new(-40.0, 32.0), Vec2::new(40.0, 32.0)],
@@ -311,5 +384,186 @@ mod tests {
         // Channel survived the bridge.
         let floor = grid.sample(0.0, 0.0);
         assert!(floor < river.water_y, "channel intact under the bridge");
+    }
+
+    /// A plaza floor and the network's own fusion disc used to stack at the
+    /// same crossing: two alpha-blended cobble layers a few centimetres
+    /// apart over identical world-space UVs, so their feather bands
+    /// double-blended into seams and the pair z-fought. The floor already
+    /// hides the crossing, so the disc under it must be dropped.
+    #[test]
+    fn test_decal_suppresses_the_junction_disc_it_hides() {
+        let net = RoadNetworkSpec {
+            default_width: 4.0,
+            ways: vec![
+                WaySpec {
+                    id: "hub".into(),
+                    at: Vec2::ZERO,
+                    width: None,
+                },
+                WaySpec {
+                    id: "n".into(),
+                    at: Vec2::new(0.0, 24.0),
+                    width: None,
+                },
+                WaySpec {
+                    id: "e".into(),
+                    at: Vec2::new(24.0, 0.0),
+                    width: None,
+                },
+                WaySpec {
+                    id: "s".into(),
+                    at: Vec2::new(0.0, -24.0),
+                    width: None,
+                },
+            ],
+            segments: vec![
+                SegmentSpec {
+                    a: "hub".into(),
+                    b: "n".into(),
+                    ..SegmentSpec::default()
+                },
+                SegmentSpec {
+                    a: "hub".into(),
+                    b: "e".into(),
+                    ..SegmentSpec::default()
+                },
+                SegmentSpec {
+                    a: "hub".into(),
+                    b: "s".into(),
+                    ..SegmentSpec::default()
+                },
+            ],
+            ..RoadNetworkSpec::default()
+        };
+        let floor = GroundDecalSpec {
+            at: Vec2::ZERO,
+            half_extent: Vec2::splat(10.5),
+            ..GroundDecalSpec::default()
+        };
+
+        let mut grid = test_grid();
+        let bare = apply_features(
+            &mut grid,
+            &TerrainFeatures {
+                networks: vec![net.clone()],
+                ..TerrainFeatures::default()
+            },
+        );
+        assert_eq!(bare.road_junctions.len(), 1, "sem decal o disco fica");
+
+        let mut grid = test_grid();
+        let covered = apply_features(
+            &mut grid,
+            &TerrainFeatures {
+                networks: vec![net],
+                decals: vec![floor],
+                ..TerrainFeatures::default()
+            },
+        );
+        assert!(
+            covered.road_junctions.is_empty(),
+            "o chão da praça já cobre o cruzamento: {:?}",
+            covered.road_junctions
+        );
+        assert_eq!(
+            covered.decals.len(),
+            1,
+            "o decal continua a ser renderizado"
+        );
+    }
+
+    /// A decal far from the crossing must not swallow its disc.
+    #[test]
+    fn test_distant_decal_leaves_the_disc_alone() {
+        let net = RoadNetworkSpec {
+            default_width: 4.0,
+            ways: vec![
+                WaySpec {
+                    id: "hub".into(),
+                    at: Vec2::ZERO,
+                    width: None,
+                },
+                WaySpec {
+                    id: "n".into(),
+                    at: Vec2::new(0.0, 24.0),
+                    width: None,
+                },
+                WaySpec {
+                    id: "e".into(),
+                    at: Vec2::new(24.0, 0.0),
+                    width: None,
+                },
+                WaySpec {
+                    id: "s".into(),
+                    at: Vec2::new(0.0, -24.0),
+                    width: None,
+                },
+            ],
+            segments: vec![
+                SegmentSpec {
+                    a: "hub".into(),
+                    b: "n".into(),
+                    ..SegmentSpec::default()
+                },
+                SegmentSpec {
+                    a: "hub".into(),
+                    b: "e".into(),
+                    ..SegmentSpec::default()
+                },
+                SegmentSpec {
+                    a: "hub".into(),
+                    b: "s".into(),
+                    ..SegmentSpec::default()
+                },
+            ],
+            ..RoadNetworkSpec::default()
+        };
+        let mut grid = test_grid();
+        let result = apply_features(
+            &mut grid,
+            &TerrainFeatures {
+                networks: vec![net],
+                decals: vec![GroundDecalSpec {
+                    at: Vec2::new(40.0, 40.0),
+                    half_extent: Vec2::splat(6.0),
+                    ..GroundDecalSpec::default()
+                }],
+                ..TerrainFeatures::default()
+            },
+        );
+        assert_eq!(result.road_junctions.len(), 1);
+    }
+
+    /// Decals are visual only — they must never move the heightfield.
+    #[test]
+    fn test_decals_never_carve_the_terrain() {
+        let mut grid = test_grid();
+        let before = grid.raw().to_vec();
+        let result = apply_features(
+            &mut grid,
+            &TerrainFeatures {
+                decals: vec![GroundDecalSpec {
+                    at: Vec2::ZERO,
+                    half_extent: Vec2::splat(12.0),
+                    ..GroundDecalSpec::default()
+                }],
+                ..TerrainFeatures::default()
+            },
+        );
+        assert_eq!(grid.raw(), before.as_slice(), "decals são só visuais");
+        assert_eq!(result.decals.len(), 1);
+    }
+
+    #[test]
+    fn test_is_empty_accounts_for_decals() {
+        assert!(TerrainFeatures::default().is_empty());
+        assert!(
+            !TerrainFeatures {
+                decals: vec![GroundDecalSpec::default()],
+                ..TerrainFeatures::default()
+            }
+            .is_empty()
+        );
     }
 }

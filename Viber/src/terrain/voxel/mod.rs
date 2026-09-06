@@ -1,0 +1,38 @@
+//! Voxel terrain — the 3D shape layer over the heightfield.
+//!
+//! The heightfield terrain is 2.5D by construction: one height per XZ. That is
+//! the right representation for the 95% of a world that is ground, and the
+//! wrong one for the 5% that is rock — a cliff carved into a height grid can
+//! never be vertical, never undercut, and never have anything under it.
+//!
+//! This module adds the missing dimension **without replacing** what works:
+//!
+//! * [`field::VoxelField`] is the shape authority. Its base term is the same
+//!   `BrushGrid` every carve already writes to, so a column with no 3D feature
+//!   over it resolves to the heightfield value at the heightfield's cost.
+//! * [`mods`] are the 3D solids — a cliff body, a talus cone, a cave tube.
+//!   Unlike a carve, a mod stays an object for the life of the world, so no
+//!   downstream system has to re-derive "is this rock?" from the numbers.
+//! * [`index::ModIndex`] answers *does anything 3D touch this column?* in O(1),
+//!   which is what keeps the cost proportional to the authored area instead of
+//!   to the world.
+//! * [`surface_nets`] meshes the chunks that need it.
+
+pub mod arch;
+pub mod cave;
+pub mod cliff;
+pub mod field;
+pub mod index;
+pub mod mods;
+pub mod riverbank;
+pub mod spawn;
+pub mod surface_nets;
+
+pub use arch::ArchSpec;
+pub use cave::CaveSpec;
+pub use cliff::{CliffBand, build_cliff_mods, profile_offset};
+pub use field::{Span, VoxelField};
+pub use index::{ChunkClass, ModIndex};
+pub use mods::{ArchMod, Bounds3, BoxMod, CapsuleMod, ModOp, VoxelMod};
+pub use spawn::{VoxelChunk, VoxelSpawnStats, spawn_voxel_chunks};
+pub use surface_nets::{VOXEL_CHUNK_CELLS, VoxelChunkParams, build_voxel_mesh};

@@ -290,11 +290,22 @@ impl BrushGrid {
         let texel = self.texel();
         let half = self.world_size * 0.5;
         // Texel index range covering the AABB expanded ±1 texel (the bilinear
-        // stencil of any sample near the brush reaches this far).
+        // stencil of any sample near the brush reaches this far). The upper
+        // bound is clamped to the grid extent BEFORE the `+1`: pathological
+        // AABBs (±inf, huge authored coords) saturate the float→usize cast and
+        // the increment would overflow (panic in debug / wrap in release).
         let x0 = (((req.min_x - texel) + half) / texel).floor().max(0.0) as usize;
-        let x1 = ((((req.max_x + texel) + half) / texel).ceil() as usize + 1).min(self.width);
         let z0 = (((req.min_z - texel) + half) / texel).floor().max(0.0) as usize;
-        let z1 = ((((req.max_z + texel) + half) / texel).ceil() as usize + 1).min(self.depth);
+        let x1 = ((((req.max_x + texel) + half) / texel)
+            .ceil()
+            .min(self.width as f32) as usize
+            + 1)
+        .min(self.width);
+        let z1 = ((((req.max_z + texel) + half) / texel)
+            .ceil()
+            .min(self.depth as f32) as usize
+            + 1)
+        .min(self.depth);
         let quantum = raw_quantum(self.max_height);
         let eps = quantum.max(1e-4);
 
@@ -424,39 +435,54 @@ impl BrushGrid {
             + h1
     }
 
+    /// Catmull-Rom (blend `smoothing`) do eixo primário em (x, z), com o
+    /// eixo CRUZADO interpolado — o truncamento antigo (`as usize`) amostrava
+    /// só a linha/coluna inteira mais próxima e quantizava encostas em
+    /// patamares dependentes do eixo.
     fn smoothed_axis(&self, x: f32, z: f32, axis: Axis) -> f32 {
         let half = self.world_size * 0.5;
         let texel = self.texel();
-        let (cells, f, n) = match axis {
+        // `n` é a dimensão do eixo CRUZADO (para o clamp de j0) — com grids
+        // não-quadrados, clampar com a contagem do eixo primário achatava
+        // metade do mapa na última linha.
+        let (cells, cross, n) = match axis {
             Axis::X => (
                 (((x + half) / texel).clamp(0.0, (self.width - 1) as f32)),
-                z,
-                self.width,
+                (z + half) / texel,
+                self.depth,
             ),
             Axis::Z => (
                 (((z + half) / texel).clamp(0.0, (self.depth - 1) as f32)),
-                x,
-                self.depth,
+                (x + half) / texel,
+                self.width,
             ),
         };
         let i0 = cells.floor() as usize;
         let t = cells - i0 as f32;
-        let at = |i: usize| -> f32 {
+        let j0 = cross.floor().clamp(0.0, (n - 1) as f32) as usize;
+        let ct = (cross - j0 as f32).clamp(0.0, 1.0);
+        let at = |i: usize, j: usize| -> f32 {
             match axis {
-                Axis::X => self.cell_height(i.min(n - 1), (f / texel + half / texel) as usize),
-                Axis::Z => self.cell_height((f / texel + half / texel) as usize, i.min(n - 1)),
+                Axis::X => self.cell_height(i, j),
+                Axis::Z => self.cell_height(j, i),
             }
         };
-        let h1 = at(i0);
-        let h2 = at(i0 + 1);
-        if self.smoothing <= 0.0 {
-            return h1 + (h2 - h1) * t;
-        }
-        let h0 = at(i0.saturating_sub(1));
-        let h3 = at(i0 + 2);
-        let cr = Self::catmull_axis(h0, h1, h2, h3, t);
-        let bilinear = h1 + (h2 - h1) * t;
-        bilinear + (cr - bilinear) * self.smoothing
+        // Spline do eixo primário avaliada numa linha/coluna do eixo cruzado.
+        let axis_value = |j: usize| -> f32 {
+            let h1 = at(i0, j);
+            let h2 = at(i0 + 1, j);
+            if self.smoothing <= 0.0 {
+                return h1 + (h2 - h1) * t;
+            }
+            let h0 = at(i0.saturating_sub(1), j);
+            let h3 = at(i0 + 2, j);
+            let cr = Self::catmull_axis(h0, h1, h2, h3, t);
+            let bilinear = h1 + (h2 - h1) * t;
+            bilinear + (cr - bilinear) * self.smoothing
+        };
+        let a = axis_value(j0);
+        let b = axis_value(j0 + 1);
+        a + (b - a) * ct
     }
 
     /// Terrain height at a world XZ position (smoothed per `smoothing`).
@@ -479,6 +505,28 @@ impl BrushGrid {
         let hz0 = self.sample(x, z - e);
         let hz1 = self.sample(x, z + e);
         Vec3::new(hx0 - hx1, 2.0 * e, hz0 - hz1).normalize_or_zero()
+    }
+
+    /// Surface normal averaged over a 3×3 probe matrix centered on `(x, z)`.
+    ///
+    /// Weights are 1/1/1/1/**6**/1/1/1/1 (the spawn point dominates) and the
+    /// probes sit one texel apart: probes closer than the heightfield cell can
+    /// all land in the same cells and read a steep ravine wall as a gentle
+    /// ramp (VibeGame `sampleTerrainSurfaceMatrix`). The average also steadies
+    /// prop tilt on bumpy ground, where a single central difference follows
+    /// every texel-scale bump.
+    pub fn sample_normal_matrix(&self, x: f32, z: f32, epsilon: f32) -> Vec3 {
+        let spacing = self.texel();
+        let mut acc = Vec3::ZERO;
+        for row in -1i32..=1 {
+            for col in -1i32..=1 {
+                let weight: f32 = if row == 0 && col == 0 { 6.0 } else { 1.0 };
+                acc +=
+                    self.sample_normal(x + col as f32 * spacing, z + row as f32 * spacing, epsilon)
+                        * weight;
+            }
+        }
+        acc.normalize_or_zero()
     }
 }
 
@@ -511,6 +559,30 @@ impl super::mesh::HeightField for BrushGrid {
 
     fn max_height(&self) -> f32 {
         self.max_height
+    }
+
+    fn range_over(&self, min_x: f32, min_z: f32, max_x: f32, max_z: f32) -> Option<(f32, f32)> {
+        let texel = self.texel();
+        let half = self.world_size * 0.5;
+        // Texel index range covering the world AABB (same index mapping as
+        // `apply`, upper bound clamped before the +1 so huge AABBs saturate).
+        let x0 = ((min_x + half) / texel).floor().max(0.0) as usize;
+        let z0 = ((min_z + half) / texel).floor().max(0.0) as usize;
+        let x1 = ((((max_x + half) / texel).floor().max(0.0) as usize) + 1).min(self.width);
+        let z1 = ((((max_z + half) / texel).floor().max(0.0) as usize) + 1).min(self.depth);
+        if x0 >= x1 || z0 >= z1 {
+            return None;
+        }
+        let mut min = f32::INFINITY;
+        let mut max = f32::NEG_INFINITY;
+        for z in z0..z1 {
+            for x in x0..x1 {
+                let h = self.cell_height(x, z);
+                min = min.min(h);
+                max = max.max(h);
+            }
+        }
+        Some((min, max))
     }
 }
 
@@ -719,6 +791,29 @@ mod tests {
     }
 
     #[test]
+    fn test_apply_survives_pathological_aabb_bounds() {
+        // ±inf bounds saturam o cast float→usize dos índices; o `+1` não pode
+        // fazer overflow e o stroke cobre simplesmente o grid inteiro (o peso
+        // decide o que escreve).
+        let mut grid = flat_grid(8.0);
+        grid.begin_stroke("road:inf");
+        let mut weight = |p: Vec2| (1.0 - p.length() / 8.0).clamp(0.0, 1.0);
+        let mut target = |_| 1.0_f32;
+        let written = grid.apply(BrushRequest {
+            mode: BrushMode::Blend,
+            min_x: f32::NEG_INFINITY,
+            min_z: f32::NEG_INFINITY,
+            max_x: f32::INFINITY,
+            max_z: f32::INFINITY,
+            target: &mut target,
+            weight: &mut weight,
+        });
+        grid.commit_stroke();
+        assert!(written > 0, "infinite bounds still carve the weighted disc");
+        assert_eq!(grid.revision(), 1);
+    }
+
+    #[test]
     fn test_journal_revert_restores_exactly() {
         let mut grid = flat_grid(8.0);
         grid.begin_stroke("road:1");
@@ -914,5 +1009,57 @@ mod tests {
             b.raw(),
             "auto mode equals explicit resolved height"
         );
+    }
+
+    #[test]
+    fn test_normal_matrix_flat_is_straight_up() {
+        let grid = flat_grid(10.0);
+        let n = grid.sample_normal_matrix(32.0, 32.0, 0.5);
+        assert!((n - Vec3::Y).length() < 1e-4, "flat matrix normal: {n}");
+    }
+
+    #[test]
+    fn test_normal_matrix_tilts_down_a_slope() {
+        let mut grid = BrushGrid::new(vec![0; 16 * 16], 16, 16, 16.0, 50.0, 0.0).expect("grid");
+        grid.begin_stroke("slope");
+        for z in 0..16 {
+            for x in 0..16 {
+                grid.set_cell_height(x, z, x as f32 * 2.0);
+            }
+        }
+        grid.commit_stroke();
+        // Interior do campo: a borda lê-se plana (os dados clamparam no
+        // último texel) e afogaria a comparação com a sonda única.
+        let n = grid.sample_normal_matrix(0.0, 0.0, 1.0);
+        assert!(n.x < 0.0, "matrix normal leans against +X slope: {n}");
+        assert!(n.y > 0.0);
+        // On a perfect ramp the matrix average agrees with the single probe.
+        let single = grid.sample_normal(0.0, 0.0, 1.0);
+        assert!(
+            (n - single).length() < 0.05,
+            "ramp: matrix {n} vs single {single}"
+        );
+    }
+
+    #[test]
+    fn test_normal_matrix_damps_a_ravine_wall() {
+        // Degrau de um texel (ravina / corte de estrada): a sonda única em
+        // cima da transição lê uma parede quase horizontal; a matriz (centro
+        // 6×, anel já em plano plano/plateau) mantém a normal maioritariamente
+        // de pé — o caso que deixava tapetes de vegetação pintar paredes de
+        // corte (VibeGame `sampleTerrainSurfaceMatrix`).
+        let mut grid = BrushGrid::new(vec![0; 16 * 16], 16, 16, 16.0, 50.0, 0.0).expect("grid");
+        grid.begin_stroke("step");
+        for z in 0..16 {
+            for x in 0..16 {
+                grid.set_cell_height(x, z, if x >= 8 { 22.0 } else { 10.0 });
+            }
+        }
+        grid.commit_stroke();
+        let single = grid.sample_normal(0.0, 0.0, grid.texel() * 0.5);
+        let matrix = grid.sample_normal_matrix(0.0, 0.0, grid.texel() * 0.5);
+        assert!(single.y < 0.3, "wall probe reads the cut: {single}");
+        assert!(matrix.y > single.y, "matrix damps the wall: {matrix}");
+        assert!(matrix.y > 0.5, "matrix stays mostly upright: {matrix}");
     }
 }

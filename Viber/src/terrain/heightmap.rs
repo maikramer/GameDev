@@ -17,6 +17,69 @@ use bevy::image::Image;
 use bevy::render::render_resource::{TextureDimension, TextureFormat};
 
 use super::spec::TerrainSpec;
+use super::splat::{Biome, BiomeField, BiomeWedge};
+
+/// Metadados que o próprio ficheiro `.ahgt` declara sobre o mundo que
+/// descreve.
+///
+/// `worldSize`/`maxHeight` são antigos; o bloco `biomes` é o contrato novo:
+/// o campo de climas do chão vive AO LADO do campo de alturas, não no XML,
+/// porque os dois são autorados pelo mesmo gerador e uma cunha de deserto
+/// sobre uma bacia húmida não é um mundo. Exemplo do meta:
+///
+/// ```json
+/// {"worldSize":4000,"maxHeight":200,
+///  "biomes":{"core":90,"blend":150,
+///            "wedges":[{"dir":[0,1],"biome":"forest"},
+///                      {"dir":[1,0],"biome":"desert"}]}}
+/// ```
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AhgtMeta {
+    /// Cobertura em metros declarada pelo ficheiro (`None` = não declara).
+    pub world_size: Option<f32>,
+    /// Cota máxima em metros declarada pelo ficheiro.
+    pub max_height: Option<f32>,
+    /// Campo de biomas; vazio quando o ficheiro não declara nenhum.
+    pub biomes: BiomeField,
+}
+
+/// Lê o bloco `biomes` do meta JSON. Nomes desconhecidos são saltados — um
+/// heightmap novo continua a carregar numa engine antiga e vice-versa.
+fn parse_biomes(meta: &serde_json::Value) -> BiomeField {
+    let Some(node) = meta.get("biomes") else {
+        return BiomeField::default();
+    };
+    let mut field = BiomeField {
+        wedges: Vec::new(),
+        core: node["core"].as_f64().unwrap_or(80.0) as f32,
+        blend: node["blend"].as_f64().unwrap_or(140.0) as f32,
+    };
+    let Some(list) = node.get("wedges").and_then(|w| w.as_array()) else {
+        return field;
+    };
+    for entry in list {
+        let Some(biome) = entry["biome"].as_str().and_then(Biome::from_name) else {
+            continue;
+        };
+        let dir = entry.get("dir").and_then(|d| d.as_array());
+        let (dx, dz) = match dir {
+            Some(pair) if pair.len() == 2 => (
+                pair[0].as_f64().unwrap_or(0.0) as f32,
+                pair[1].as_f64().unwrap_or(0.0) as f32,
+            ),
+            _ => continue,
+        };
+        let v = bevy::math::Vec2::new(dx, dz);
+        if v.length_squared() < 1e-6 {
+            continue;
+        }
+        field.wedges.push(BiomeWedge {
+            dir: v.normalize(),
+            biome,
+        });
+    }
+    field
+}
 
 /// Base wavelength (meters) of the procedural FBM: ~1 noise cycle per 128 m.
 const FBM_BASE_WAVELENGTH: f32 = 128.0;
@@ -61,10 +124,10 @@ impl HeightMapU16 {
     /// # Errors
     /// Fails on unsupported texture formats or non-2D images.
     /// Decode an `.ahgt` blob (AHGT magic + JSON meta + deflate u16 grid).
-    /// Returns the map and the authoritative `worldSize`/`maxHeight` stored
-    /// in the file (they override the XML spec — the heightmap defines the
-    /// terrain).
-    pub fn from_ahgt(bytes: &[u8]) -> anyhow::Result<(Self, f32, f32)> {
+    /// Returns the map and the [`AhgtMeta`] the file carries: the
+    /// authoritative `worldSize`/`maxHeight` (they override the XML spec —
+    /// the heightmap defines the terrain) plus the optional biome field.
+    pub fn from_ahgt(bytes: &[u8]) -> anyhow::Result<(Self, AhgtMeta)> {
         use anyhow::{Context, bail};
 
         if bytes.len() < 20 {
@@ -100,24 +163,36 @@ impl HeightMapU16 {
         let zlib_wrapped = payload.len() >= 2
             && (payload[0] & 0x0f) == 0x08
             && ((payload[0] as u16) << 8 | payload[1] as u16).is_multiple_of(31);
-        let raw: Vec<u8> = {
-            let mut out = Vec::with_capacity(width * depth * 2);
+        // Expected payload size, validated BEFORE reserving: a corrupted
+        // header can claim a ~8.6 GB grid (65535² texels × 2) and the old
+        // `with_capacity` aborted before the payload-size check below.
+        let expected = width
+            .checked_mul(depth)
+            .and_then(|texels| texels.checked_mul(2))
+            .ok_or_else(|| anyhow::anyhow!("AHGT: {width}x{depth} grid overflows usize"))?;
+        let mut raw: Vec<u8> = Vec::new();
+        raw.try_reserve(expected).map_err(|_| {
+            anyhow::anyhow!(
+                "AHGT: header requests {expected} bytes of height data ({:.1} GiB) — \
+                 refusing the allocation (corrupt header?)",
+                expected as f64 / (1024.0 * 1024.0 * 1024.0)
+            )
+        })?;
+        {
+            use std::io::Read;
             if zlib_wrapped {
                 let mut decoder = flate2::read::ZlibDecoder::new(payload);
-                use std::io::Read;
                 decoder
-                    .read_to_end(&mut out)
+                    .read_to_end(&mut raw)
                     .context("AHGT: zlib decompress failed")?;
             } else {
                 let mut decoder = flate2::read::DeflateDecoder::new(payload);
-                use std::io::Read;
                 decoder
-                    .read_to_end(&mut out)
+                    .read_to_end(&mut raw)
                     .context("AHGT: deflate decompress failed")?;
             }
-            out
-        };
-        if raw.len() < width * depth * 2 {
+        }
+        if raw.len() < expected {
             bail!(
                 "AHGT: height payload too small ({} bytes for {width}x{depth})",
                 raw.len()
@@ -127,7 +202,14 @@ impl HeightMapU16 {
         for i in 0..width * depth {
             data.push(u16::from_le_bytes([raw[i * 2], raw[i * 2 + 1]]));
         }
-        Ok((Self { width, depth, data }, world_size, max_height))
+        Ok((
+            Self { width, depth, data },
+            AhgtMeta {
+                world_size: Some(world_size),
+                max_height: Some(max_height),
+                biomes: parse_biomes(&meta),
+            },
+        ))
     }
 
     pub fn from_image(image: &Image) -> anyhow::Result<Self> {
@@ -206,10 +288,12 @@ impl HeightMapU16 {
     /// waste dynamic range.
     ///
     /// Dimensions are `spec.chunk_rows() * samples_per_chunk_edge` samples per
-    /// axis (square grid covering the full world span).
+    /// axis (square grid covering the full world span), capped by
+    /// [`MAX_GRID_EDGE_VERTS`](super::spec::MAX_GRID_EDGE_VERTS) so a
+    /// pathological `chunk-size` degrades the resolution instead of aborting.
     pub fn procedural(spec: &TerrainSpec, samples_per_chunk_edge: usize) -> Self {
         let samples = samples_per_chunk_edge.max(1);
-        let side = spec.chunk_rows() as usize * samples;
+        let side = spec.heightfield_edge(samples);
         let width = side.max(1);
         let depth = width;
         let denom = (width - 1) as f32;
@@ -616,6 +700,33 @@ mod tests {
         let map = HeightMapU16::procedural(&spec, 1);
         assert_eq!((map.width, map.depth), (1, 1));
         assert_eq!(map.data.len(), 1);
+    }
+
+    #[test]
+    fn test_from_ahgt_rejects_corrupt_header_without_giant_alloc() {
+        use std::io::Write;
+        // Header claims a 65535×65535 grid (~8.6 GiB of payload) but ships a
+        // tiny one — the decoder must refuse cleanly, never abort on the
+        // reservation.
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&0x5447_4841_u32.to_le_bytes()); // "AHGT"
+        bytes.extend_from_slice(&1_u16.to_le_bytes()); // version
+        bytes.extend_from_slice(&u16::MAX.to_le_bytes()); // width
+        bytes.extend_from_slice(&u16::MAX.to_le_bytes()); // depth
+        bytes.extend_from_slice(&[0_u8; 6]); // reserved
+        let meta = br#"{"worldSize":256,"maxHeight":50}"#;
+        bytes.extend_from_slice(&(meta.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(meta);
+        let mut enc = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        enc.write_all(&[0, 0, 0, 0]).expect("zlib write");
+        bytes.extend_from_slice(&enc.finish().expect("zlib finish"));
+
+        let err = HeightMapU16::from_ahgt(&bytes).expect_err("corrupt grid must be refused");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("too small") || msg.contains("refusing"),
+            "clean error (no abort): {msg}"
+        );
     }
 
     #[test]

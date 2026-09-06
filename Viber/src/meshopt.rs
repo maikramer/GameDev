@@ -304,6 +304,10 @@ pub fn decode_glb(bytes: &[u8]) -> Result<Vec<u8>> {
             strip_extension(&mut doc, "extensionsUsed", QUANTIZATION);
         }
         strip_extension(&mut doc, "extensionsRequired", QUANTIZATION);
+        // A de-quantização anexa dados f32 PARA ALÉM do byteLength original;
+        // sem reescrever o buffer, as views novas ficam fora do declarado e
+        // o loader rejeita o GLB.
+        doc["buffers"] = serde_json::json!([{ "byteLength": out_bin.len() }]);
         return write_glb(&doc, &out_bin);
     }
 

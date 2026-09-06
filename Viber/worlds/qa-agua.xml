@@ -1,0 +1,36 @@
+<!-- QA da água voxel (apagar depois): leito de seixo (13.ª layer), bank
+     styles, pedras de margem, foam — e as novidades voxel: gorge no rio
+     com cascata + nascente, overhang no lago com ilha. -->
+<world clear-color="#87ceeb">
+  <AmbientLight color="#bfd4e0" brightness="400" />
+  <DirectionalLight direction="-0.5 -1 -0.3" illuminance="28000" shadows="true" />
+
+  <Terrain name="vale" world-size="512" max-height="60" chunk-size="64"
+           levels="4" resolution="64" collision-resolution="32"
+           height-smoothing="1" seed="7"
+           base-color="#c9c5ba"
+           layers="grass vale_grass dirt dirt_trail forest_floor gravel mountain_stone sand desert_sand snow_peak swamp_mud dirt_road pebbles"
+           shore-width="5" snow-height="0.92" />
+
+  <TerrainPad name="plaza" at="0 0" size="48 48" falloff="14" corner-radius="10" />
+
+  <!-- Lago com overhang (parede voxel com socava) + praia no restante? O
+       overhang é anel completo — para praia E parede no mesmo lago, ficar
+       por beach + ilha. -->
+  <Lake name="lagoa_qa" at="-34 -42" radius="15" depth="3" water-offset="0.5"
+        color="#1e5a6e" opacity="0.66" ripple="1.2"
+        bank="beach" rocks="1" rocks-density="0.18">
+    <Island at="-38 -46" radius="4.5" height="1.4" />
+  </Lake>
+
+  <!-- Rio gorge com nascente e cascatas: o path segue o declive natural
+       (seed 7 desce para sudoeste) — as quedas >1.2 m viram cascatas com
+       caldeirão e névoa. -->
+  <River name="rio_qa" path="150 120 110 70 78 30 52 -8 30 -45 8 -80"
+         width="11" depth="3" water-offset="0.8"
+         bank-width="4.5" bank-height="0.9" color="#1d5a78" opacity="0.74"
+         bank="gorge" rocks="1" pool-spacing="16"
+         spring="1" />
+
+  <OrbitCamera target="plaza" distance="58" height="26" pitch="18" />
+</world>

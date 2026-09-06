@@ -27,7 +27,9 @@
 //!   positions (unlike render meshes) and are consumed by the Phase 3 physics
 //!   integration (avian).
 
-use bevy::math::Vec3;
+use bevy::math::{Vec2, Vec3};
+
+use super::cliffs::CliffMask;
 
 /// Read-only height queries used by mesh/collider building.
 ///
@@ -42,6 +44,12 @@ pub trait HeightField {
     fn sample_normal(&self, world_x: f32, world_z: f32, epsilon: f32) -> Vec3;
     /// Peak height of the heightfield (meters).
     fn max_height(&self) -> f32;
+    /// Raw min/max height over the axis-aligned world XZ range (meters).
+    /// `None` = the field cannot answer range queries (the mesh builder then
+    /// falls back to plain point sampling).
+    fn range_over(&self, _min_x: f32, _min_z: f32, _max_x: f32, _max_z: f32) -> Option<(f32, f32)> {
+        None
+    }
 }
 
 /// Vertex/index buffers for one terrain chunk mesh.
@@ -166,6 +174,12 @@ pub struct ChunkMeshParams {
     /// for every chunk and LOD of a terrain or neighbouring chunks disagree at
     /// their shared border.
     pub tint: TintParams,
+    /// Cliff trigger angle in degrees (`0` disables). At LOD steps coarser
+    /// than the heightmap, a vertex whose cell contains a raw range steeper
+    /// than this slope snaps to the range extreme that preserves the
+    /// silhouette (crest/cut) instead of point-sampling — knife ridges and
+    /// walls stop sinking as the camera pulls away.
+    pub cliff_angle: f32,
 }
 
 /// Auto texture tile size: keeps texel density constant between LODs and
@@ -222,6 +236,7 @@ const SEGMENT_FIT_TOLERANCE: f32 = 1e-4;
 pub fn build_chunk_mesh(
     field: &impl HeightField,
     params: &ChunkMeshParams,
+    cliff: Option<&CliffMask>,
 ) -> anyhow::Result<Option<ChunkMeshData>> {
     if params.size <= 0.0 || !params.size.is_finite() {
         anyhow::bail!(
@@ -294,7 +309,36 @@ pub fn build_chunk_mesh(
         for x in 0..verts {
             let world_x = params.origin.x + x as f32 * step;
             let world_z = params.origin.z + z as f32 * step;
-            let y = field.sample(world_x, world_z);
+            let mut y = field.sample(world_x, world_z);
+            // Region factor from the filtered cliff mask: 1 inside accepted
+            // components (plus the soft dilated verge), 0 over spurious
+            // bumps. Baked into vertex color ALPHA for the wall shader and
+            // used to keep the silhouette snap inside real cliffs.
+            let cliff_f = cliff
+                .map(|m| m.factor(Vec2::new(world_x, world_z)))
+                .unwrap_or(1.0);
+            // Peak-preserving LOD: a point sample every `step` meters can
+            // straddle a knife ridge or wall and read only its skirt, so the
+            // silhouette sinks exactly when the camera pulls far enough away
+            // to see the whole landform. When the raw range inside this
+            // vertex's cell is steeper than the cliff angle, snap to the
+            // extreme that pulls the silhouette outward (max = crest, min =
+            // cut); the neighboring column picks the other extreme and the
+            // span survives. Gated by the mask: only real cliff regions own
+            // the silhouette — spurious bumps keep their smooth shape.
+            if params.cliff_angle > 0.0 && params.lod_step > 1 && cliff_f > 0.5 {
+                let threshold = params.cliff_angle.to_radians().tan() * step as f32;
+                if let Some((rmin, rmax)) = field.range_over(
+                    world_x,
+                    world_z,
+                    world_x + step as f32,
+                    world_z + step as f32,
+                ) {
+                    if rmax - rmin > threshold {
+                        y = if rmax - y >= y - rmin { rmax } else { rmin };
+                    }
+                }
+            }
             let normal = field.sample_normal(world_x, world_z, params.normal_epsilon);
             mesh.positions
                 .push([x as f32 * step - half, y, z as f32 * step - half]);
@@ -304,8 +348,18 @@ pub fn build_chunk_mesh(
             } else {
                 [world_x, world_z]
             });
-            mesh.colors
-                .push(tint_vertex_color(y, normal.y, max_height, &params.tint));
+            let mut color = tint_vertex_color(y, normal.y, max_height, &params.tint);
+            // Layers-path data channels: ALPHA = cliff factor (the wall
+            // fragment multiplies its triplanar gate by it) and R = wall
+            // space (0 brow → 1 toe, 0.5 neutral) for the weathering
+            // gradient / toe shadow. The fragment ignores vertex RGB
+            // otherwise; the legacy path never receives the mask, so its
+            // alpha stays 1 — the stock PBR folds it into opacity there.
+            if let Some(m) = cliff {
+                color[3] = cliff_f;
+                color[0] = m.wall_at(Vec2::new(world_x, world_z));
+            }
+            mesh.colors.push(color);
         }
     }
 
@@ -541,6 +595,7 @@ fn mix4(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::terrain::BrushGrid;
 
     const EPS: f32 = 1e-4;
 
@@ -603,7 +658,132 @@ mod tests {
             levels: 0,
             world_size: 256.0,
             tint: TintParams::default(),
+            cliff_angle: 0.0,
         }
+    }
+
+    /// Peak-preserving LOD: a one-texel knife ridge between vertex columns
+    /// must survive coarse LODs when the cliff angle is on, instead of
+    /// sinking under the point sample exactly when the camera pulls away.
+    #[test]
+    fn test_peak_preserving_lod_keeps_knife_ridges() {
+        let mut grid =
+            BrushGrid::new(vec![0u16; 128 * 128], 128, 128, 128.0, 50.0, 1.0).expect("grid");
+        grid.begin_stroke("ridge");
+        for z in 0..128 {
+            grid.set_cell_height(66, z, 30.0);
+        }
+        grid.commit_stroke();
+        // LOD step 4: vertex columns at multiples of 4 from the origin; the
+        // ridge texel (~x = 2.5) falls between the columns at 0 and 4.
+        let origin = Vec3::new(-64.0, 0.0, -64.0);
+        let mut off = base_params(origin, 128.0, 4);
+        let mut on = base_params(origin, 128.0, 4);
+        on.cliff_angle = 50.0;
+        let sunk = build_chunk_mesh(&grid, &off, None)
+            .expect("build")
+            .expect("data");
+        let kept = build_chunk_mesh(&grid, &on, None)
+            .expect("build")
+            .expect("data");
+        let max_y = |m: &ChunkMeshData| {
+            m.positions
+                .iter()
+                .map(|p| p[1])
+                .fold(f32::NEG_INFINITY, f32::max)
+        };
+        assert!(
+            max_y(&sunk) < 1.0,
+            "point sampling loses the crest, got {}",
+            max_y(&sunk)
+        );
+        assert!(
+            (max_y(&kept) - 30.0).abs() < EPS,
+            "cliff-aware LOD keeps the crest, got {}",
+            max_y(&kept)
+        );
+        // LOD 0 (step 1) is dense enough that the wall reads as a one-vertex
+        // ramp regardless — the guard skips it, no snapping needed.
+        on.lod_step = 1;
+        let lod0 = build_chunk_mesh(&grid, &on, None)
+            .expect("build")
+            .expect("data");
+        assert!(
+            max_y(&lod0) > 15.0,
+            "LOD0 reads the wall, got {}",
+            max_y(&lod0)
+        );
+    }
+
+    /// The layers-path data channels: ALPHA carries the cliff factor and R
+    /// carries the mask's wall space (brow 0 → toe 1) — the contract the
+    /// wall fragment reads under `VERTEX_COLORS`.
+    #[test]
+    fn test_cliff_channels_pack_factor_and_wall_space() {
+        use crate::terrain::cliffs::{carve_cliff, CliffProfile, CliffSide, CliffSpec};
+        // Natural step: plateau at x<0 (20 m), valley at x>=0 (2 m).
+        let mut grid =
+            BrushGrid::new(vec![0u16; 128 * 128], 128, 128, 128.0, 50.0, 1.0).expect("grid");
+        grid.begin_stroke("step");
+        for z in 0..128 {
+            for x in 0..128 {
+                let cx = grid.cell_center(x, z).x;
+                let h = if cx < 0.0 { 20.0 } else { 2.0 };
+                grid.set_cell_height(x, z, h);
+            }
+        }
+        grid.commit_stroke();
+        let spec = CliffSpec {
+            path: vec![
+                bevy::math::Vec2::new(0.0, -40.0),
+                bevy::math::Vec2::new(0.0, 40.0),
+            ],
+            profile: CliffProfile::Vertical,
+            side: CliffSide::Auto,
+            noise: 0.0,
+            ..CliffSpec::default()
+        };
+        let line = carve_cliff(&mut grid, &spec, 0).expect("carve");
+        let mask = crate::terrain::cliffs::CliffMask::build_with(&grid, 50.0, 120.0, 4.0, 8.0);
+        let mesh = build_chunk_mesh(&grid, &base_params(Vec3::new(-64.0, 0.0, -64.0), 128.0, 1), Some(&mask))
+            .expect("build")
+            .expect("data");
+
+        let (mut brow, mut toe, mut off_mask) = (None, None, None);
+        for (pos, color) in mesh.positions.iter().zip(&mesh.colors) {
+            let (wx, wz, y) = (pos[0], pos[2], pos[1]);
+            if wz.abs() < 30.0 && wx > 0.5 && wx < 6.0 {
+                if y > 15.0 {
+                    brow = Some((y, *color));
+                }
+                if y < 5.0 {
+                    toe = Some((y, *color));
+                }
+            }
+            if wx < -30.0 && wz.abs() < 30.0 {
+                off_mask = Some(*color);
+            }
+        }
+        let (_, brow_c) = brow.expect("a brow vertex on the wall");
+        let (_, toe_c) = toe.expect("a toe vertex on the wall");
+        let off_c = off_mask.expect("an off-mask vertex");
+        assert!(
+            brow_c[3] > 0.9 && toe_c[3] > 0.9,
+            "wall vertices sit inside the mask core: {brow_c:?} {toe_c:?}"
+        );
+        assert!(
+            brow_c[0] < 0.45,
+            "the brow packs wall space near 0, got {brow_c:?}"
+        );
+        assert!(
+            toe_c[0] > brow_c[0] + 0.15,
+            "wall space rises brow → toe, got brow {brow_c:?} toe {toe_c:?}"
+        );
+        assert_eq!(off_c[3], 0.0, "off-mask terrain has no cliff factor");
+        assert!(
+            (off_c[0] - 0.5).abs() < 0.01,
+            "off-mask wall space stays neutral, got {off_c:?}"
+        );
     }
 
     #[test]
@@ -680,7 +860,7 @@ mod tests {
     }
 
     fn build(field: &TestField, params: &ChunkMeshParams) -> ChunkMeshData {
-        build_chunk_mesh(field, params)
+        build_chunk_mesh(field, params, None)
             .expect("valid params")
             .expect("non-degenerate grid")
     }
@@ -975,7 +1155,7 @@ mod tests {
     #[test]
     fn test_ok_none_when_step_exceeds_size() {
         let field = TestField::flat();
-        let result = build_chunk_mesh(&field, &base_params(Vec3::ZERO, 16.0, 32));
+        let result = build_chunk_mesh(&field, &base_params(Vec3::ZERO, 16.0, 32), None);
         assert!(matches!(result, Ok(None)));
     }
 
@@ -983,7 +1163,7 @@ mod tests {
     fn test_ok_none_when_size_not_multiple_of_step() {
         let field = TestField::flat();
         // 16 / 3 rounds to 5 segments = 15 m: not an exact fit.
-        let bad = build_chunk_mesh(&field, &base_params(Vec3::ZERO, 16.0, 3));
+        let bad = build_chunk_mesh(&field, &base_params(Vec3::ZERO, 16.0, 3), None);
         assert!(matches!(bad, Ok(None)));
         // 15 / 3 = 5 exact segments builds fine.
         let good = build(&field, &base_params(Vec3::ZERO, 15.0, 3));
@@ -993,9 +1173,9 @@ mod tests {
     #[test]
     fn test_err_on_invalid_mesh_params() {
         let field = TestField::flat();
-        assert!(build_chunk_mesh(&field, &base_params(Vec3::ZERO, 0.0, 1)).is_err());
-        assert!(build_chunk_mesh(&field, &base_params(Vec3::ZERO, -4.0, 1)).is_err());
-        assert!(build_chunk_mesh(&field, &base_params(Vec3::ZERO, 16.0, 0)).is_err());
+        assert!(build_chunk_mesh(&field, &base_params(Vec3::ZERO, 0.0, 1), None).is_err());
+        assert!(build_chunk_mesh(&field, &base_params(Vec3::ZERO, -4.0, 1), None).is_err());
+        assert!(build_chunk_mesh(&field, &base_params(Vec3::ZERO, 16.0, 0), None).is_err());
     }
 
     // ----- collider -----

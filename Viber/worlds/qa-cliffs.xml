@@ -6,20 +6,23 @@
   tags.
 -->
 <world clear-color="#87ceeb">
+  <!-- QA de cliffs: cópia do terrain.xml + um elemento de HUD
+       (insere HudAssets, contorno temporário de um panic alheio em
+       ui::widgets::drive_ui_tooltip em mundos sem UI). -->
+  <Compass />
   <AmbientLight color="#bfd4e0" brightness="400" />
   <DirectionalLight direction="-0.5 -1 -0.3" illuminance="28000" shadows="true" />
 
   <!-- Heightfield: procedural (no heightmap attribute), 512 m world.
-       `layers` liga o blend das 13 texturas de solo do pool (substitui o
-       tint por altura) — areia nas margens e LEITO DE SEIXO (pebbles) no
-       fundo de lagos/rios. `cliff-angle` é o gatilho de parede (LOD
-       peak-preserving + triplanar do shader); `sharpen` terraceia rampas >
-       sharpen-angle no campo final. -->
+       `layers` liga o blend das 12 texturas de solo do pool (substitui o
+       tint por altura) — inclui areia no fundo do lago/rio e nas margens.
+       `cliff-angle` é o gatilho de parede (LOD peak-preserving + triplanar
+       do shader); `sharpen` terraceia rampas > sharpen-angle no campo final. -->
   <Terrain name="vale" world-size="512" max-height="60" chunk-size="64"
            levels="4" resolution="64" collision-resolution="32"
            height-smoothing="1" seed="7"
            base-color="#c9c5ba"
-           layers="grass vale_grass dirt dirt_trail forest_floor gravel mountain_stone sand desert_sand snow_peak swamp_mud dirt_road pebbles"
+           layers="grass vale_grass dirt dirt_trail forest_floor gravel mountain_stone sand desert_sand snow_peak swamp_mud dirt_road"
            shore-width="5" snow-height="0.92"
            cliff-angle="50" sharpen="true" sharpen-angle="38" sharpen-seed="7"
            cliff-streaks="0.55" cliff-moss="0.4" />
@@ -42,11 +45,9 @@
   <!-- Plaza pad at the world center. -->
   <TerrainPad name="plaza" at="0 0" size="48 48" falloff="14" corner-radius="10" />
 
-  <!-- Lake in the southwest quadrant: beach esculpida + pedras de margem
-       (`rocks`, determinísticas pela posição do lago). -->
+  <!-- Lake in the southwest quadrant. -->
   <Lake name="lagoa" at="-140 -120" radius="26" depth="3.2" water-offset="0.6"
-        color="#2f5a4a" opacity="0.62" ripple="0.9"
-        bank="beach" rocks="1" rocks-density="0.14" />
+        color="#2f5a4a" opacity="0.62" ripple="0.5" />
 
   <!-- River crossing the map from north to south, through the east side. -->
   <River name="rio" path="150 220 170 120 150 20 175 -80 150 -200"
@@ -76,5 +77,5 @@
     <Segment a="ponte_e" b="leste" />
   </RoadNetwork>
 
-  <OrbitCamera target="plaza" distance="120" height="55" pitch="24" />
+  <OrbitCamera target="plaza" distance="55" height="16" pitch="18" />
 </world>

@@ -24,7 +24,9 @@
 
 use bevy::math::Vec2;
 
-use super::brush::{BrushGrid, BrushMode, BrushRequest, min_effective, smoothstep01};
+use super::brush::{
+    BrushGrid, BrushMode, BrushRequest, min_effective, smootherstep01, smoothstep01,
+};
 use super::mesh::ChunkMeshData;
 use super::paths::{chaikin_smooth, distance_to_path, nearest_on_path, resample, station_lerp};
 use super::roads::ADAPTIVE_FALLOFF_FACTOR;
@@ -33,6 +35,12 @@ use super::roads::ADAPTIVE_FALLOFF_FACTOR;
 const RIM_RAYS: usize = 32;
 /// Lake contour: harmonic amplitudes of `shapeRadius` (±28% total).
 const SHAPE_AMPLITUDES: [f32; 3] = [0.12, 0.10, 0.06];
+/// Peak of the organic contour relative to the design radius
+/// (`1 + Σ SHAPE_AMPLITUDES = 1.28`). The carve AABB must cover
+/// `radius · CONTOUR_PEAK · CARVE_MARGIN` — capping it at plain
+/// `radius · CARVE_MARGIN` clipped the bowl of large lakes and left the water
+/// mirror over dry land on the harmonic lobes.
+const CONTOUR_PEAK: f32 = 1.28;
 /// Lake carve margin over the design radius (VibeGame `carveMargin`).
 pub const CARVE_MARGIN: f32 = 1.25;
 /// River station spacing (meters, VibeGame `STATION_SPACING`).
@@ -50,6 +58,148 @@ const MIN_CHANNEL_DEPTH: f32 = 0.2;
 const WATER_EDGE_FADE: f32 = 0.25;
 /// Lake fan segments around the contour (VibeGame 72-segment mirror).
 const LAKE_FAN_SEGMENTS: usize = 72;
+/// Queda (m) entre estações vizinhas que marca uma cascata — abaixo disto
+/// a ribbon lê-se como corredeira; acima, o [`river_water_mesh`] constrói
+/// face vertical e o canal ganha caldeirão.
+pub const CASCADE_DROP: f32 = 1.2;
+/// Fase dos poços/rápidos: hash determinístico do primeiro ponto do path
+/// (mesma família de [`shape_phases`]) — mesmos pontos, mesmos poços.
+fn river_phase(path: &[Vec2]) -> f32 {
+    let s = path
+        .first()
+        .map(|p| p.x * 12.989_8 + p.y * 78.233)
+        .unwrap_or(0.0);
+    (s.sin() * 43_758.55).fract() * std::f32::consts::TAU
+}
+
+/// Estilo de margem (`bank="soft|beach|cliff|terraced|gorge|overhang"` no
+/// `<Lake>`/`<River>`) — o mesmo vocabulário de perfis do cliff system
+/// aplicado à borda da água. `Gorge`/`Overhang` são os estilos VOXEL: a
+/// parede acima da lâmina não é rampa no heightfield, é sólido cortado por
+/// mods ([`super::voxel`]) — vertical de primeira ou com undercut real
+/// (rocha por cima da água).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BankStyle {
+    /// Feather adaptativo — a transição lê a encosta natural (comportamento
+    /// histórico).
+    #[default]
+    Soft,
+    /// Praia: banda larga com rampa de slope zero nas pontas — a margem
+    /// desce suave vários metros antes da água.
+    Beach,
+    /// Falésia: banda estreita com parede (perfil vertical do cliff system) —
+    /// lagos de recorte em encosta.
+    Cliff,
+    /// Terraços: banda média em degraus (perfis do cliff system) — margem
+    /// escavada, look de arrozal/pedreira.
+    Terraced,
+    /// Garganta: paredes verticais dos DOIS lados (sólido voxel) — o rio
+    /// corre num canhão; o heightfield mantém o terreno natural por cima.
+    Gorge,
+    /// Saliente: como gorge, com o topo da parede a avançar SOBRE a água
+    /// (undercut — `profile_offset` negativo do cliff voxel).
+    Overhang,
+}
+
+impl BankStyle {
+    /// `None` para nomes fora do vocabulário (o parser avisa e mantém soft).
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "soft" => Some(Self::Soft),
+            "beach" | "praia" => Some(Self::Beach),
+            "cliff" | "wall" | "falésia" | "falesia" => Some(Self::Cliff),
+            "terraced" | "terrace" | "terraços" | "terracos" => Some(Self::Terraced),
+            "gorge" | "garganta" | "canhão" | "canhao" => Some(Self::Gorge),
+            "overhang" | "saliente" => Some(Self::Overhang),
+            _ => None,
+        }
+    }
+
+    /// Estilos cuja parede vive no CAMPO VOXEL: o carve do heightfield não
+    /// esculpe a rampa da margem (o sólido natural fica de pé e é o mod que
+    /// corta a parede até abaixo da lâmina).
+    pub fn is_voxel(self) -> bool {
+        matches!(self, Self::Gorge | Self::Overhang)
+    }
+
+    /// Largura da banda de margem para um corte local de `cut` m (lago) ou
+    /// profundidade de canal `depth` (rio). `feather_base` é o mínimo útil.
+    fn band(self, feather_base: f32, cut: f32) -> f32 {
+        match self {
+            // A regra histórica: o band cresce com o corte local — um feather
+            // fixo sobre um corte fundo era uma parede vertical.
+            Self::Soft => feather_base.max(ADAPTIVE_FALLOFF_FACTOR * cut),
+            Self::Beach => (feather_base * 2.2).max(ADAPTIVE_FALLOFF_FACTOR * cut * 1.6),
+            Self::Cliff => (feather_base * 0.8).max(cut * 0.9),
+            Self::Terraced => (feather_base * 1.2).max(cut * 1.8),
+            // Voxel: sem rampa — só o assento mínimo do canal (a parede nasce
+            // do sólido natural e é cortada pelo mod).
+            Self::Gorge | Self::Overhang => feather_base * 0.5,
+        }
+    }
+
+    /// Progresso 0→1 do natural para a taça ao longo da banda (`t` 0..1).
+    /// O peso do brush é `1 − progresso`: cliff mantém a taça cheia até
+    /// quase a crista e cai a meio da banda (parede), terraced desce em
+    /// degraus, beach/spread suave.
+    fn progress(self, t: f32) -> f32 {
+        let t = t.clamp(0.0, 1.0);
+        match self {
+            Self::Soft | Self::Beach => {
+                if matches!(self, Self::Soft) {
+                    smoothstep01(t)
+                } else {
+                    smootherstep01(t)
+                }
+            }
+            Self::Cliff | Self::Gorge | Self::Overhang => {
+                // Perfil vertical do cliff system: plano no terço superior e
+                // inferior, queda no terço médio.
+                smoothstep01(((t - 1.0 / 3.0) * 3.0).clamp(0.0, 1.0))
+            }
+            Self::Terraced => {
+                // Escadaria: degraus com risers suaves (margem em bancos).
+                let steps = 3.0;
+                let x = (t * steps).min(steps - 1e-4);
+                let i = x.floor();
+                (i + smoothstep01(x - i)) / steps
+            }
+        }
+    }
+}
+
+/// Fração do contorno onde a taça cruza a lâmina: resolvendo
+/// `depth·(1−t²)^1.5 = offset` → `t = √(1 − (offset/depth)^⅔)`. O espelho de
+/// água termina EXATAMENTE aí — acabar antes deixa um anel de leito
+/// submerso sem água por cima; passar, pousa a lâmina sobre areia seca.
+pub(crate) fn waterline_reach(depth: f32, offset: f32) -> f32 {
+    let ratio = (offset / depth.max(1e-3)).clamp(0.0, 1.0);
+    (1.0 - ratio.powf(2.0 / 3.0)).max(0.0).sqrt()
+}
+
+/// Ilha declarada dentro de um lago (filho repetível
+/// `<Island at="x z" radius height/>`). É um RAISE de domo na bacia — a
+/// lâmina rodeia-a, o splat pinta a praia em anel e a relva nasce no topo
+/// (acima da lâmina os gates de água já não apanham o texel).
+#[derive(Debug, Clone, PartialEq)]
+pub struct IslandSpec {
+    /// Centro da ilha em XZ mundo.
+    pub at: Vec2,
+    /// Raio da base (m) — a praia espalha-se para lá dele.
+    pub radius: f32,
+    /// Altura do domo ACIMA da lâmina (m).
+    pub height: f32,
+}
+
+impl Default for IslandSpec {
+    fn default() -> Self {
+        Self {
+            at: Vec2::ZERO,
+            radius: 5.0,
+            height: 1.2,
+        }
+    }
+}
 
 /// Declarative lake (`<Lake at radius depth water-offset color opacity>`).
 #[derive(Debug, Clone, PartialEq)]
@@ -68,6 +218,14 @@ pub struct LakeSpec {
     pub opacity: f32,
     /// Ripple strength (reserved for the animated water material).
     pub ripple: f32,
+    /// Margem esculpida (`bank="soft|beach|cliff|terraced|gorge|overhang"`).
+    pub bank: BankStyle,
+    /// Pedras de margem automáticas (`rocks="1"`).
+    pub rocks: bool,
+    /// Parâmetros dessas pedras (`rocks-density` / `rocks-scale-max`).
+    pub rocks_spec: super::shore_rocks::ShoreRocksSpec,
+    /// Ilhas na bacia (filhos `<Island/>`).
+    pub islands: Vec<IslandSpec>,
 }
 
 impl Default for LakeSpec {
@@ -78,8 +236,16 @@ impl Default for LakeSpec {
             depth: 1.5,
             water_offset: 0.5,
             color: [0.184, 0.478, 0.604], // #2f7a9a
-            opacity: 0.78,
+            // `opacity` deixou de ser um alpha constante: o shader lê-o
+            // como a ESCALA DE EXTINÇÃO da coluna de água (uv.x), pelo que
+            // 0.75 dá um lago fundo praticamente opaco no centro e ainda
+            // assim transparente nos 30 cm da margem.
+            opacity: 0.75,
             ripple: 0.6,
+            bank: BankStyle::Soft,
+            rocks: false,
+            rocks_spec: super::shore_rocks::ShoreRocksSpec::default(),
+            islands: Vec::new(),
         }
     }
 }
@@ -103,6 +269,25 @@ pub struct RiverSpec {
     pub color: [f32; 3],
     /// Water surface opacity (0..1).
     pub opacity: f32,
+    /// Margem esculpida (`bank="soft|beach|cliff|terraced|gorge|overhang"`).
+    pub bank: BankStyle,
+    /// Pedras de margem automáticas (`rocks="1"`).
+    pub rocks: bool,
+    /// Parâmetros dessas pedras (`rocks-density` / `rocks-scale-max`).
+    pub rocks_spec: super::shore_rocks::ShoreRocksSpec,
+    /// Espaçamento (m) entre poços e rápidos (`pool-spacing`; 0 = leito
+    /// uniforme como sempre). A SUPERFÍCIE mantém o prefix-min descendente —
+    /// o LEITO ondula por baixo (poços fundos, rápidos rasos), e a
+    /// profundidade variável aparece no shader pela absorção por depth
+    /// prepass.
+    pub pool_spacing: f32,
+    /// Deteção automática de cascatas (`cascades="0"` desliga): queda maior
+    /// que [`CASCADE_DROP`] entre estações marca uma cascata, com caldeirão
+    /// esculpido a jusante e face de água vertical ([`cascade_ranges`]).
+    pub cascades: bool,
+    /// Nascente esculpida na estação 0 (`spring="1"`): anfiteatro + arco de
+    /// rocha voxel voltado a jusante, a água "sai" da rocha.
+    pub spring: bool,
 }
 
 impl Default for RiverSpec {
@@ -115,7 +300,13 @@ impl Default for RiverSpec {
             bank_width: 2.0,
             bank_height: 0.9,
             color: [0.165, 0.4, 0.522], // #2a6685
-            opacity: 0.85,
+            opacity: 0.8,               // escala de extinção da coluna (ver `LakeSpec`)
+            bank: BankStyle::Soft,
+            rocks: false,
+            rocks_spec: super::shore_rocks::ShoreRocksSpec::default(),
+            pool_spacing: 0.0,
+            cascades: true,
+            spring: false,
         }
     }
 }
@@ -145,9 +336,23 @@ pub struct WaterBody {
     pub surface_y: Vec<f32>,
     /// River full water width (lakes: `0.0`).
     pub water_width: f32,
+    /// Meia-largura da água POR estação (poços largos, rápidos estreitos).
+    /// Vazio = largura constante (`water_width * 0.5` em toda a linha) — é o
+    /// contrato que os consumidores antigos assumem.
+    pub half_width: Vec<f32>,
+    /// Índices das estações LIP de cada cascata (queda
+    /// `surface[i] − surface[i+1] > CASCADE_DROP`). Vazio = rio sem quedas.
+    pub cascades: Vec<usize>,
 }
 
 impl WaterBody {
+    /// Meia-largura da água numa estação (com fallback do contrato antigo).
+    pub fn half_width_at(&self, i: usize) -> f32 {
+        self.half_width
+            .get(i)
+            .copied()
+            .unwrap_or(self.water_width * 0.5)
+    }
     /// Point is inside the carve zone (spawner `avoid-water`).
     pub fn contains(&self, p: Vec2) -> bool {
         match self.kind {
@@ -192,10 +397,54 @@ impl WaterBody {
             }
         }
     }
+
+    /// Horizontal distance from `p` to the waterline (meters; **negative**
+    /// inside the water mirror). This is the geometry line — the shoreline a
+    /// renderer or spawner cares about — not the carve radius: over a lake
+    /// slope the carve reaches past the mirror, and painting sand to the carve
+    /// radius would put beaches on dry hillsides.
+    pub fn distance_to_waterline(&self, p: Vec2) -> f32 {
+        match self.kind {
+            WaterKind::Lake => {
+                let delta = p - self.at;
+                let theta = delta.y.atan2(delta.x);
+                let contour = lake_shape_radius(self.radius, theta, shape_phases(self.at));
+                delta.length() - contour
+            }
+            WaterKind::River => match nearest_on_path(&self.stations, p) {
+                Some(hit) => hit.point.distance(p) - self.water_width * 0.5,
+                None => f32::INFINITY,
+            },
+        }
+    }
+
+    /// Water surface height above `p` for ground-color work (the splat map):
+    /// like [`WaterBody::surface_y_at`] but with a **margin** so a texel just
+    /// outside the mirror still resolves a surface while it lies inside the
+    /// waterline-plus-margin band. `None` far from any water.
+    pub fn blend_surface_y(&self, p: Vec2, margin: f32) -> Option<f32> {
+        match self.kind {
+            WaterKind::Lake => {
+                let d = p.distance(self.at);
+                (d <= self.radius.max(self.carve_radius) + margin).then_some(self.water_y)
+            }
+            WaterKind::River => {
+                let hit = nearest_on_path(&self.stations, p)?;
+                let d = hit.point.distance(p);
+                (d <= self.water_width * 0.5 + margin).then(|| {
+                    if self.surface_y.is_empty() {
+                        self.water_y
+                    } else {
+                        station_lerp(&self.surface_y, &hit)
+                    }
+                })
+            }
+        }
+    }
 }
 
 /// Deterministic harmonic phases for a lake contour, seeded by position.
-fn shape_phases(at: Vec2) -> [f32; 3] {
+pub(crate) fn shape_phases(at: Vec2) -> [f32; 3] {
     // Classic deterministic hash — precision beyond f32 is meaningless here.
     let s = at.x * 12.989_8_f32 + at.y * 78.233_f32;
     let base = (s.sin() * 43_758.55_f32).fract() * std::f32::consts::TAU;
@@ -253,16 +502,18 @@ pub fn carve_lake(grid: &mut BrushGrid, spec: &LakeSpec, index: usize) -> Option
     // went down to the water surface and the uphill side became a sheer wall
     // as tall as the hillside. Grading the rim over a band that widens with
     // the local cut (the rule `roads` and the river bank already use) turns
-    // that wall into a shore.
+    // that wall into a shore. The `bank` style reshapes that band — praia
+    // larga, falésia estreita, terraços em degraus ([`BankStyle`]).
     let surface = water_y + spec.water_offset;
     let feather_base = min_effective(FEATHER_WIDTH, texel);
+    let style = spec.bank;
     let shore: Vec<f32> = (0..RIM_RAYS)
         .map(|i| {
             let theta = i as f32 / RIM_RAYS as f32 * std::f32::consts::TAU;
             let r = lake_shape_radius(spec.radius, theta, phases) * CARVE_MARGIN;
             let p = spec.at + Vec2::new(theta.cos(), theta.sin()) * r;
             let cut = (grid.sample(p.x, p.y) - surface).max(0.0);
-            feather_base.max(ADAPTIVE_FALLOFF_FACTOR * cut)
+            style.band(feather_base, cut)
         })
         .collect();
     let shore_max = shore.iter().copied().fold(feather_base, f32::max);
@@ -289,13 +540,17 @@ pub fn carve_lake(grid: &mut BrushGrid, spec: &LakeSpec, index: usize) -> Option
         if d >= r + band {
             return 0.0;
         }
-        1.0 - smoothstep01((d - r) / band.max(1e-4))
+        let t = (d - r) / band.max(1e-4);
+        1.0 - style.progress(t)
     };
     let mut target = bowl;
     // No guard: outside the contour `bowl` is just the water surface, not a
     // design — clamping the unweighted ring onto it is what cut a slot around
-    // the shore (see the river carve for the same trap).
-    let extent = carve_r + shore_max + texel * 2.0;
+    // the shore (see the river carve for the same trap). The extent covers the
+    // tallest contour lobe (`CONTOUR_PEAK · CARVE_MARGIN`), not the mean
+    // `carve_r` — o peso é 1 dentro de `d < r` e o contorno orgânico passa de
+    // `carve_r` nos lóbulos.
+    let extent = spec.radius * CONTOUR_PEAK * CARVE_MARGIN + shore_max + texel * 2.0;
     grid.apply(BrushRequest {
         mode: BrushMode::Lower,
         min_x: spec.at.x - extent,
@@ -307,6 +562,50 @@ pub fn carve_lake(grid: &mut BrushGrid, spec: &LakeSpec, index: usize) -> Option
     });
     grid.commit_stroke();
 
+    // Ilhas: RAISE de domo dentro da taça — o único levantamento que um lago
+    // faz (a bacia é lower-only). O domo é C1 no topo e aplana em praia junto
+    // à lâmina; o splat pinta o anel de areia por si (texel acima da lâmina
+    // = seco na métrica de profundidade). Ilha que não caiba no contorno
+    // harmónico é ignorada — só aqui se sabe o contorno real.
+    for (j, island) in spec.islands.iter().enumerate() {
+        if island.height <= 0.0 || island.radius <= 0.0 {
+            continue;
+        }
+        let theta = (island.at.y - spec.at.y).atan2(island.at.x - spec.at.x);
+        let contour = lake_shape_radius(spec.radius, theta, phases) * CARVE_MARGIN;
+        if island.at.distance(spec.at) + island.radius > contour * 0.9 {
+            continue;
+        }
+        let beach = (island.radius * 0.5).max(1.5);
+        grid.begin_stroke(&format!("{owner}:island:{j}"));
+        let mut island_weight = |p: Vec2| {
+            let d = p.distance(island.at);
+            if d >= island.radius + beach {
+                return 0.0;
+            }
+            if d <= island.radius {
+                return 1.0;
+            }
+            1.0 - smoothstep01((d - island.radius) / beach)
+        };
+        let mut island_target = |p: Vec2| {
+            let t = (p.distance(island.at) / island.radius).clamp(0.0, 1.0);
+            // Mesmo perfil da taça: C1 no topo, praia a aplanar na base.
+            water_y + island.height * (1.0 - t * t).max(0.0).powf(1.5)
+        };
+        let iextent = island.radius + beach + texel * 2.0;
+        grid.apply(BrushRequest {
+            mode: BrushMode::Raise,
+            min_x: island.at.x - iextent,
+            min_z: island.at.y - iextent,
+            max_x: island.at.x + iextent,
+            max_z: island.at.y + iextent,
+            target: &mut island_target,
+            weight: &mut island_weight,
+        });
+        grid.commit_stroke();
+    }
+
     Some(WaterBody {
         kind: WaterKind::Lake,
         at: spec.at,
@@ -316,12 +615,23 @@ pub fn carve_lake(grid: &mut BrushGrid, spec: &LakeSpec, index: usize) -> Option
         stations: Vec::new(),
         surface_y: Vec::new(),
         water_width: 0.0,
+        half_width: Vec::new(),
+        cascades: Vec::new(),
     })
 }
 
 /// Carves a river (banks then channel) and returns its registry body.
+/// `lakes` são os corpos JÁ registados — estações dentro do contorno de um
+/// lago sobem à cota do espelho (confluência sem degrau). Usar o REGISTRY
+/// (não as specs): `water_y` já foi resolvido no carve do lago — voltar a
+/// amostrar a grid pós-carve lia o FUNDO da taça, não o espelho.
 /// Returns `None` for degenerate paths.
-pub fn carve_river(grid: &mut BrushGrid, spec: &RiverSpec, index: usize) -> Option<WaterBody> {
+pub fn carve_river(
+    grid: &mut BrushGrid,
+    spec: &RiverSpec,
+    index: usize,
+    lakes: &[WaterBody],
+) -> Option<WaterBody> {
     if spec.path.len() < 2 || spec.width <= 0.0 {
         return None;
     }
@@ -348,33 +658,134 @@ pub fn carve_river(grid: &mut BrushGrid, spec: &RiverSpec, index: usize) -> Opti
         surface.push(running);
     }
 
+    // Confluência rio→lago: dentro do contorno de água de um lago, a
+    // superfície SOBE à cota do espelho — o prefix-min descia para dentro
+    // da taça e punha um degrau visível no encontro das duas lâminas.
+    // (water_y vem do REGISTRY: re-amostrar a grid pós-carve lia o fundo.)
+    for lake in lakes {
+        if lake.kind != WaterKind::Lake || lake.radius <= 0.0 {
+            continue;
+        }
+        let phases = shape_phases(lake.at);
+        for (i, st) in stations.iter().enumerate() {
+            let theta = (st.y - lake.at.y).atan2(st.x - lake.at.x);
+            let contour = lake_shape_radius(lake.radius, theta, phases);
+            if st.distance(lake.at) <= contour {
+                surface[i] = surface[i].max(lake.water_y);
+            }
+        }
+    }
+
+    // Poços e rápidos: profundidade e meia-largura do canal modulam-se ao
+    // longo do percurso (determinístico pela posição do path). A SUPERFÍCIE
+    // mantém o prefix-min liso — o LEITO ondula por baixo, e a profundidade
+    // variável aparece no shader (absorção/espuma por depth prepass).
+    let phase = river_phase(&spec.path);
+    let mut depths: Vec<f32> = Vec::with_capacity(stations.len());
+    let mut halfs: Vec<f32> = Vec::with_capacity(stations.len());
+    let mut arc = 0.0f32;
+    for (i, st) in stations.iter().enumerate() {
+        if i > 0 {
+            arc += st.distance(stations[i - 1]);
+        }
+        if spec.pool_spacing > 0.0 {
+            let wave = (std::f32::consts::TAU * arc / spec.pool_spacing + phase).sin();
+            // Poços ×1.6, rápidos ×0.4 (clampado acima do mínimo útil);
+            // largura ±20% — rápidos apertam, poços abrem.
+            depths.push((spec.depth * (1.0 + 0.6 * wave)).max(spec.depth * 0.4));
+            halfs.push(half * (1.0 + 0.2 * (wave + 0.9).sin()));
+        } else {
+            depths.push(spec.depth);
+            halfs.push(half);
+        }
+    }
+
+    // Cascatas: queda > CASCADE_DROP entre estações vizinhas marca a
+    // cascata; quedas contíguas (o Chaikin espalha a escarpa por 2-3
+    // estações) são UMA queda — termina na primeira estação sem grande
+    // queda, e é aí que o caldeirão se escava (×1.6 → ×1.25).
+    let mut plunge = vec![1.0f32; stations.len()];
+    let mut cascades = Vec::new();
+    if spec.cascades {
+        let n = stations.len();
+        let mut in_fall = false;
+        let mut last_lip = 0usize;
+        for i in 0..n.saturating_sub(1) {
+            let drop = surface[i] - surface[i + 1];
+            if drop > CASCADE_DROP {
+                if !in_fall {
+                    cascades.push(i);
+                    in_fall = true;
+                }
+                last_lip = i;
+            } else if in_fall {
+                in_fall = false;
+                for (k, f) in [(1usize, 1.6f32), (2usize, 1.25)] {
+                    if let Some(p) = plunge.get_mut(last_lip + k) {
+                        *p = (*p).max(f);
+                    }
+                }
+            }
+        }
+        if in_fall {
+            for (k, f) in [(1usize, 1.6f32), (2usize, 1.25)] {
+                if let Some(p) = plunge.get_mut((last_lip + k).min(n - 1)) {
+                    *p = (*p).max(f);
+                }
+            }
+        }
+    }
+    // Nascente: a água "sai" da rocha — a estação 0 ganha um poozinho
+    // mais fundo (a boca da nascente) para a lâmina arrancar submersa.
+    if spec.spring {
+        plunge[0] = plunge[0].max(1.35);
+        if let Some(p) = plunge.get_mut(1) {
+            *p = (*p).max(1.2);
+        }
+    }
+    for (depth, p) in depths.iter_mut().zip(&plunge) {
+        *depth *= p;
+    }
+
     // Adaptive outer feather, per station. At the outer bank rim the design
     // profile is the water surface, so the hillside there is cut by
     // `axis - surface` meters. A fixed feather would spread that whole cut
     // over 2.5 m — a ~33 m cliff where the path crosses a ridge, which is
     // exactly the vertical fin that used to line the banks. Grading the band
     // with the cut (the same rule `roads` already uses for its falloff) turns
-    // the gorge walls into slopes.
-    let feathers: Vec<f32> = axis
-        .iter()
-        .zip(surface.iter())
-        .map(|(&a, &s)| feather_base.max(ADAPTIVE_FALLOFF_FACTOR * (a - s).max(0.0)))
-        .collect();
+    // the gorge walls into slopes; the `bank` style reshapes the band
+    // (praia larga, parede estreita, terraços — [`BankStyle`]). Os estilos
+    // VOXEL (gorge/overhang) ficam SEM rampa: o sólido natural fica de pé e
+    // a parede é cortada por mods (`voxel/riverbank.rs`).
+    let style = spec.bank;
+    let feathers: Vec<f32> = if style.is_voxel() {
+        vec![0.0; stations.len()]
+    } else {
+        axis.iter()
+            .zip(surface.iter())
+            .map(|(&a, &s)| style.band(feather_base, (a - s).max(0.0)))
+            .collect()
+    };
     let feather_max = feathers.iter().copied().fold(feather_base, f32::max);
 
     // The registry radius stays the *water* reach (the `avoid-water` zone):
-    // the graded slopes beyond the bank are ordinary terrain, not river.
-    let reach = half + bank + feather_base;
+    // the graded slopes beyond the bank are ordinary terrain, not river —
+    // o feather (base ou adaptativo) NÃO entra no raio, senão os spawners
+    // evitavam a encosta graduada que o próprio contrato declara terreno.
+    let reach = half + bank;
     let extent = half + bank + feather_max + texel * 2.0;
     let owner = format!("river:{index}");
 
     // Bank + channel profile at a point: the pass-2 design surface. The bank
     // band rises to `surf + bank_height` (capped against the axis height so
     // deep valleys stay cascades), the channel bowls under the surface.
+    // Profundidade e meia-largura vêm das estações (pools/cascatas).
     let channel_profile = {
         let stations = &stations;
         let surface = &surface;
         let axis = &axis;
+        let depths = &depths;
+        let halfs = &halfs;
         move |p: Vec2| -> f32 {
             let hit = nearest_on_path(stations, p).expect("stations >= 2");
             let d = hit.point.distance(p);
@@ -383,11 +794,13 @@ pub fn carve_river(grid: &mut BrushGrid, spec: &RiverSpec, index: usize) -> Opti
             // lower-only pass then cuts that step into a vertical fin.
             let surf = station_lerp(surface, &hit);
             let axis_h = station_lerp(axis, &hit);
-            if d <= half {
-                let t = d / half;
-                surf - spec.depth.max(MIN_CHANNEL_DEPTH) * (1.0 - t * t).max(0.0).powf(1.5)
+            let depth = station_lerp(depths, &hit);
+            let half_local = station_lerp(halfs, &hit).max(texel * 0.5);
+            if d <= half_local {
+                let t = d / half_local;
+                surf - depth.max(MIN_CHANNEL_DEPTH) * (1.0 - t * t).max(0.0).powf(1.5)
             } else {
-                let band = ((d - half) / bank.max(1e-4)).clamp(0.0, 1.0);
+                let band = ((d - half_local) / bank.max(1e-4)).clamp(0.0, 1.0);
                 let raised = surf + bank_height * smoothstep01(1.0 - band);
                 raised.min(axis_h + MAX_BANK_RAISE)
             }
@@ -395,31 +808,37 @@ pub fn carve_river(grid: &mut BrushGrid, spec: &RiverSpec, index: usize) -> Opti
     };
 
     // Pass 1 — banks (raise): fills the near bank band up to the profile.
-    grid.begin_stroke(&format!("{owner}:banks"));
-    let mut bank_weight = |p: Vec2| {
-        let hit = nearest_on_path(&stations, p).expect("stations >= 2");
-        let d = hit.point.distance(p);
-        let feather = station_lerp(&feathers, &hit);
-        if d <= half || d > half + bank + feather {
-            return 0.0;
-        }
-        let band = ((d - half) / bank.max(1e-4)).clamp(0.0, 1.0);
-        let mut w = smoothstep01(1.0 - band);
-        if d > half + bank {
-            w *= 1.0 - smoothstep01((d - half - bank) / feather);
-        }
-        w
-    };
-    let mut bank_target = |p: Vec2| channel_profile(p);
-    river_apply(
-        grid,
-        &stations,
-        extent,
-        &mut bank_target,
-        &mut bank_weight,
-        BrushMode::Raise,
-    );
-    grid.commit_stroke();
+    // Estilos voxel saltam: a margem mantém o terreno natural (o mod é que
+    // corta a parede) — levantar bancos aqui punha terra SOLTA onde a
+    // parede tem de ser rocha.
+    if !style.is_voxel() {
+        grid.begin_stroke(&format!("{owner}:banks"));
+        let mut bank_weight = |p: Vec2| {
+            let hit = nearest_on_path(&stations, p).expect("stations >= 2");
+            let d = hit.point.distance(p);
+            let half_local = station_lerp(&halfs, &hit);
+            let feather = station_lerp(&feathers, &hit);
+            if d <= half_local || d > half_local + bank + feather {
+                return 0.0;
+            }
+            let band = ((d - half_local) / bank.max(1e-4)).clamp(0.0, 1.0);
+            let mut w = smoothstep01(1.0 - band);
+            if d > half_local + bank {
+                w *= 1.0 - smoothstep01((d - half_local - bank) / feather);
+            }
+            w
+        };
+        let mut bank_target = |p: Vec2| channel_profile(p);
+        river_apply(
+            grid,
+            &stations,
+            extent,
+            &mut bank_target,
+            &mut bank_weight,
+            BrushMode::Raise,
+        );
+        grid.commit_stroke();
+    }
 
     // Pass 2 — channel + bank cut (lower-only): bowls the channel through the
     // water surface and cuts the hillside down to the bank profile.
@@ -427,12 +846,14 @@ pub fn carve_river(grid: &mut BrushGrid, spec: &RiverSpec, index: usize) -> Opti
     let mut channel_weight = |p: Vec2| {
         let hit = nearest_on_path(&stations, p).expect("stations >= 2");
         let d = hit.point.distance(p);
+        let half_local = station_lerp(&halfs, &hit).max(texel * 0.5);
         let feather = station_lerp(&feathers, &hit);
-        if d > half + bank + feather {
+        if d > half_local + bank + feather {
             return 0.0;
         }
-        if d > half + bank {
-            return 1.0 - smoothstep01((d - half - bank) / feather);
+        if d > half_local + bank {
+            let t = (d - half_local - bank) / feather.max(1e-4);
+            return 1.0 - style.progress(t);
         }
         1.0
     };
@@ -466,6 +887,8 @@ pub fn carve_river(grid: &mut BrushGrid, spec: &RiverSpec, index: usize) -> Opti
         stations,
         surface_y: surface,
         water_width: width,
+        half_width: halfs,
+        cascades,
     })
 }
 
@@ -520,33 +943,60 @@ fn box_smooth(values: &mut [f32], half: usize) {
 }
 
 /// Builds the lake water surface mesh: a 72-segment two-ring disc following
-/// the organic contour, alpha faded to 0 at the shore ring. Positions are
-/// **world space**. `water_y` is the mirror height resolved by the carve
-/// ([`WaterBody::water_y`]) so the mesh always matches the registry.
+/// the organic contour. Positions are **world space**. `water_y` is the mirror
+/// height resolved by the carve ([`WaterBody::water_y`]) so the mesh always
+/// matches the registry.
+///
+/// Vertex contract shared with `water.wgsl`: colour rgb = body colour,
+/// colour **alpha = geometric shore mask only**, and
+/// **uv.x = [`LakeSpec::opacity`]** — the shader reads it as the extinction
+/// scale of the water column, so `opacity` now controls how *murky* the body
+/// is instead of flattening a constant transparency over the whole mirror.
 pub fn lake_water_mesh(spec: &LakeSpec, water_y: f32) -> ChunkMeshData {
     let phases = shape_phases(spec.at);
     let y = water_y;
-    let push = |mesh: &mut ChunkMeshData, p: Vec2, radial: f32, alpha: f32| {
+    let murk = spec.opacity;
+    // O espelho acaba na linha de água REAL da taça (onde o perfil cruza a
+    // lâmina), não no contorno nominal: nas taludes fundos a taça continua
+    // molhada para lá do contorno, nos lagos rasos o contorno já é praia
+    // seca. Sem isto sobrava um anel de leito submerso sem água (ou lâmina
+    // sobre areia seca, nos rasos).
+    let reach = (waterline_reach(spec.depth, spec.water_offset) * CARVE_MARGIN)
+        .clamp(0.5, CONTOUR_PEAK * CARVE_MARGIN);
+    let push = |mesh: &mut ChunkMeshData, p: Vec2, radial: f32, mask: f32| {
         mesh.positions.push([p.x, y, p.y]);
         mesh.normals.push([0.0, 1.0, 0.0]);
-        mesh.uvs.push([0.5, radial]);
+        mesh.uvs.push([murk, radial]);
         mesh.colors
-            .push([spec.color[0], spec.color[1], spec.color[2], alpha]);
+            .push([spec.color[0], spec.color[1], spec.color[2], mask]);
     };
 
     let mut mesh = ChunkMeshData::default();
+    // Fade de ILHAS: a lâmina some sobre cada ilha (a praia da ilha é o
+    // próprio domo do carve — o espelho não pode cortá-la).
+    let island_mask = |p: Vec2| -> f32 {
+        let mut a = 1.0f32;
+        for island in &spec.islands {
+            let d = p.distance(island.at);
+            // 0 dentro de 0.75·raio, 1 além de raio + 0.8 m (praia seca).
+            let t = ((d - island.radius * 0.75) / (island.radius * 0.25 + 0.8)).clamp(0.0, 1.0);
+            a *= smoothstep01(t);
+        }
+        a
+    };
     // Center vertex.
-    push(&mut mesh, spec.at, 0.5, spec.opacity);
-    // Two rings: inner at full opacity, outer faded to the shore.
+    push(&mut mesh, spec.at, 0.5, 1.0 * island_mask(spec.at));
+    // Two rings: inner unmasked, outer faded to the shore.
     let ring_count = 2;
     for ring in 0..ring_count {
         let radial = (ring + 1) as f32 / ring_count as f32; // 0.5, 1.0
         for i in 0..LAKE_FAN_SEGMENTS {
             let theta = i as f32 / LAKE_FAN_SEGMENTS as f32 * std::f32::consts::TAU;
-            let r = lake_shape_radius(spec.radius, theta, phases) * radial;
+            let r = lake_shape_radius(spec.radius, theta, phases) * reach * radial;
             let p = spec.at + Vec2::new(theta.cos(), theta.sin()) * r;
-            let alpha = spec.opacity * (1.0 - smoothstep01((radial - 0.75) / 0.25));
-            push(&mut mesh, p, radial, alpha);
+            let mask = (1.0 - smoothstep01((radial - (1.0 - WATER_EDGE_FADE)) / WATER_EDGE_FADE))
+                * island_mask(p);
+            push(&mut mesh, p, radial, mask);
         }
     }
     // Center fan.
@@ -569,44 +1019,87 @@ pub fn lake_water_mesh(spec: &LakeSpec, water_y: f32) -> ChunkMeshData {
     mesh
 }
 
-/// Builds the river water ribbon: two vertices per station (left/right of the
-/// centerline), `y` per station surface, alpha fading over the outer quarter
-/// of the width. Positions are **world space**.
+/// Builds the river water ribbon: three vertices per station (left/center/
+/// right of the centerline), `y` per station surface, the shore mask fading
+/// over the outer quarter of the width. Positions are **world space**.
+///
+/// Same vertex contract as [`lake_water_mesh`]: colour alpha is the shore mask
+/// and **uv.x carries [`RiverSpec::opacity`]** as the extinction scale.
 pub fn river_water_mesh(spec: &RiverSpec, body: &WaterBody) -> ChunkMeshData {
     let mut mesh = ChunkMeshData::default();
     let n = body.stations.len();
     if n < 2 {
         return mesh;
     }
-    let half = body.water_width * 0.5;
-    let mut arc = 0.0;
-    // Three vertices per station (left, center, right): the alpha fade lives
-    // on the outer quarter of each half, so the center stays fully opaque.
-    let alpha_at = |v: f32| -> f32 {
+    // A meia-largura de cada estação é `half_width_at(i) · t_wl` — a linha de
+    // água real do canal (ver [`waterline_reach`]); pools abrem, rápidos
+    // apertam.
+    let reach = waterline_reach(spec.depth, spec.water_offset).clamp(0.4, 1.0);
+    let murk = spec.opacity;
+    // Three vertices per station (left, center, right): the shore mask fades
+    // on the outer quarter of each half, so the center stays unmasked.
+    let mask_at = |v: f32| -> f32 {
         let edge = (((v - 0.5).abs() * 2.0 - (1.0 - WATER_EDGE_FADE * 2.0)).max(0.0)
             / (WATER_EDGE_FADE * 2.0))
             .clamp(0.0, 1.0);
-        spec.opacity * (1.0 - edge)
+        1.0 - edge
     };
     for (i, st) in body.stations.iter().enumerate() {
-        if i > 0 {
-            arc += st.distance(body.stations[i - 1]);
-        }
         let next = body.stations[(i + 1).min(n - 1)];
         let prev = body.stations[i.saturating_sub(1)];
         let dir = (next - prev).normalize_or_zero();
         let perp = Vec2::new(-dir.y, dir.x);
         let y = body.surface_y[i];
+        // Meia-largura da estação (pools abrem, rápidos apertam) escalada
+        // pela linha de água real do canal.
+        let half_i = body.half_width_at(i) * reach;
         for v in [0.0_f32, 0.5, 1.0] {
-            let p = *st + perp * (half * (v * 2.0 - 1.0));
+            let p = *st + perp * (half_i * (v * 2.0 - 1.0));
             mesh.positions.push([p.x, y, p.y]);
             mesh.normals.push([0.0, 1.0, 0.0]);
-            mesh.uvs.push([arc, v]);
+            mesh.uvs.push([murk, v]);
             mesh.colors
-                .push([spec.color[0], spec.color[1], spec.color[2], alpha_at(v)]);
+                .push([spec.color[0], spec.color[1], spec.color[2], mask_at(v)]);
         }
     }
     for i in 0..(n - 1) {
+        // Cascade: em vez da rampa linear entre cotas, FACE VERTICAL — a
+        // água despenca do lip (borda de montante) até à lâmina do
+        // caldeirão. Mesmo contrato de vértices (uv.x murk, alpha=1: uma
+        // cascata não tem margem seca); normais horizontais (a face é
+        // vertical; o shader usa a geométrica para o fresnel rasante).
+        if body.cascades.contains(&i) {
+            let st0 = body.stations[i];
+            let st1 = body.stations[i + 1];
+            let dir = (st1 - st0).normalize_or_zero();
+            let perp = Vec2::new(-dir.y, dir.x);
+            // A face pende ligeiramente para jusante: borda de topo a 75 %
+            // do segmento, base na estação do caldeirão.
+            let top_c = st0.lerp(st1, 0.75);
+            let half0 = body.half_width_at(i) * reach;
+            let half1 = body.half_width_at(i + 1) * reach;
+            let top_y = body.surface_y[i];
+            let bot_y = body.surface_y[i + 1];
+            let base = mesh.positions.len() as u32;
+            for (c, h, y) in [(top_c, half0, top_y), (st1, half1, bot_y)] {
+                for v in [0.0_f32, 0.5, 1.0] {
+                    let p = c + perp * (h * (v * 2.0 - 1.0));
+                    mesh.positions.push([p.x, y, p.y]);
+                    mesh.normals.push([dir.x, 0.0, dir.y]);
+                    mesh.uvs.push([murk, v]);
+                    mesh.colors.push([spec.color[0], spec.color[1], spec.color[2], 1.0]);
+                }
+            }
+            let (l0, c0, r0) = (base, base + 1, base + 2);
+            let (l1, c1, r1) = (base + 3, base + 4, base + 5);
+            mesh.indices.extend_from_slice(&[
+                l0, l1, c0, c0, l1, c1, // left half (visto de jusante)
+                c0, c1, r0, r0, c1, r1, // right half
+                l1, l0, c1, c1, l0, c0, // verso (cull_mode None, mas a
+                c1, c0, r1, r1, c0, r0, // winding certa evita normais zumbidas)
+            ]);
+            continue;
+        }
         // Vertices: 3 per station (l, c, r). Four CCW triangles per segment.
         let l0 = (i * 3) as u32;
         let c0 = l0 + 1;
@@ -658,7 +1151,7 @@ mod tests {
         assert_eq!(lake.radius, 6.0);
         assert_eq!(lake.depth, 1.5);
         assert_eq!(lake.water_offset, 0.5);
-        assert!((lake.opacity - 0.78).abs() < 1e-6);
+        assert!((lake.opacity - 0.75).abs() < 1e-6);
         let river = RiverSpec::default();
         assert_eq!(river.width, 6.0);
         assert_eq!(river.bank_width, 2.0);
@@ -685,6 +1178,17 @@ mod tests {
             "±28% contour: {min}..{max}"
         );
         assert!(min > 10.0 * 0.6 && max < 10.0 * 1.4, "bounded variation");
+    }
+
+    #[test]
+    fn test_contour_peak_covers_the_harmonics() {
+        // O AABB do carve usa CONTOUR_PEAK; tem de cobrir a soma real das
+        // amplitudes dos harmónicos (e um pouco de folga pelo arredondamento).
+        let peak = 1.0 + SHAPE_AMPLITUDES.iter().sum::<f32>();
+        assert!(
+            CONTOUR_PEAK + 1e-6 >= peak,
+            "CONTOUR_PEAK {CONTOUR_PEAK} < pico real {peak}"
+        );
     }
 
     #[test]
@@ -774,6 +1278,12 @@ mod tests {
             bank_height: 0.8,
             color: [0.2, 0.4, 0.5],
             opacity: 0.85,
+            bank: BankStyle::Soft,
+            rocks: false,
+            rocks_spec: crate::terrain::shore_rocks::ShoreRocksSpec::default(),
+            pool_spacing: 0.0,
+            cascades: true,
+            spring: false,
         }
     }
 
@@ -783,7 +1293,7 @@ mod tests {
         // the descending prefix-min would carve to the global minimum).
         let mut grid = flat_grid();
         let spec = river_spec();
-        let body = carve_river(&mut grid, &spec, 0).expect("river");
+        let body = carve_river(&mut grid, &spec, 0, &[]).expect("river");
         let channel = grid.sample(48.0, 0.0);
         let bank = grid.sample(48.0, body.water_width * 0.5 + 1.0);
         assert!(
@@ -807,7 +1317,7 @@ mod tests {
             path: vec![Vec2::new(5.0, 10.0), Vec2::new(90.0, -20.0)],
             ..river_spec()
         };
-        let body = carve_river(&mut grid, &spec, 0).expect("river");
+        let body = carve_river(&mut grid, &spec, 0, &[]).expect("river");
         for w in body.surface_y.windows(2) {
             assert!(
                 w[1] <= w[0] + 1e-4,
@@ -825,7 +1335,7 @@ mod tests {
             path: vec![Vec2::ZERO],
             ..river_spec()
         };
-        assert!(carve_river(&mut grid, &spec, 0).is_none());
+        assert!(carve_river(&mut grid, &spec, 0, &[]).is_none());
     }
 
     #[test]
@@ -852,7 +1362,7 @@ mod tests {
         assert!(lake.surface_y_at(Vec2::new(44.0, -44.0)).is_none());
 
         let spec = river_spec();
-        let river = carve_river(&mut grid, &spec, 1).expect("river");
+        let river = carve_river(&mut grid, &spec, 1, &[]).expect("river");
         assert!(river.contains(Vec2::new(48.0, 1.0)), "on the river");
         assert!(!river.contains(Vec2::new(48.0, 22.0)), "off the river");
         assert!(river.surface_y_at(Vec2::new(48.0, 0.5)).is_some());
@@ -897,20 +1407,30 @@ mod tests {
             outer_alpha < center_alpha * 0.2,
             "shore fades to ~0: {outer_alpha} vs {center_alpha}"
         );
+        // Novo contrato: alpha = SÓ máscara (1 no centro) e uv.x = opacity,
+        // que o shader lê como escala de extinção da coluna.
+        assert!((center_alpha - 1.0).abs() < 1e-6, "mask, not opacity");
+        for uv in &mesh.uvs {
+            assert!((uv[0] - spec.opacity).abs() < 1e-6, "uv.x carries opacity");
+        }
     }
 
     #[test]
     fn test_river_water_mesh_ribbon() {
         let mut grid = test_grid();
         let spec = river_spec();
-        let body = carve_river(&mut grid, &spec, 0).expect("river");
+        let body = carve_river(&mut grid, &spec, 0, &[]).expect("river");
         let mesh = river_water_mesh(&spec, &body);
         assert_eq!(mesh.positions.len(), body.stations.len() * 3, "l/c/r");
         assert_eq!(mesh.indices.len(), (body.stations.len() - 1) * 12);
         for (i, p) in mesh.positions.iter().enumerate() {
             let st = body.stations[i / 3];
+            // A ribbon acaba na linha de água real do canal (t_wl da taça).
+            let side = body.water_width
+                * 0.5
+                * waterline_reach(spec.depth, spec.water_offset).clamp(0.4, 1.0);
             let side = match i % 3 {
-                0 | 2 => body.water_width * 0.5,
+                0 | 2 => side,
                 _ => 0.0, // center vertex rides the surface
             };
             let d = ((p[0] - st.x).powi(2) + (p[2] - st.y).powi(2)).sqrt();
@@ -919,7 +1439,59 @@ mod tests {
         let edge = mesh.colors[0][3];
         let mid = mesh.colors[1][3];
         assert!(edge < mid, "edge fades: {edge} vs {mid}");
-        assert!((mid - spec.opacity).abs() < 1e-4, "center opaque: {mid}");
+        assert!((mid - 1.0).abs() < 1e-4, "center unmasked: {mid}");
+        for uv in &mesh.uvs {
+            assert!((uv[0] - spec.opacity).abs() < 1e-6, "uv.x carries opacity");
+        }
+    }
+
+    /// A face da cascata: o mesh ganha 6 vértices verticais por cascata
+    /// (topo no lip, base na lâmina do caldeirão) com normais horizontais.
+    #[test]
+    fn test_cascade_face_is_vertical_in_the_mesh() {
+        let mut grid = BrushGrid::new(vec![0; 96 * 96], 96, 96, 96.0, 50.0, 0.0).expect("grid");
+        grid.begin_stroke("plateau");
+        for z in 0..96 {
+            for x in 0..96 {
+                let p = grid.cell_center(x, z);
+                let h = if p.x < 0.0 { 14.0 } else { 5.0 };
+                grid.set_cell_height(x, z, h);
+            }
+        }
+        grid.commit_stroke();
+        let spec = RiverSpec {
+            path: vec![Vec2::new(-40.0, 0.0), Vec2::new(40.0, 0.0)],
+            width: 6.0,
+            depth: 1.5,
+            ..river_spec()
+        };
+        let body = carve_river(&mut grid, &spec, 0, &[]).expect("river");
+        assert_eq!(body.cascades.len(), 1);
+        let mesh = river_water_mesh(&spec, &body);
+        let n = body.stations.len();
+        assert_eq!(
+            mesh.positions.len(),
+            n * 3 + 6,
+            "ribbon verts + one cascade face: {} vs {}",
+            mesh.positions.len(),
+            n * 3 + 6
+        );
+        // Os 6 vértices novos: topo = cota do lip, base = cota do caldeirão,
+        // normais horizontais (face vertical).
+        let lip = body.cascades[0];
+        let face = &mesh.positions[n * 3..];
+        for v in &face[0..3] {
+            assert!((v[1] - body.surface_y[lip]).abs() < 1e-3, "top at the lip");
+        }
+        for v in &face[3..6] {
+            assert!(
+                (v[1] - body.surface_y[lip + 1]).abs() < 1e-3,
+                "bottom at the plunge surface"
+            );
+        }
+        for normal in &mesh.normals[n * 3..] {
+            assert!(normal[1].abs() < 1e-6, "horizontal face normal");
+        }
     }
 
     #[test]
@@ -927,5 +1499,342 @@ mod tests {
         let grid = test_grid();
         let width = min_effective(0.1, grid.texel());
         assert!(width >= 1.5 * grid.texel(), "width never below 1.5 texels");
+    }
+
+    #[test]
+    fn test_waterline_reach_resolves_bowl_crossing() {
+        // depth·(1−t²)^1.5 = offset → t = √(1−(offset/depth)^⅔). Default
+        // lake (1.5/0.5): ratio ≈ 0.481 → t ≈ 0.721; ·CARVE_MARGIN ≈ 0.90.
+        let t = waterline_reach(1.5, 0.5);
+        assert!((t - 0.7206).abs() < 2e-3, "shallow lake reach: {t}");
+        // Lago fundo: a lâmina passa o contorno nominal (reach > 1
+        // após a margem do carve).
+        let deep = waterline_reach(3.2, 0.5) * CARVE_MARGIN;
+        assert!(deep > 1.0, "deep lake wets past the contour: {deep}");
+        // offset ≥ depth: taça não chega a cruzar → espelho colapsa a 0.
+        assert!(
+            waterline_reach(1.0, 1.0) < 1e-6,
+            "no crossing → no mirror reach"
+        );
+    }
+
+    /// Os estilos de margem têm bandas e perfis distintos: beach espalha a
+    /// transição (banda larga, rampa lenta), cliff concentra-a (banda
+    /// estreita, queda no terço médio). Testado nos próprios primitivos —
+    /// comparar secções esculpidas depende das fases do contorno harmónico.
+    #[test]
+    fn test_bank_styles_shape_the_shore() {
+        // Bandas com o mesmo corte (1.1 m) e feather base (2.5): beach
+        // espalha, cliff aperta.
+        let band = |s: BankStyle| s.band(2.5, 1.1);
+        assert!(band(BankStyle::Beach) > band(BankStyle::Soft));
+        assert!(band(BankStyle::Soft) > band(BankStyle::Cliff));
+        assert!(band(BankStyle::Terraced) > band(BankStyle::Cliff));
+
+        // Perfis: cliff segura o patamar de cima mais tempo (queda só no
+        // terço médio — a 3/8 da banda mal desceu, soft já foi a 28%);
+        // beach ainda está mais alto no início (rampa de slope zero).
+        assert!(
+            BankStyle::Cliff.progress(0.375) < BankStyle::Soft.progress(0.375),
+            "cliff holds the crest: {:.3} vs soft: {:.3}",
+            BankStyle::Cliff.progress(0.375),
+            BankStyle::Soft.progress(0.375)
+        );
+        assert!(
+            BankStyle::Cliff.progress(0.625) > BankStyle::Soft.progress(0.625),
+            "cliff drops fast mid-band: {:.3} vs soft: {:.3}",
+            BankStyle::Cliff.progress(0.625),
+            BankStyle::Soft.progress(0.625)
+        );
+        assert!(
+            BankStyle::Beach.progress(0.2) < BankStyle::Soft.progress(0.2),
+            "beach holds the top longer: {:.3} vs {:.3}",
+            BankStyle::Beach.progress(0.2),
+            BankStyle::Soft.progress(0.2)
+        );
+        // Terraced: escadaria — progresso passa pelos degraus (≥ 2 níveis
+        // distintos dentro da banda).
+        let mut levels = 1;
+        let mut last = 0.0;
+        for i in 1..=10 {
+            let p = BankStyle::Terraced.progress(i as f32 / 10.0);
+            if p > last + 0.05 {
+                levels += 1;
+                last = p;
+            }
+        }
+        assert!(levels >= 3, "terraced descends in steps: {levels}");
+        // Todos terminam em 0/1 exatos.
+        for s in [
+            BankStyle::Soft,
+            BankStyle::Beach,
+            BankStyle::Cliff,
+            BankStyle::Terraced,
+            BankStyle::Gorge,
+            BankStyle::Overhang,
+        ] {
+            assert!(s.progress(0.0).abs() < 1e-5);
+            assert!((s.progress(1.0) - 1.0).abs() < 1e-5);
+        }
+        // Os estilos voxel declaram-se (e têm banda mínima — sem rampa).
+        assert!(BankStyle::Gorge.is_voxel() && BankStyle::Overhang.is_voxel());
+        assert!(!BankStyle::Soft.is_voxel() && !BankStyle::Beach.is_voxel());
+    }
+
+    /// Poços e rápidos: o LEITO ondula (profundidade variável) e a
+    /// meia-largura acompanha, mas a superfície mantém o prefix-min
+    /// descendente — a lâmina nunca lê a ondulação.
+    #[test]
+    fn test_pool_spacing_modulates_the_bed_not_the_surface() {
+        let mut grid = flat_grid();
+        let spec = RiverSpec {
+            path: vec![Vec2::new(-40.0, 0.0), Vec2::new(40.0, 0.0)],
+            width: 6.0,
+            depth: 2.0,
+            pool_spacing: 14.0,
+            ..river_spec()
+        };
+        let body = carve_river(&mut grid, &spec, 0, &[]).expect("river");
+        assert_eq!(body.half_width.len(), body.stations.len());
+        // A meia-largura varia ao longo do rio (não é tudo o mesmo valor).
+        let min_hw = body.half_width.iter().cloned().fold(f32::MAX, f32::min);
+        let max_hw = body.half_width.iter().cloned().fold(f32::MIN, f32::max);
+        assert!(
+            max_hw - min_hw > 0.2,
+            "half width must breathe: {min_hw}..{max_hw}"
+        );
+        // Superfície monotónica descendente (o prefix-min não leu os pools).
+        for w in body.surface_y.windows(2) {
+            assert!(w[1] <= w[0] + 1e-4, "surface still descends");
+        }
+        // E o LEITO: a profundidade ao centro varia entre estações.
+        let bed = |i: usize| body.surface_y[i] - grid.sample(body.stations[i].x, 0.0);
+        let (min_d, max_d) = (0..body.stations.len())
+            .map(bed)
+            .fold((f32::MAX, f32::MIN), |(a, b), d| (a.min(d), b.max(d)));
+        assert!(
+            max_d - min_d > 0.5,
+            "bed depth must breathe (pools/riffles): {min_d}..{max_d}"
+        );
+    }
+
+    /// Cascata: queda > CASCADE_DROP marca um lip, o canal aprofunda a
+    /// jusante (caldeirão) e o registry expõe a cascata.
+    #[test]
+    fn test_cascade_marks_lip_and_digs_plunge_pool() {
+        // Planalto alto a oeste, baixo a leste: o prefix-min cai de uma vez
+        // na escarpa → cascata garantida.
+        let mut grid = BrushGrid::new(vec![0; 96 * 96], 96, 96, 96.0, 50.0, 0.0).expect("grid");
+        grid.begin_stroke("plateau");
+        for z in 0..96 {
+            for x in 0..96 {
+                let p = grid.cell_center(x, z);
+                let h = if p.x < 0.0 { 14.0 } else { 5.0 };
+                grid.set_cell_height(x, z, h);
+            }
+        }
+        grid.commit_stroke();
+        let spec = RiverSpec {
+            path: vec![Vec2::new(-40.0, 0.0), Vec2::new(40.0, 0.0)],
+            width: 6.0,
+            depth: 1.5,
+            ..river_spec()
+        };
+        let body = carve_river(&mut grid, &spec, 0, &[]).expect("river");
+        assert_eq!(body.cascades.len(), 1, "one escarpment, one cascade");
+        let lip = body.cascades[0];
+        let drop = body.surface_y[lip] - body.surface_y[lip + 1];
+        assert!(drop > CASCADE_DROP, "marked lip has the big drop: {drop}");
+        // Caldeirão: alguma estação a jusante do lip é claramente mais
+        // funda (À PRÓPRIA lâmina) que o canal normal de montante — o
+        // caldeirão assenta no FIM da sequência de quedas (last_lip), não
+        // no primeiro lip.
+        let bed = |k: usize| body.surface_y[k] - grid.sample(body.stations[k].x, 0.0);
+        let normal = bed(2); // montante: canal normal
+        let last = body.stations.len() - 1;
+        let pool = (lip..=(lip + 5).min(last)).map(bed).fold(f32::MIN, f32::max);
+        assert!(
+            pool > normal * 1.3,
+            "plunge pool digs deeper: {pool} vs {normal}"
+        );
+    }
+
+    /// Confluência: as estações do rio dentro do contorno do lago sobem à
+    /// cota do espelho — nenhuma desce abaixo (sem degrau no encontro).
+    #[test]
+    fn test_confluence_rises_to_lake_level() {
+        let mut grid = flat_grid();
+        let lake_spec = LakeSpec {
+            at: Vec2::new(0.0, 0.0),
+            radius: 12.0,
+            depth: 3.0,
+            ..LakeSpec::default()
+        };
+        let lake = carve_lake(&mut grid, &lake_spec, 0).expect("lake");
+        let river_spec = RiverSpec {
+            path: vec![Vec2::new(-40.0, 0.0), Vec2::new(40.0, 0.0)],
+            width: 6.0,
+            depth: 2.0,
+            ..river_spec()
+        };
+        let river = carve_river(&mut grid, &river_spec, 0, &[lake.clone()]).expect("river");
+        // A estação mais próxima do centro do lago está À COTA do lago.
+        let (_, i, _) = river
+            .stations
+            .iter()
+            .enumerate()
+            .fold((f32::MAX, 0usize, Vec2::ZERO), |(best, bi, _), (i, st)| {
+                let d = st.distance(lake.at);
+                if d < best {
+                    (d, i, *st)
+                } else {
+                    (best, bi, *st)
+                }
+            });
+        assert!(
+            river.surface_y[i] >= lake.water_y - 1e-3,
+            "river meets the lake level: {} vs {}",
+            river.surface_y[i],
+            lake.water_y
+        );
+    }
+
+    /// Ilhas: o domo sobe acima da lâmina, o espelho some sobre ela (alpha
+    /// 0 no centro) e ilha fora da bacia é ignorada.
+    #[test]
+    fn test_island_raises_and_mirror_fades() {
+        let mut grid = flat_grid();
+        let spec = LakeSpec {
+            at: Vec2::new(0.0, 0.0),
+            radius: 14.0,
+            depth: 3.0,
+            islands: vec![crate::terrain::water::IslandSpec {
+                at: Vec2::new(0.0, 0.0),
+                radius: 4.0,
+                height: 1.5,
+            }],
+            ..LakeSpec::default()
+        };
+        let body = carve_lake(&mut grid, &spec, 0).expect("lake");
+        let top = grid.sample(0.0, 0.0);
+        assert!(
+            top > body.water_y + 0.5,
+            "island dome above the mirror: {top} vs {}",
+            body.water_y
+        );
+        // O espelho desaparece sobre a ilha (centro do leque com alpha 0).
+        let mesh = lake_water_mesh(&spec, body.water_y);
+        assert!(
+            mesh.colors[0][3] < 0.05,
+            "mirror alpha over the island: {}",
+            mesh.colors[0][3]
+        );
+        // Sem ilha o centro fica sem máscara (regressão zero).
+        let bare = LakeSpec {
+            at: Vec2::new(0.0, 0.0),
+            radius: 14.0,
+            depth: 3.0,
+            ..LakeSpec::default()
+        };
+        let mesh = lake_water_mesh(&bare, body.water_y);
+        assert!((mesh.colors[0][3] - 1.0).abs() < 1e-5);
+    }
+
+    /// Ilha que não cabe no contorno harmónico é ignorada (o RAISE não
+    /// sai para a encosta seca).
+    #[test]
+    fn test_island_outside_the_bowl_is_skipped() {
+        let mut grid = flat_grid();
+        let spec = LakeSpec {
+            at: Vec2::new(0.0, 0.0),
+            radius: 8.0,
+            depth: 2.0,
+            islands: vec![crate::terrain::water::IslandSpec {
+                at: Vec2::new(32.0, 0.0), // 32 m do centro, fora do carve todo
+                radius: 5.0,
+                height: 2.0,
+            }],
+            ..LakeSpec::default()
+        };
+        carve_lake(&mut grid, &spec, 0).expect("lake");
+        assert!(
+            (grid.sample(32.0, 0.0) - 8.0).abs() < 1e-3,
+            "island outside the bowl never raises: {}",
+            grid.sample(32.0, 0.0)
+        );
+    }
+
+    /// Gorge: o heightfield NÃO esculpe a rampa da margem (o sólido natural
+    /// fica de pé para o mod voxel cortar) e não há bancos raise.
+    #[test]
+    fn test_gorge_bank_leaves_the_bank_untouched() {
+        let mut grid = flat_grid();
+        let spec = RiverSpec {
+            path: vec![Vec2::new(-40.0, 0.0), Vec2::new(40.0, 0.0)],
+            width: 6.0,
+            depth: 2.0,
+            bank: BankStyle::Gorge,
+            ..river_spec()
+        };
+        let body = carve_river(&mut grid, &spec, 0, &[]).expect("river");
+        // Canal intacto...
+        assert!(
+            grid.sample(0.0, 0.0) < body.water_y,
+            "channel still carves: {} vs {}",
+            grid.sample(0.0, 0.0),
+            body.water_y
+        );
+        // ...e a margem para lá do banco continua no terreno natural (8 m).
+        let far = body.water_width * 0.5 + 4.0;
+        assert!(
+            (grid.sample(0.0, far) - 8.0).abs() < 1e-3,
+            "gorge keeps the natural bank: {}",
+            grid.sample(0.0, far)
+        );
+    }
+
+    /// O espelho do lago cobre a linha de água real: lago fundo estende-se
+    /// para lá do contorno; lago raso acaba antes (o contorno já é praia).
+    #[test]
+    fn test_lake_mirror_tracks_the_waterline() {
+        let mirror_extent = |depth: f32| {
+            let spec = LakeSpec {
+                at: Vec2::new(40.0, 40.0),
+                radius: 10.0,
+                depth,
+                ..LakeSpec::default()
+            };
+            let mesh = lake_water_mesh(&spec, 8.0);
+            let outer0 = 1 + LAKE_FAN_SEGMENTS;
+            mesh.positions[outer0..]
+                .iter()
+                .map(|p| ((p[0] - 40.0).powi(2) + (p[2] - 40.0).powi(2)).sqrt())
+                .fold(f32::NEG_INFINITY, f32::max)
+        };
+        let deep = mirror_extent(3.2);
+        let shallow = mirror_extent(0.8);
+        // Pico do contorno harmónico × reach (a mesma fórmula da mesh).
+        // Os 72 segmentos amostram o contorno — o pico verdadeiro pode
+        // cair entre amostras (5.º harmónico oscila a 25°/segmento),
+        // pelo que a tolerância é de 3%.
+        let peak = |depth: f32| {
+            10.0 * CONTOUR_PEAK
+                * (waterline_reach(depth, 0.5) * CARVE_MARGIN)
+                    .clamp(0.5, CONTOUR_PEAK * CARVE_MARGIN)
+        };
+        assert!(
+            (deep - peak(3.2)).abs() < peak(3.2) * 0.03,
+            "deep mirror tracks the waterline: {deep} vs {}",
+            peak(3.2)
+        );
+        assert!(
+            (shallow - peak(0.8)).abs() < peak(0.8) * 0.03,
+            "shallow mirror tracks the waterline: {shallow} vs {}",
+            peak(0.8)
+        );
+        assert!(
+            peak(0.8) < peak(3.2),
+            "shallow waterline ends before the deep one"
+        );
     }
 }

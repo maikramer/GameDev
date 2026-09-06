@@ -23,6 +23,8 @@
 //! `analyze` never runs this (no Update schedule).
 
 use std::collections::HashMap;
+#[cfg(test)]
+use std::sync::Arc;
 
 use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
@@ -30,7 +32,7 @@ use bevy::render::mesh::{Indices, PrimitiveTopology};
 
 use super::brush::BrushGrid;
 use super::mesh::{ChunkMeshData, ChunkMeshParams, build_chunk_mesh};
-use super::runtime::TerrainRuntime;
+use super::runtime::{ChunkMaterialHandle, TerrainChunkMaterials, TerrainRuntime};
 use super::spec::{
     DEFAULT_LOD_HYSTERESIS, DEFAULT_LOD_RESELECT_DISTANCE, DEFAULT_MAX_MESH_BUILDS_PER_FRAME,
     TerrainSpec,
@@ -54,7 +56,9 @@ pub struct ChunkLodState {
     adopted: bool,
     /// Terrain root entity (chunks attach here on respawn).
     root: Option<Entity>,
-    /// Material captured from an adopted chunk, reused for respawns.
+    /// Material captured from an adopted chunk, reused for respawns. Worlds
+    /// that use the layer blend publish their (typed) handle via
+    /// [`TerrainChunkMaterials`], which wins over this capture.
     material: Option<Handle<StandardMaterial>>,
     /// Camera XZ at the last full LOD evaluation (reselect gate).
     last_cam: Option<Vec2>,
@@ -160,6 +164,8 @@ fn adopt_chunks(
 fn update_chunk_lods(
     mut state: ResMut<ChunkLodState>,
     runtime: Option<Res<TerrainRuntime>>,
+    published: Option<Res<TerrainChunkMaterials>>,
+    cliff_mask: Option<Res<super::cliffs::CliffMask>>,
     cameras: Query<&GlobalTransform, With<Camera3d>>,
     mut chunks: Query<(Entity, &Transform, &mut TerrainChunk, &mut Mesh3d)>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -170,20 +176,6 @@ fn update_chunk_lods(
     };
     if !state.adopted {
         return;
-    }
-
-    // Sync the chunk index with reality (adoptions and despawns).
-    let dead: Vec<UVec2> = state
-        .chunks
-        .iter()
-        .filter(|(_, e)| chunks.get(**e).is_err())
-        .map(|(c, _)| *c)
-        .collect();
-    for coords in dead {
-        state.chunks.remove(&coords);
-    }
-    for (entity, _, chunk, _) in chunks.iter() {
-        state.chunks.insert(chunk.coords, entity);
     }
 
     let Ok(cam) = cameras.single() else {
@@ -204,6 +196,23 @@ fn update_chunk_lods(
     if moved {
         state.last_cam = Some(cam_xz);
     }
+
+    // Sync the chunk index with reality (adoptions and despawns) — inside the
+    // gate: enquanto a passagem não corre, o índice não é lido, e sincronizá-
+    // lo era um scan O(chunks) + HashMap inserts em TODOS os frames.
+    let dead: Vec<UVec2> = state
+        .chunks
+        .iter()
+        .filter(|(_, e)| chunks.get(**e).is_err())
+        .map(|(c, _)| *c)
+        .collect();
+    for coords in dead {
+        state.chunks.remove(&coords);
+    }
+    for (entity, _, chunk, _) in chunks.iter() {
+        state.chunks.insert(chunk.coords, entity);
+    }
+
     let mut budget = DEFAULT_MAX_MESH_BUILDS_PER_FRAME;
     state.pending = false;
 
@@ -213,18 +222,24 @@ fn update_chunk_lods(
     let rows = (spec.world_size / edge).ceil().max(1.0) as u32;
     let max_lod = max_lod_for(spec, edge);
     let margin = hysteresis_margin(spec);
+    let render_distance = spec.effective_render_distance();
     let grid = &runtime.grid;
+    // The baked alpha factor only feeds the layers shader; the legacy stock
+    // PBR folds vertex alpha into opacity, so it must stay untouched there.
+    let cliff_mask_opt = if spec.layers.is_empty() {
+        None
+    } else {
+        cliff_mask.as_deref()
+    };
 
     // 1. Cull + re-evaluate tracked chunks.
     for (entity, transform, mut chunk, mut mesh) in chunks.iter_mut() {
         let tr = transform.translation;
         let dist = Vec2::new(tr.x, tr.z).distance(cam_xz);
-        if let Some(render_distance) = spec.render_distance {
-            if dist > render_distance {
-                state.chunks.remove(&chunk.coords);
-                commands.entity(entity).despawn();
-                continue;
-            }
+        if dist > render_distance {
+            state.chunks.remove(&chunk.coords);
+            commands.entity(entity).despawn();
+            continue;
         }
         chunk.lod = select_lod(dist, spec.lod_distance(), chunk.built_lod, max_lod, margin);
         if chunk.lod == chunk.built_lod || budget == 0 {
@@ -233,7 +248,7 @@ fn update_chunk_lods(
             }
             continue;
         }
-        match rebuild(grid, spec, chunk.coords, edge, chunk.lod) {
+        match rebuild(grid, spec, chunk.coords, edge, chunk.lod, cliff_mask_opt) {
             Some(data) => {
                 *mesh = Mesh3d(meshes.add(to_bevy_mesh(&data)));
                 chunk.built_lod = chunk.lod;
@@ -252,11 +267,30 @@ fn update_chunk_lods(
     let Some(root) = state.root else {
         return;
     };
-    let Some(material) = state.material.clone() else {
+    // O mapa publicado pelo bootstrap ganha (material POR chunk); o capture
+    // da adoção cobre setups que spawnam chunks à mão (testes).
+    let standard_material = state.material.clone().map(ChunkMaterialHandle::Standard);
+    let layer_map = published.as_ref().and_then(|p| p.layer.clone());
+    if layer_map.is_none() && standard_material.is_none() {
         return;
+    }
+    // Só as células da grelha cujo centro pode caber no raio de render — o
+    // scan era `0..rows` duplo (O(rows²)) por pass; os limites dão a mesma
+    // selecção (o teste exato de distância ao centro mantém-se abaixo) sem
+    // percorrer o mundo inteiro. Casts saturam fora do mundo (negativo → 0,
+    // infinito → `rows - 1`), e um intervalo vazio simplesmente não itera.
+    let clamp_coord = |axis: f32| -> u32 {
+        (((axis - render_distance + half) / edge).floor().max(0.0) as u32).min(rows - 1)
     };
-    for cz in 0..rows {
-        for cx in 0..rows {
+    let clamp_hi = |axis: f32| -> u32 {
+        (((axis + render_distance + half) / edge).floor().max(0.0) as u32).min(rows - 1)
+    };
+    let min_cx = clamp_coord(cam_xz.x);
+    let max_cx = clamp_hi(cam_xz.x);
+    let min_cz = clamp_coord(cam_xz.y);
+    let max_cz = clamp_hi(cam_xz.y);
+    for cz in min_cz..=max_cz {
+        for cx in min_cx..=max_cx {
             if budget == 0 {
                 state.pending = true;
                 return;
@@ -265,29 +299,54 @@ fn update_chunk_lods(
             if state.chunks.contains_key(&coords) {
                 continue;
             }
+            // Chunks the voxel mesher owns must stay missing. The bootstrap
+            // skipped them on purpose; respawning one here lays a heightfield
+            // mesh straight over the voxel geometry and the pair z-fight
+            // across the whole chunk.
+            let origin_x = -half + cx as f32 * edge;
+            let origin_z = -half + cz as f32 * edge;
+            if runtime.voxel.is_volumetric_chunk(origin_x, origin_z, edge) {
+                continue;
+            }
             let center = Vec2::new(
                 -half + cx as f32 * edge + edge * 0.5,
                 -half + cz as f32 * edge + edge * 0.5,
             );
-            if let Some(render_distance) = spec.render_distance {
-                if center.distance(cam_xz) > render_distance {
-                    continue;
-                }
+            if center.distance(cam_xz) > render_distance {
+                continue;
             }
-            let Some(data) = rebuild(grid, spec, coords, edge, 0) else {
+            let Some(data) = rebuild(grid, spec, coords, edge, 0, cliff_mask_opt) else {
                 continue;
             };
             let handle = meshes.add(to_bevy_mesh(&data));
-            let entity = commands
-                .spawn((
-                    Name::new(chunk_name(coords)),
-                    Transform::from_translation(Vec3::new(center.x, 0.0, center.y)),
-                    Visibility::Inherited,
-                    Mesh3d(handle),
-                    MeshMaterial3d(material.clone()),
-                    ChildOf(root),
-                ))
-                .id();
+            // Material POR chunk (layers) quando o mundo optou; o legacy
+            // single-texture cobre mundos sem layers.
+            let Some(material) = layer_map
+                .as_ref()
+                .and_then(|map| map.get(cx, cz).cloned())
+                .map(ChunkMaterialHandle::Layer)
+                .or_else(|| standard_material.clone())
+            else {
+                // Chunk fora do mapa de materiais (mundo sem layers nem
+                // capture) — nada com que o vestir.
+                continue;
+            };
+            let mut entity = commands.spawn((
+                Name::new(chunk_name(coords)),
+                Transform::from_translation(Vec3::new(center.x, 0.0, center.y)),
+                Visibility::Inherited,
+                Mesh3d(handle),
+                ChildOf(root),
+            ));
+            match material {
+                ChunkMaterialHandle::Layer(material) => {
+                    entity.insert(MeshMaterial3d(material));
+                }
+                ChunkMaterialHandle::Standard(material) => {
+                    entity.insert(MeshMaterial3d(material));
+                }
+            }
+            let entity = entity.id();
             commands.entity(entity).insert(TerrainChunk {
                 coords,
                 lod: 0,
@@ -307,6 +366,7 @@ fn rebuild(
     coords: UVec2,
     edge: f32,
     lod: u8,
+    cliff: Option<&super::cliffs::CliffMask>,
 ) -> Option<ChunkMeshData> {
     let step = lod0_step(spec) << lod;
     let half = spec.world_size * 0.5;
@@ -324,8 +384,10 @@ fn rebuild(
         texture_tile_size: spec.texture_tile_size,
         levels: spec.levels,
         world_size: spec.world_size,
+        tint: spec.chunk_tint(),
+        cliff_angle: spec.cliff_angle,
     };
-    build_chunk_mesh(grid, &params).ok().flatten()
+    build_chunk_mesh(grid, &params, cliff).ok().flatten()
 }
 
 /// LOD selection with hysteresis: boundaries sit at `lod_distance * 2^(l-1)`;
@@ -360,7 +422,10 @@ pub(crate) fn select_lod(
             current
         }
     } else {
-        let boundary = lod_distance * 2f32.powi(i32::from(raw.saturating_sub(1)));
+        // A fronteira de refine é o TOPO da banda do LOD alvo (ld·2^raw):
+        // com a base (raw−1) o chunk só refinava a metade da distância e
+        // toda a aproximação da câmara renderizava um nível mais grossário.
+        let boundary = lod_distance * 2f32.powi(i32::from(raw));
         if dist < boundary / margin {
             raw
         } else {
@@ -478,6 +543,19 @@ mod tests {
     }
 
     #[test]
+    fn test_select_lod_refines_at_top_of_target_band() {
+        // Banda do LOD 1 com ld=128: [128, 256). Um chunk a LOD 2 (d ≥ 256)
+        // aproxima-se para d = 200 — ainda DENTRO da banda 1, logo refinou
+        // para 1. Com a fronteira na base da banda (128) só refinava a
+        // d < 117 e a aproximação inteira ficava um nível mais grossária.
+        let margin = 1.2f32.sqrt();
+        assert_eq!(select_lod(200.0, 128.0, 2, 3, margin), 1);
+        assert_eq!(select_lod(130.0, 128.0, 2, 3, margin), 1);
+        // No topo da banda ainda não trocou (histerese).
+        assert_eq!(select_lod(250.0, 128.0, 2, 3, margin), 2);
+    }
+
+    #[test]
     fn test_max_lod_respects_grid_divisibility() {
         // step 1 → 16 segments: divisible by 4 → max LOD 2 with 3 levels.
         let edge = chunk_edge(&spec());
@@ -527,10 +605,11 @@ mod tests {
             .expect("grid from heightmap");
         app.insert_resource(TerrainRuntime {
             spec: spec.clone(),
-            grid,
+            grid: Arc::new(grid),
             water: Vec::new(),
             roads: Vec::new(),
             pads: Vec::new(),
+            voxel: Arc::new(crate::terrain::voxel::VoxelField::default()),
         });
 
         let root = app
@@ -590,6 +669,16 @@ mod tests {
             lods
         };
         assert_eq!(lod(&mut app), vec![0, 0, 0, 0], "camera at center: LOD 0");
+
+        // Pin the render distance while the LOD ladder is under test: the
+        // default is now derived from the resident-chunk budget
+        // (`TerrainSpec::effective_render_distance`), and at `chunk_size: 16`
+        // it culls at ~408 m — which is closer than the "fly far away" camera
+        // below. Culling gets its own assertions right after.
+        {
+            let mut runtime = app.world_mut().resource_mut::<TerrainRuntime>();
+            runtime.spec.render_distance = Some(10_000.0);
+        }
 
         // Fly far away → coarser LOD everywhere (budget 4 covers 4 chunks).
         let mut cam = app
