@@ -15,8 +15,8 @@
     edge-noise="0.6"
     end-feather-start="1.5"
     end-feather-end="3"
-    texture-url="/assets/textures/forest_floor.png"
-    normal-map-url="/assets/textures/pbr_forest_floor/forest_floor_normal.png"
+    texture-url="/assets/textures/forest_floor/albedo.webp"
+    normal-map-url="/assets/textures/forest_floor/normal.webp"
   ></Road>
   <!-- ramo → círculo de menires (52, 118). Começa na margem NORTE do rio
        (dock no pad n_resume da ponte) — a linha antiga (24,208) nascia
@@ -30,8 +30,8 @@
     edge-noise="0.6"
     end-feather-start="1.5"
     end-feather-end="3"
-    texture-url="/assets/textures/forest_floor.png"
-    normal-map-url="/assets/textures/pbr_forest_floor/forest_floor_normal.png"
+    texture-url="/assets/textures/forest_floor/albedo.webp"
+    normal-map-url="/assets/textures/forest_floor/normal.webp"
   ></Road>
   <!-- ramo → acampamento de lenhador (-30, 64) -->
   <Road
@@ -43,8 +43,8 @@
     edge-noise="0.6"
     end-feather-start="1.5"
     end-feather-end="3"
-    texture-url="/assets/textures/forest_floor.png"
-    normal-map-url="/assets/textures/pbr_forest_floor/forest_floor_normal.png"
+    texture-url="/assets/textures/forest_floor/albedo.webp"
+    normal-map-url="/assets/textures/forest_floor/normal.webp"
   ></Road>
 
   <!-- ============================================================
@@ -60,8 +60,8 @@
     edge-noise="0.7"
     end-feather-start="1.5"
     end-feather-end="3"
-    texture-url="/assets/textures/desert_sand.png"
-    normal-map-url="/assets/textures/pbr_desert_sand/desert_sand_normal.png"
+    texture-url="/assets/textures/desert_sand/albedo.webp"
+    normal-map-url="/assets/textures/desert_sand/normal.webp"
   ></Road>
   <Road
     path="200 10 184 -28 176 -60 164 -92 156 -110"
@@ -72,8 +72,8 @@
     edge-noise="0.7"
     end-feather-start="1.5"
     end-feather-end="3"
-    texture-url="/assets/textures/desert_sand.png"
-    normal-map-url="/assets/textures/pbr_desert_sand/desert_sand_normal.png"
+    texture-url="/assets/textures/desert_sand/albedo.webp"
+    normal-map-url="/assets/textures/desert_sand/normal.webp"
   ></Road>
   <Road
     path="240 8 236 52 240 72"
@@ -84,8 +84,8 @@
     edge-noise="0.7"
     end-feather-start="1.5"
     end-feather-end="3"
-    texture-url="/assets/textures/desert_sand.png"
-    normal-map-url="/assets/textures/pbr_desert_sand/desert_sand_normal.png"
+    texture-url="/assets/textures/desert_sand/albedo.webp"
+    normal-map-url="/assets/textures/desert_sand/normal.webp"
   ></Road>
   <Road
     path="200 10 210 -24 214 -32"
@@ -96,8 +96,8 @@
     edge-noise="0.7"
     end-feather-start="1.5"
     end-feather-end="3"
-    texture-url="/assets/textures/desert_sand.png"
-    normal-map-url="/assets/textures/pbr_desert_sand/desert_sand_normal.png"
+    texture-url="/assets/textures/desert_sand/albedo.webp"
+    normal-map-url="/assets/textures/desert_sand/normal.webp"
   ></Road>
 
   <!-- ============================================================
@@ -115,8 +115,8 @@
     edge-noise="0.7"
     end-feather-start="1.5"
     end-feather-end="3"
-    texture-url="/assets/textures/swamp_mud.png"
-    normal-map-url="/assets/textures/pbr_swamp_mud/swamp_mud_normal.png"
+    texture-url="/assets/textures/swamp_mud/albedo.webp"
+    normal-map-url="/assets/textures/swamp_mud/normal.webp"
   ></Road>
   <Road
     path="-220 -18 -200 -44 -188 -52"
@@ -127,8 +127,8 @@
     edge-noise="0.7"
     end-feather-start="1.5"
     end-feather-end="3"
-    texture-url="/assets/textures/swamp_mud.png"
-    normal-map-url="/assets/textures/pbr_swamp_mud/swamp_mud_normal.png"
+    texture-url="/assets/textures/swamp_mud/albedo.webp"
+    normal-map-url="/assets/textures/swamp_mud/normal.webp"
   ></Road>
 
   <!-- ============================================================
@@ -143,8 +143,8 @@
     edge-noise="0.5"
     end-feather-start="1.5"
     end-feather-end="3"
-    texture-url="/assets/textures/mountain_stone.png"
-    normal-map-url="/assets/textures/pbr_mountain_stone/mountain_stone_normal.png"
+    texture-url="/assets/textures/mountain_stone/albedo.webp"
+    normal-map-url="/assets/textures/mountain_stone/normal.webp"
   ></Road>
   <!-- Termina na margem N do Lago Gelado (-184,-68 r=22) — não dentro da água. -->
   <Road
@@ -156,8 +156,8 @@
     edge-noise="0.5"
     end-feather-start="1.5"
     end-feather-end="3"
-    texture-url="/assets/textures/mountain_stone.png"
-    normal-map-url="/assets/textures/pbr_mountain_stone/mountain_stone_normal.png"
+    texture-url="/assets/textures/mountain_stone/albedo.webp"
+    normal-map-url="/assets/textures/mountain_stone/normal.webp"
   ></Road>
   <Road
     path="-2 -208 -26 -180 -38 -174"
@@ -168,8 +168,8 @@
     edge-noise="0.5"
     end-feather-start="1.5"
     end-feather-end="3"
-    texture-url="/assets/textures/mountain_stone.png"
-    normal-map-url="/assets/textures/pbr_mountain_stone/mountain_stone_normal.png"
+    texture-url="/assets/textures/mountain_stone/albedo.webp"
+    normal-map-url="/assets/textures/mountain_stone/normal.webp"
   ></Road>
 
   <!-- ============================================================
@@ -185,8 +185,8 @@
     edge-noise="0.7"
     end-feather-start="1.5"
     end-feather-end="3"
-    texture-url="/assets/textures/desert_sand.png"
-    normal-map-url="/assets/textures/pbr_desert_sand/desert_sand_normal.png"
+    texture-url="/assets/textures/desert_sand/albedo.webp"
+    normal-map-url="/assets/textures/desert_sand/normal.webp"
   ></Road>
   <!-- Oeste → Clareira Paradisíaca (-540,30). -->
   <Road
@@ -198,8 +198,8 @@
     edge-noise="0.7"
     end-feather-start="1.5"
     end-feather-end="3"
-    texture-url="/assets/textures/swamp_mud.png"
-    normal-map-url="/assets/textures/pbr_swamp_mud/swamp_mud_normal.png"
+    texture-url="/assets/textures/swamp_mud/albedo.webp"
+    normal-map-url="/assets/textures/swamp_mud/normal.webp"
   ></Road>
   <!-- Sul → Mirante da Caldeira (-605,-725). -->
   <Road
@@ -211,8 +211,8 @@
     edge-noise="0.5"
     end-feather-start="1.5"
     end-feather-end="3"
-    texture-url="/assets/textures/mountain_stone.png"
-    normal-map-url="/assets/textures/pbr_mountain_stone/mountain_stone_normal.png"
+    texture-url="/assets/textures/mountain_stone/albedo.webp"
+    normal-map-url="/assets/textures/mountain_stone/normal.webp"
   ></Road>
 </Group>
 <!-- FIM paths.trails -->

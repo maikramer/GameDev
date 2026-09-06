@@ -44,7 +44,9 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
+# `.ktx2` entra aqui porque os mundos passaram a referenciar texturas GPU
+# directamente (`texture="…/albedo.ktx2"`); sem isto o sync não as espelhava.
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".ktx2"}
 LINK_EXTS = IMAGE_EXTS | {".ogg"}  # áudio: hardlink (fallback copy)
 GLB_MAGIC = b"glTF"
 GLB_CHUNK_JSON = 0x4E4F534A  # "JSON"
@@ -52,7 +54,7 @@ GLB_CHUNK_JSON = 0x4E4F534A  # "JSON"
 # Any attribute whose name ends in ``url`` (url, model-url, texture-url, ...).
 _URL_RE = re.compile(r"[\w-]*url\s*=\s*\"([^\"]+)\"", re.IGNORECASE)
 # Atributos de asset sem sufixo ``url`` usados nos mundos migrados:
-# ``texture="/assets/textures/vale_grass.png"`` no <Terrain>, ``terrain-texture``
+# ``texture="/assets/textures/vale_grass/albedo.webp"`` no <Terrain>, ``terrain-texture``
 # em variants, ``icon="/assets/icons/…"`` no HUD.
 _PLAIN_ASSET_RE = re.compile(
     r"\b(?:texture|terrain-texture|icon|portrait-url|image)\s*=\s*\"([^\"]+)\"",
@@ -64,6 +66,68 @@ _MESHES_RE = re.compile(r"\bmeshes\s*=\s*\"([^\"]+)\"", re.IGNORECASE)
 _SOUND_RE = re.compile(r"\bsound\s*=\s*\"bgm-([a-z0-9-]+)\"", re.IGNORECASE)
 # <Terrain heightmap="/assets/terrain/terrain.ahgt"> e afins
 _HEIGHTMAP_RE = re.compile(r"\bheightmap\s*=\s*\"([^\"]+)\"", re.IGNORECASE)
+# <Terrain layers="grass vale_grass …"> — aliases do pool de texturas de
+# solo; cada alias é /assets/textures/<alias>/albedo.ktx2 no runtime
+# (`src/terrain/splat.rs::pool_albedo`).
+_LAYER_RE = re.compile(r"\blayers\s*=\s*\"([^\"]+)\"", re.IGNORECASE)
+
+# SFX que a engine carrega por path HARDCODED (`src/ambient.rs::SfxClip`,
+# loops de água/passos/fogueira, BGM por convenção) — nunca aparecem no XML,
+# logo a descoberta por regex não os apanha. Sem esta allowlist o espelho do
+# exemplo fica sem os ficheiros e o jogo fica mudo (foi o caso das águas).
+ENGINE_AUDIO = [
+    # clips base (SfxClip)
+    "assets/audio/sfx/hit.ogg",
+    "assets/audio/sfx/whoosh.ogg",
+    "assets/audio/sfx/harvest.ogg",
+    "assets/audio/sfx/ui.ogg",
+    # colheita nativa
+    "assets/audio/sfx/combat/chop_hit.ogg",
+    "assets/audio/sfx/combat/chop_break.ogg",
+    "assets/audio/sfx/combat/mine_hit.ogg",
+    "assets/audio/sfx/combat/mine_break.ogg",
+    "assets/audio/sfx/combat/shield_block.ogg",
+    # jogador
+    "assets/audio/sfx/player/hurt.ogg",
+    "assets/audio/sfx/player/heal.ogg",
+    "assets/audio/sfx/player/jump.ogg",
+    "assets/audio/sfx/player/dash.ogg",
+    # criaturas
+    "assets/audio/sfx/creatures/enemy_hurt.ogg",
+    "assets/audio/sfx/creatures/enemy_death.ogg",
+    "assets/audio/sfx/creatures/wolf_growl.ogg",
+    "assets/audio/sfx/creatures/slime_squish.ogg",
+    "assets/audio/sfx/creatures/boss_roar.ogg",
+    # UI/economia/progressão
+    "assets/audio/sfx/ui/levelup.ogg",
+    "assets/audio/sfx/ui/quest_accept.ogg",
+    "assets/audio/sfx/ui/quest_complete.ogg",
+    "assets/audio/sfx/ui/notification.ogg",
+    "assets/audio/sfx/ui/coin.ogg",
+    "assets/audio/sfx/ui/buy.ogg",
+    "assets/audio/sfx/ui/error.ogg",
+    "assets/audio/sfx/ui/save.ogg",
+    "assets/audio/sfx/ui/load.ogg",
+    "assets/audio/sfx/ui/game_over.ogg",
+    "assets/audio/sfx/ui/shop_open.ogg",
+    # mundo
+    "assets/audio/sfx/world/chest_open.ogg",
+    "assets/audio/sfx/world/door_open.ogg",
+    "assets/audio/sfx/world/door_close.ogg",
+    "assets/audio/sfx/world/bomb_drop.ogg",
+    # loops ambientes
+    "assets/audio/sfx/world/water_lake.ogg",
+    "assets/audio/sfx/world/water_flow.ogg",
+    "assets/audio/sfx/world/footsteps_grass.ogg",
+    "assets/audio/sfx/world/fire_crackle.ogg",
+    # BGM por convenção `assets/audio/bgm/<layer>.ogg`
+    "assets/audio/bgm/explore.ogg",
+    "assets/audio/bgm/battle.ogg",
+    "assets/audio/bgm/boss.ogg",
+    "assets/audio/bgm/dungeon.ogg",
+    "assets/audio/bgm/mountain.ogg",
+    "assets/audio/bgm/village.ogg",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -114,18 +178,27 @@ def extract_urls(text: str) -> list[str]:
         urls.append(f"/assets/audio/bgm/{layer}.ogg")
     for hm in _HEIGHTMAP_RE.findall(text):
         urls.append(hm)
+    for layers in _LAYER_RE.findall(text):
+        for alias in layers.replace(",", " ").split():
+            urls.append(f"/assets/textures/{alias}/albedo.ktx2")
     return urls
 
 
 def collect_urls(world_dir: Path) -> list[str]:
-    """Deduplicated urls across every migrated XML, deterministic order."""
+    """Deduplicated urls across every migrated XML + engine allowlist."""
     urls: list[str] = []
     seen: set[str] = set()
+
+    def push(url: str) -> None:
+        if url not in seen:
+            seen.add(url)
+            urls.append(url)
+
     for path in sorted(world_dir.rglob("*.xml")):
         for url in extract_urls(path.read_text(encoding="utf-8")):
-            if url not in seen:
-                seen.add(url)
-                urls.append(url)
+            push(url)
+    for rel in ENGINE_AUDIO:
+        push("/" + rel)
     return urls
 
 

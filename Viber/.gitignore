@@ -1,1 +1,4 @@
 worlds/shaders/
+# sky.wgsl é GERADO a cada `viber run` (especializado por mundo).
+examples/*/shaders/
+worlds/assets

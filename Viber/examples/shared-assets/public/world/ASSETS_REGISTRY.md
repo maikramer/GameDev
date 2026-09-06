@@ -56,7 +56,7 @@ Gerado: 2026-07-29. Inventário factual de `public/assets/` + ligações em `pub
 
 | Pasta                | Conteúdo                                | Uso                                   |
 | -------------------- | --------------------------------------- | ------------------------------------- |
-| `/assets/textures/`  | 10 albedos + mapas PBR (`pbr_*`)        | Composition cidade, terreno, estradas |
+| `/assets/textures/`  | 17 pastas de material (`albedo` + mapas PBR, WebP 1024²) | Composition cidade, terreno, estradas |
 | `/assets/terrain/`   | `terrain.ahgt`, `terrain.json`          | `<Terrain>` em index.html             |
 | `/assets/sky/`       | `sky.png`                               | `environment.xml` equirect            |
 | `/assets/icons/`     | 23 ícones HUD/inventário (.png + .json) | HUD, loot                             |

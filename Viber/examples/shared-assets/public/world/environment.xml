@@ -138,7 +138,7 @@
           clouds="0.85"
           pp-exposure="0.78"
           pp-vignette-darkness="0.50"
-          terrain-texture="/assets/textures/forest_floor.png"
+          terrain-texture="/assets/textures/forest_floor/albedo.webp"
         ></BiomeRegion>
         <!-- LESTE: Deserto -->
         <BiomeRegion
@@ -153,7 +153,7 @@
           clouds="0.25"
           pp-exposure="0.74"
           pp-bloom-strength="0.18"
-          terrain-texture="/assets/textures/desert_sand.png"
+          terrain-texture="/assets/textures/desert_sand/albedo.webp"
         ></BiomeRegion>
         <!-- OESTE: Pântano (bacias baixas do relevo real) -->
         <BiomeRegion
@@ -167,7 +167,7 @@
           bgm-layer="1"
           rain="0.35"
           pp-exposure="0.70"
-          terrain-texture="/assets/textures/swamp_mud.png"
+          terrain-texture="/assets/textures/swamp_mud/albedo.webp"
         ></BiomeRegion>
         <!-- SUL: Picos Gelados. Vértice da cunha empurrado de ±56 para ±240:
              o setor sul só ganha cota a partir de r≈260 (126 m a 80-160 m,
@@ -184,7 +184,7 @@
           ambient="#aeb9c8"
           bgm-layer="1"
           pp-exposure="0.78"
-          terrain-texture="/assets/textures/snow_peak.png"
+          terrain-texture="/assets/textures/snow_peak/albedo.webp"
         ></BiomeRegion>
       </Group>
       <!-- FIM environment -->

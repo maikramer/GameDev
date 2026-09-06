@@ -16,9 +16,9 @@
       corner-radius="6"
       edge-feather="1.8"
       edge-noise="0.5"
-      texture-url="/assets/textures/cobblestone_road.png"
+      texture-url="/assets/textures/cobblestone_road/albedo.webp"
       texture-scale="5"
-      normal-map-url="/assets/textures/pbr_cobblestone_road/cobblestone_road_normal.png"
+      normal-map-url="/assets/textures/cobblestone_road/normal.webp"
     ></Pad>
   </Composition>
 </Group>
