@@ -196,7 +196,7 @@ fn test_river_carve_does_not_tear_the_heightfield() {
         bank_height: 0.9,
         ..RiverSpec::default()
     };
-    viber::terrain::water::carve_river(&mut grid, &river, 0).expect("river carves");
+    viber::terrain::water::carve_river(&mut grid, &river, 0, &[]).expect("river carves");
     let after = max_texel_step(&grid, &spec);
 
     // The channel is 3.4 m deep with a ~5.5 m bank and a feathered outer

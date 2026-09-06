@@ -180,12 +180,16 @@ impl HeightMapU16 {
         })?;
         {
             use std::io::Read;
+            let mut zlib_failed = false;
             if zlib_wrapped {
                 let mut decoder = flate2::read::ZlibDecoder::new(payload);
-                decoder
-                    .read_to_end(&mut raw)
-                    .context("AHGT: zlib decompress failed")?;
-            } else {
+                if decoder.read_to_end(&mut raw).is_err() {
+                    zlib_failed = true;
+                    raw.clear();
+                }
+            }
+            if !zlib_wrapped || zlib_failed {
+                raw.clear();
                 let mut decoder = flate2::read::DeflateDecoder::new(payload);
                 decoder
                     .read_to_end(&mut raw)

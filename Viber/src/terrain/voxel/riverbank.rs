@@ -206,7 +206,7 @@ pub fn spring_band(
     }
     let center = body.stations[0];
     let water = body.surface_y[0];
-    let next = body.stations[body.stations.len().min(1)];
+    let next = body.stations[1.min(body.stations.len() - 1)];
     let downstream = (next - center).normalize_or_zero();
     if downstream == Vec2::ZERO {
         return None;

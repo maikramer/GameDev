@@ -854,6 +854,7 @@ fn spawn_chunks(
             let lod = distance
                 .map(|d| super::plugin::select_lod(d, spec.lod_distance(), 0, max_lod, margin))
                 .unwrap_or(0);
+            let mut built_lod = lod;
             let params = ChunkMeshParams {
                 origin,
                 size: edge,
@@ -871,6 +872,7 @@ fn spawn_chunks(
             let data = match build_chunk_mesh(grid, &params, cliff) {
                 Ok(Some(data)) => data,
                 Ok(None) | Err(_) if lod > 0 => {
+                    built_lod = 0;
                     let params = ChunkMeshParams {
                         lod_step: step,
                         ..params
@@ -903,6 +905,11 @@ fn spawn_chunks(
                 )),
                 Visibility::Inherited,
                 ChildOf(parent),
+                super::plugin::TerrainChunk {
+                    coords: UVec2::new(cx, cz),
+                    lod: built_lod,
+                    built_lod,
+                },
             ));
             match chunk_material {
                 ChunkMaterialHandle::Layer(material) => {
