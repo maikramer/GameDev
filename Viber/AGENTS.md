@@ -1,7 +1,8 @@
 # AGENTS.md — Viber
 
 Engine de jogo NATIVA em Rust/Bevy 0.19 que corre mundos declarativos XML do
-AiGameKit — sem browser, sem three.js. Estado: **Fase 0** (parse → IR → spawn).
+AiGameKit — sem browser, sem three.js. Estado: **Fases 0–3 ✅** (parse → IR →
+spawn → terreno → Luau → física; port do simple-rpg feito em 10 loops).
 Nomenclatura segue **Bevy** (`translation`, `euler`, `half-size`, `base-color`),
 não Unity/three.js.
 
@@ -9,10 +10,26 @@ não Unity/three.js.
 
 | Tarefa | Ficheiro(s) | Notas |
 |--------|-------------|-------|
-| CLI (`run` / `analyze`) | `src/main.rs` | `analyze` é headless, exit 1 em erro |
+| CLI (`run` / `analyze`) | `src/main.rs` | `analyze` é headless, exit 1 em erro; `run()` monta os plugins por ordem |
+| Auditoria de assets | `src/audit.rs` | corre no `analyze`: GLBs/texturas/heightmaps/BGM/scripts/estilos ausentes, Draco/Basis (não suportados; meshopt é expandido), magia inválida, glTF sem collider; `--strict` falha com ficheiros ausentes |
 | XML: parse, includes, valores | `src/xml/` | `include.rs` (expansão), `values.rs` (parsers tolerantes) |
-| IR de entidades + spawn Bevy | `src/recipes/` | `mod.rs` (IR), `spawn.rs`, `transform.rs` (euler→quat) |
-| Terreno (specs, sampler, mesh, LOD) | `src/terrain/` | `spec.rs` (contrato), `sampler.rs`/`heightmap.rs` (altura), `mesh.rs` (chunks), `plugin.rs` (LOD runtime), `runtime.rs` (bootstrap + carve) |
+| IR de entidades + spawn Bevy | `src/recipes/` | `mod.rs` (IR + `KNOWN_TAGS`), `spawn.rs`, `transform.rs` (euler→quat) |
+| Terreno (specs, sampler, mesh, LOD) | `src/terrain/` | `spec.rs` (contrato), `sampler.rs`/`heightmap.rs` (altura), `mesh.rs` (chunks), `plugin.rs` (LOD runtime), `runtime.rs` (bootstrap + carve), `cliffs.rs` (cliffs procedurais + sharpen + CliffMask) |
+| Scripts Luau + API `viber.*` | `src/luau.rs` | referência completa em **`docs/LUA_API.md`**; hooks `on_update(dt)`/`on_player_attack`; "LOD de IA" via `ScriptActivation` |
+| UI declarativa (`UiRoot`/`UiStyle`) + `viber.ui.*` | `src/ui/` | `tree.rs` (XML→bevy_ui), `style.rs` (stylesheet), `palette.rs` (cores Tailwind), `anim.rs` (movimento), `widgets.rs` (check/slider/input/tooltip/cursor), `script.rs` (API Luau), `bind.rs` (bindings), `modal.rs` (modais autorais) |
+| HUD de jogo | `src/hud/` | widgets que desenham dados do mundo: minimapa, compasso, nametags, `profiler_window.rs`. Painéis, barras e menus do `simple-rpg` vivem agora na UI declarativa (`src/ui/`) |
+| Player + câmara | `src/player.rs`, `src/camera.rs` | WASD/setas + Shift sprint + Space salto; third-person com drag/scroll |
+| Combate | `src/combat.rs`, `src/skills.rs`, `src/feedback.rs`, `src/vitals.rs` | melee [J], alvo [V], skills [C]/[R]/[B]/[L], dano flutuante/i-frames/respawn, HP/XP |
+| Colheita (destructibles) | `src/harvest.rs` | minerar/cortar nativos: `destructible="…"` no XML + `<ResourceNode>` no template; [J]/clique perto do prop toca clip `mine`/`chop` com picareta/machado na mão; `fall` = árvore cai e fica toco, `shatter` = pedra despedaça; loot → vault/XP/quests |
+| Quests & diálogo | `src/quests.rs` | 21 quests JSON embutidas via `include_str!`, flow [E], QuestTracker |
+| Economia & menus | `src/economy.rs`, `src/menus.rs` | vault real + hotbar [1]/[2]; toasts, banner e loading screen. O modal [Q] e a loja passaram para a UI declarativa (`world/menu.xml`); `MenusOpen` é espelhado de `UiModalsOpen` |
+| Save/load | `src/save.rs` | JSON em `~/.local/share/viber/<mundo>.save.json`; [J]/[L] com um menu aberto, ou os botões Guardar/Carregar do separador Sistema (`viber.ui.action("save"\|"load")`) |
+| Travel & wayfinding | `src/travel.rs` | A Nota [F], viagem rápida [G], registry de hostis (alimenta `viber.alive_in_region`) |
+| Mundo vivo | `src/worldsys.rs`, `src/ambient.rs`, `src/sky.rs`, `src/postfx.rs`, `src/animation.rs`, `src/music.rs` | DayCycle/Weather/WorldBorder/BiomeRegion como recursos; fog/tint/gestos de NPC/SFX; céu WGSL especializado por mundo; exposure/bloom/SSAO; clips glTF; BGM crossfade |
+| Física | `src/physics.rs`, `src/physics_fx.rs` | Rapier (`bevy_rapier3d`): `collider`/`rigidbody` declarativos; knockback cinemático + destrutíveis |
+| IA sem script | `src/ai.rs` | wander/chase determinístico p/ criaturas de `DynamicSpawner` sem script + respawn |
+| Debug bridge + REPL Luau | `src/bridge/` | `mod.rs` (métodos BRP `viber.*`), `lua.rs` (método `viber.lua` + API `viber.debug.*`), `client.rs` (cliente std-only), `logs.rs` (layer de tracing); QA headless via `viber debug …` |
+| Sessão partilhada de QA | `src/session.rs` | lease atómico por mundo (`create_new` + TTL) + `engine.json`; comandos `viber session …`; protocolo obrigatório na secção "Sessão partilhada de QA" |
 
 ## COMANDOS
 
@@ -29,14 +46,30 @@ make test-viber                                 # atalho monorepo
 ./install.sh viber            # raiz do monorepo: cargo build --release + ~/.local/bin/viber
 viber create <nome>           # scaffold <nome>/world.xml (falha se a pasta existe)
 viber analyze [world.xml]     # valida headless; sem caminho procura world.xml / worlds/*.xml
-viber run [world.xml]         # janela Bevy; `--release` e `--no-cargo` disponíveis
+viber run [world.xml]         # janela Bevy em RELEASE; `--debug` e `--no-cargo` disponíveis
 viber --version | help
 ```
+
+**`viber run` corre em RELEASE por omissão.** O motor é Bevy + Rapier: com o
+perfil dev o `simple-rpg` media **8 fps**, com release **~90 fps** na mesma
+GPU. `--debug` volta ao perfil dev (compila mais depressa, joga muito pior) e
+existe para iterar em código, não para jogar. O `Cargo.toml` também passou a
+optimizar as dependências no perfil dev (`[profile.dev.package."*"]
+opt-level = 3`), pelo que mesmo `--debug` já não é o desastre de antes.
 
 `viber run` dentro de um checkout do Viber delega em `cargo run -- run <mundo>`
 (parcidade com o `vibegame run`, que reconstrói a engine) — o binário instalado
 corre directo fora do checkout. `analyze` nunca delega (CI-ready, mesmo parser
 do binário instalado).
+
+### Texturas: KTX2 obrigatório
+
+Um PNG/WebP é comprimido em disco e **RGBA8 na VRAM**. Todos os assets de
+runtime do `simple-rpg` e do pool estão em KTX2/UASTC; conteúdo novo deve
+entrar já assim (`text3d finish`, ou
+`scripts/ktx2_compress_pool.py --assets <raiz> --loose`). Nunca `etc1s`: o
+Bevy 0.19 não descomprime BasisLZ. Detalhe e números em
+[`docs/PERFORMANCE.md`](docs/PERFORMANCE.md).
 
 ### Debug bridge (`viber run --bridge`)
 
@@ -46,11 +79,20 @@ VibeGame. Métodos JSON-RPC: `viber.ping`; `viber.screenshot` +
 `viber.tree` (árvore de entidades: id/nome/pai/transform/componentes);
 `viber.logs` (ring-buffer de tracing, 1000 entradas); `viber.input.key/text/
 click/move` (input sintético: `KeyboardInput`/`MouseButtonInput`/`CursorMoved`
-+ `ButtonInput`). Os métodos BRP builtin (`world.query`, `world.spawn_entity`,
-`world.insert_components`, `world.mutate_components`, …) também ficam expostos
-— inspecção e mutação live do ECS.
++ `ButtonInput`); **`viber.lua`** (avalia Luau NA engine — o "evaluate
+script" do bridge, secção abaixo). Os métodos BRP builtin (`world.query`,
+`world.spawn_entity`, `world.insert_components`, `world.mutate_components`,
+…) também ficam expostos — inspecção e mutação live do ECS.
 
-Cliente CLI (`--port` ou `VIBER_BRIDGE_PORT`):
+Cliente CLI (`--port` → `VIBER_BRIDGE_PORT` → **porta da sessão viva** →
+15702). Desde que `session up` escolhe a primeira porta livre, o cliente
+descobre-a sozinho pelo `engine.json` da sessão — não é preciso exportar
+`VIBER_BRIDGE_PORT` no fluxo normal. A descoberta é rápida (pre-check TCP de
+250 ms por sessão, probe HTTP só na vencedora), imprime `viber: bridge
+descoberto em :PORT (sessão: …)` no stderr, prefere a engine cujo mundo está
+debaixo do cwd e — como o `viber run --bridge` também registra o seu
+`engine.json` — encontra ATÉ engines lançadas fora de `session up`. Com
+várias engines vivas, desambiguar com `--port`:
 
 ```bash
 viber run world.xml --bridge &   # engine com bridge
@@ -60,23 +102,178 @@ viber debug tree [--json]                  # entidades (como take_snapshot)
 viber debug logs [--limit N] [--json]      # console
 viber debug prof [--json]                  # snapshot do profiler (fps/frame/
                                            #   entidades/scripts ativos/chunks)
+viber debug prof --samples 10              # média/pior/melhor de N amostras — o
+                                           #   `fps` de UMA amostra é instantâneo
+                                           #   e oscila (12 vs 60 no mesmo mundo)
 viber debug click 400 300 [--button right]
 viber debug move 400 300
 viber debug key w | space | esc | up | ctrl | f3 [--shift]
 viber debug text "hello"                   # typing sintético por char
+viber debug lua '<código>'                 # avalia Luau NA engine (REPL; [--file
+                                           #   f.lua] [--json] [--port])
 ```
 
-### Profiler (F3)
+### Luau na REPL (`viber debug lua`, método `viber.lua`)
 
-`src/profiler.rs` (ligado por omissão no `run`): overlay `bevy_ui` no canto
-superior direito com FPS + pior fps da janela (~3 s), frame-time médio/pico,
-entidades, scripts Luau totais/ativos (dentro do raio de `ScriptActivation` —
-o "LOD de IA"), emissores de partícula e chunks de terreno. **F3** alterna.
-O mesmo snapshot é o método bridge `viber.profiler` (cliente `viber debug
-prof`) para QA headless sem screenshot. `VIBER_PROF_LOG=1` adiciona o
-`LogDiagnosticsPlugin` (fps/frame_time/entity_count a cada 1 s no log).
-Teclas de debug de vitals: **H** −10 HP, **N** cura total, **K** +10 XP
-(`J` é o ataque do herói).
+O "evaluate script" do bridge (`src/bridge/lua.rs`): compila o chunk numa env
+persistente (globals sobrevivem entre chamadas; `return` devolve o valor) na
+VM do `LuaScriptHost`, com o **player como self** — a API `viber.*` dos
+scripts de jogo (log, quest_*, toast, teleport_player, …) funciona na REPL.
+Resposta: `{ok, result|error, applied, warnings}`. Leituras vêm de um
+snapshot do início da chamada; escritas aplicam no MESMO frame (antes dos
+sistemas de gameplay). Sem guard de instruções — `while true do end` congela
+o frame (igual a um script de página no Chrome; risco aceite).
+
+API de debug `viber.debug.*` (além de toda a `viber.*` dos scripts):
+
+| Leitura (snapshot) | Escrita (mesmo frame) |
+|--------------------|------------------------|
+| `entities([raio])` → `{id,name?,x,y,z,disabled}` (cap 4096, mais perto 1.º) | `set_pos(id, x, y, z)`, `move_to(id, x, z)` (Y no terreno) — id = bits numérico OU nome (exato→substring) |
+| `info(id)` → tudo; `components(id)` → nomes; `transform(id)` → `{x,y,z,pitch,yaw,roll,sx..,gx..}`; `mesh(id)` → `{vertices,indices,has_uvs,uv_count,uv_min/max,topology}`; `material(id)` → `{base_color,metallic,roughness,unlit,base_color_texture,normal_map}` (texturas `[w,h]`); `collider(id)` → `{shape,hx..hz,radius,vertices,shapes}` | |
+| `find(nome)` → id, `find_all(nome)` → ids | `teleport(x,y,z)`, `tp(x,z)` (player, Y no terreno), `move_player(dx,dz)` |
+| `pos(id)`, `distance(a,b)` → x,y,z / metros | `hide/show/toggle_vis(id)`, `disable/enable(id)` (componente `Disabled`), `despawn(id)` |
+| `player()` → `{id,x,y,z,hp,max_hp,xp,xp_next,speed}` | `heal/damage(n)`, `set_hp(n)`, `kill(id)` (HP a zero, sem i-frames), `xp(n)`, `give(item,n)` (vault), `set_speed(n)` |
+| `time_scale()`, `fps()`, `prof()` → snapshot do profiler | `set_time_scale(n)` (slow-mo/pausa), `face(x,z)`, `toast(msg)` |
+| `stats()` → agregados do mundo (meshes/colliders/luzes/shadows/rigidbodies/emitters/scripts/fps); `physics()` → tempos do último step do Rapier (step/collision/solver/ccd ms) | `colliders([raio])`, `lights([raio])` → dumps (cap 256); `around(raio, limite?)` → resumo compacto de TUDO perto do player (cap 128, mais perto 1.º) |
+| `camera()` → `{x,y,z,distance,pitch,yaw,target?}` | `set_camera{distance=?, pitch=?, target=?}` (OrbitCamera — enquadra screenshots) |
+| `clock()` → `{minute,dawn,dusk,minutes_per_real_second}` | `set_clock(minute)` (0–1440 — noite p/ screenshots: 1380); `set_window(w, h)` redimensiona a janela p/ QA responsivo (`@media`, `vw/vh`) |
+| `vault()` → `{gold,wood,stone,items{}}` ou nil | `rotate(id, graus)` (yaw, soma), `set_scale(id, s)` (uniforme) |
+| `quests()` → `{id: "not_taken\|active\|ready\|done"}` | `spawn_box/spawn_sphere(x,y,z, tamanho [, "#hex"])` — marker `debug:*`; `clear_markers()` remove todos |
+
+Ex.: `viber debug lua 'viber.debug.tp(0, -20) return viber.debug.player()'`;
+desativar um inimigo: `viber debug lua "viber.debug.disable('goblin')"`.
+
+Referência completa da API Lua (incl. `viber.debug.*`): **`docs/LUA_API.md`**.
+
+#### Receitas de QA (fluxo típico de agente)
+
+```bash
+# 1. Saber onde o herói está (leitura em snapshot; números integrais chegam como inteiros)
+viber debug lua 'local p = viber.debug.player() return { p.x, p.y, p.z, p.hp }'
+
+# 2. Levar o herói a um marco (tp senta o Y no terreno) e ver o resultado
+viber debug lua 'viber.debug.tp(0, -20) return true'
+viber debug screenshot -o depois-do-tp.png
+
+# 3. Congelar um inimigo por nome (sem matar — mantém posição/estado)
+viber debug lua 'viber.debug.disable("wolf") return #viber.debug.find_all("wolf")'
+viber debug lua 'viber.debug.enable("wolf") return true'
+
+# 4. Debug de economia/vitals: dar itens, curar, XP, slow-mo
+viber debug lua "viber.debug.give('potion', 3) viber.debug.heal(25) viber.debug.set_time_scale(0.2) return true"
+
+# 5. Marcar posições no mundo (markers visíveis; nome único debug:sphere:N / debug:box:N)
+viber debug lua 'viber.debug.spawn_sphere(12, 3, -8, 0.5, "#ff0044") return true'
+viber debug lua 'viber.debug.clear_markers() return true'   # limpa todos
+
+# 6. Screenshot de noite, de cima, com slow-mo e freeze de inimigos
+viber debug lua 'viber.debug.set_clock(1380) viber.debug.set_camera{distance = 12, pitch = 40} viber.debug.set_time_scale(0.2) return true'
+viber debug screenshot -o cena-noite.png
+
+# 7. REPL com estado entre chamadas + resposta crua
+viber debug lua 'marca = {x = 12, z = -8} return true'
+viber debug lua --json 'viber.debug.tp(marca.x, marca.z) return viber.debug.time_scale()'
+# → {"ok": true, "result": 1.0, "applied": 1, "warnings": []}
+
+# 8. Diagnóstico de performance: agregados + física + o que há à volta
+viber debug lua 'local s = viber.debug.stats() local p = viber.debug.physics()
+return { fps = s.fps, frame_ms = s.frame_ms_avg, fisica_ms = p.step_ms,
+         luzes_com_sombras = s.lights_with_shadows, colliders = s.colliders,
+         scripts_ativos = s.scripts_active }'
+viber debug lua 'local a = viber.debug.around(30, 128) return #a'   # densidade à volta
+viber debug lua 'local l = viber.debug.lights() local n = 0
+for _, luz in ipairs(l) do if luz.shadows then n = n + 1 end end return n'  # luzes caras
+```
+
+**Limites honestos do profiling:** o Bevy 0.19 não expõe tempos POR sistema
+nem POR entidade de render (os executores já não emitem spans tracing). O que
+existe de real: `physics()` (contadores do último step do Rapier), `prof()`
+(frame ms/fps/scripts/chunks) e os PROXIES de composição em `stats()` — nº de
+luzes com sombras, colliders trimesh, emissores, scripts ativos. Para caçar
+regressões: comparar `stats()`/`prof()` antes e depois da mudança suspeita.
+
+Notas: leituras (`pos`, `player`, `entities`) refletem o INÍCIO da chamada —
+uma escrita e a sua leitura de verificação têm de ser chamadas separadas
+(ou ler o mundo via `viber.tree`/screenshot). `disable` insere o componente
+`Disabled` do Bevy: a entidade sai de TODAS as queries normais (IA, render,
+movimento) mas continua no mundo — `enable` restaura. A env da REPL é única
+e partilhada entre chamadas; scripts de jogo têm envs próprias (isolamento
+do runtime mantém-se).
+
+### Sessão partilhada de QA (`viber session`, `src/session.rs`)
+
+Uma engine por MUNDO, partilhada por todos os agentes paralelos, com lease
+de uso explícito — várias engines simultâneas esgotam a VRAM da GPU
+("Quitting the application due to OutOfMemory RenderError" sem panic).
+Estado em `<cache>/viber/session-<slug-do-mundo>/`: `lease.json` (criado
+com `create_new` — o mutex é o SO) e `engine.json` (pid/porta/mundo/log).
+
+```bash
+viber session status                 # SEM SESSÃO | LIBERADO | OCUPADO por X | engine MORTA
+viber session list                   # TODAS as sessões: mundo, porta, viva/morta, dono
+viber session up [--port N]          # sobe a engine partilhada + espera o bridge (log em ~/.cache/viber/logs/)
+                                     #   sem --port procura a 1.ª porta LIVRE a partir de 15702
+                                     #   (dois mundos na mesma porta = 2.º bridge morto)
+viber session claim --owner <tarefa> # exit 0 = conseguido; exit 3 = OCUPADO (não girar!)
+viber session release --owner <tarefa>  # liberta (o --owner tem de bater)
+viber session touch --owner <tarefa>    # renova o TTL (default 300 s)
+viber session down                   # desce a engine (sem lease ativo)
+```
+
+**Protocolo obrigatório para QA ao vivo:**
+
+1. **Nunca lançar `viber run --bridge` directamente** com QA em mente —
+   `viber session status` primeiro; se "SEM SESSÃO", `viber session up`.
+2. Antes de tocar na engine: `viber session claim --owner <nome-da-tarefa>`.
+   Se responder **OCUPADO (exit 3)**: faça OUTRO trabalho e volte mais tarde;
+   no máximo uma vez use `claim --wait 120` para esperar pela libertação.
+3. Faça os 1–2 testes (`viber debug lua/screenshot/...`) e **`release`
+   imediatamente**. QA longa renova com `touch`. O lease expira sozinho
+   (TTL 300 s) se o agente morrer — quem vem depois rouba-o sem cerimónia.
+4. **Nunca matar processos de engine** — a única via legitima é
+   `viber session down` (e exige sessão livre).
+5. Engine "MORTA" no status → `viber session down && viber session up`.
+
+Fluxo típico:
+
+```bash
+viber session up
+viber session claim --owner qa-sky || return    # exit 3 → fazer outro trabalho
+VIBER_BRIDGE_PORT=15702 viber debug lua 'viber.debug.tp(0, -20) return true'
+VIBER_BRIDGE_PORT=15702 viber debug screenshot -o qa.png
+viber session release --owner qa-sky
+```
+
+
+### Profiler (F3 ou P)
+
+`src/profiler.rs` + `src/hud/profiler_window.rs` (ligados por omissão no
+`run`): **janela** bevy_ui com FPS + pior fps da janela (~3 s), frame-time
+médio/pico, entidades, scripts Luau totais/ativos (dentro do raio de
+`ScriptActivation` — o "LOD de IA"), emissores de partícula e chunks de
+terreno. **F3 ou P** alterna. O mesmo snapshot é o método bridge
+`viber.profiler` (cliente `viber debug prof`) para QA headless sem screenshot.
+`VIBER_PROF_LOG=1` adiciona o `LogDiagnosticsPlugin` (fps/frame_time/
+entity_count a cada 1 s no log). (P só aprende talento com o menu [Q] aberto
+na tab Talentos — fora dele alterna o profiler.)
+
+### Teclas (jogo)
+
+| Tecla | Ação | Código |
+|-------|------|--------|
+| WASD/setas, Shift, Space | mover (rel. à câmara), sprint ×1.5, salto (buffer + coyote) | `player.rs` |
+| rato drag / scroll | câmara yaw/pitch / zoom (clamp 2–80 m) | `camera.rs` |
+| J ou clique esq. | ataque melee (cone + alcance, XP por kill); perto de colhível (`destructible`) = minerar/cortar com a ferramenta na mão; confirma em menus; **grava o save** na tab Sistema | `combat.rs`, `harvest.rs`, `save.rs` |
+| E | interação (diálogo/colheita/loja); fora de alcance de NPC = skill cura | `player.rs`, `skills.rs` |
+| V | ciclar alvo | `combat.rs` |
+| C / R / B / L | dash / golpe radial / bomba / guard (segurar) | `skills.rs` |
+| Q | menu de jogo (UiModal declarativo em `world/menu.xml`) — tabs Missões/Mochila/Talentos/Loja/Controlos/Sistema; P aprende talento na tab Talentos; ↑↓ navegam, ←→ volumes | `ui/modal.rs`, `menus.rs`, `save.rs` |
+| K | loja (tab Loja do menu) perto do mercador; fora dele é debug +10 XP | `menus.rs`, `vitals.rs` |
+| F / G | assinar marco da Nota / viagem rápida em fogueira | `travel.rs` |
+| 1 / 2 | hotbar: poção / antídoto | `economy.rs` |
+| H / N | debug: −10 HP / cura total | `vitals.rs` |
+| F9 / F10 / F11 | debug: harvest de quest / give de economia / teleport ao próximo marco | `quests.rs`, `economy.rs`, `travel.rs` |
+| Esc | fecha modal (o tecla do modal autoral é configurável: `key="…"` aceita q/e/i/m/k/j/l/b/c/tab/esc/f1–f3) | `menus.rs`, `ui/modal.rs` |
 
 Detalhes: handlers correm como sistemas exclusivos em `RemoteLast` (depois de
 `Last`); screenshots são request+poll porque a captura precisa de frames de
@@ -103,47 +300,139 @@ Raiz: `<world>` (ou `<scene>`), attr `clear-color` (`#rgb`/`#rrggbb`/`0x…`/nom
 | `AmbientLight` | `color`, `brightness` — aplicado como recurso `GlobalAmbientLight`, não entidade |
 | `OrbitCamera` | `target` (nome de entidade), `distance`, `height`, `pitch` (graus; quando presente sobrepõe `height` via `height = distance·tan(pitch)`) |
 | `GltfScene` | `url` (obrigatório; `/assets/...` resolve contra a asset root do mundo — a pasta que contém `assets/`) + attrs universais; cena default do GLB spawna como filhos da entidade (transform aplica); load assíncrono, falha = warn + nó vazio. GLBs do pipeline vêm meshopt-comprimidos (bevy 0.19 não lê EXT_meshopt) → espelho decomprimido via `Viber/scripts/sync_assets.py` |
-| `StaticSpawner` | `count`, `seed`, `region-min`/`region-max` ("x y z"), `cluster-count`/`cluster-radius`, `footprint-radius`+`avoid-overlaps`, `max-slope-deg`, `avoid-water`, `align-to-terrain`, `scale-min`/`max`+`scale-axis-min`/`max`, `random-yaw`, `max-distance`; template = primeiro glTF (`GLTFLoader`/`GltfScene`) na subárvore filho. Colocação determinística (SplitMix64 por seed, rejeita água/declive/sobreposição, tenta count×8+64); `profile`/`variation`/`ground-align` aceites sem efeito. Espelha `src/spawner.rs` (função pura `compute_placements`) |
+| `StaticSpawner` | `count`, `seed`, `region-min`/`region-max` ("x y z"), `density-per-km2`+`max-instances` (modo de contagem alternativo: `count = densidade × área km²` da região XZ, teto `max-instances` — 0 = sem teto; `count` explícito ganha), `cluster-count`/`cluster-radius`, `footprint-radius`+`avoid-overlaps` (0 = AUTO: meia-largura XZ do AABB do GLB, fallback 0.8 m), `max-slope-deg`, `max-slope-attempts` (32 — tentativas POR instância; esgotadas, a instância é omitida), `avoid-water`, `in-water` (à lâmina de água), `near-water`+`near-water-radius`, `avoid-road` (default ON), `avoid-cliff` (default ON — nada nasce em parede de cliff nem a `cliff-margin` dela; `"0"` restaura), `cliff-margin` (2 m — folga além da vergem da máscara de cliffs, distância REAL medida por `CliffMask::is_cliff_within`), `activation-radius` (LOD de IA dos scripts), `align-to-terrain`, `base-y-offset` (soma ao Y pós-assentamento), `scale-min`/`max`+`scale-axis-min`/`max`, `random-yaw`, `max-distance`; template = primeiro glTF (`GLTFLoader`/`GltfScene`) na subárvore filho. Colocação determinística (SplitMix64 por seed). Espelha `src/spawner.rs` (função pura `compute_placements`) — ver **Spawner: colocação** abaixo |
 | `ParticleSystem` | `preset` (fire, smoke, fireflies, ground-dust, sparkle, leaves, snow, sand-dust, magic, core; desconhecido = core) + `transform="pos: x y z"` (component-string) + overrides em `particle-emitter="preset: …; emission-rate: …; start-life-min/max: …; start-speed-min/max: …; start-size-min/max: …; start-color: #hex; looping: …; world-space: …"`. Emissor CPU billboard (`src/particles.rs`): mesh de capacidade FIXA por emissor (quads degenerados nos slots livres — realocar por frame tripava use-after-free no slab allocator), vertex color com fade por vida, material unlit Add (fogo/magic/sparkle/fireflies) ou Blend (resto) |
-| `PlayerGLTF` | `model-url` (obrigatório), `name` (default `player`), `pos` (alias de `translation` — tags verbatim mantêm `pos`), `speed` futuro. Componente `Player` + WASD/setas relativo ao yaw da câmara (Shift = sprint ×1.8), assenta no terreno via `TerrainRuntime::sample` todos os frames (`src/player.rs`) |
-| `ThirdPersonCamera` | alias interactivo do `OrbitCamera` com defaults `target="player"`, `distance` 4, `height` 1.6; aceita `mouse-sensitivity`. Drag (qualquer botão) = yaw/pitch, scroll = zoom (clamp 2–80 m); câmaras extra são rebaixadas a Group com warning |
-| `DialogueNPC` | `dialogue-id` (obrigatório; ausente = skip), `marker-height` (2.5), `portrait-url`/`voice-sfx` aceites sem efeito. Componente `DialogueNpc` + marcador esférico dourado emissivo a `marker-height` acima do NPC; interação: player a <3.5 m + E → log no bridge (`src/player.rs::dialogue_interaction`); UI de diálogo na fase HUD |
+| `PlayerGLTF` | `model-url` (obrigatório), `name` (default `player`), `pos` (alias de `translation` — tags verbatim mantêm `pos`), `speed`. Componente `Player` + WASD/setas relativo à câmara (Shift = sprint ×1.5, Space = salto com buffer/coyote), assenta no terreno via `TerrainRuntime::sample` todos os frames (`src/player.rs`) |
+| `ThirdPersonCamera` | alias interactivo do `OrbitCamera` com defaults `target="player"`, `distance` 4, `height` 1.6; attrs `mouse-sensitivity`, `follow-lag`, `turn-lag`, `min-terrain-distance`, `fov`. Drag (qualquer botão) = yaw/pitch, scroll = zoom (clamp 2–80 m), anti-clip com o terreno; câmaras extra são rebaixadas a Group com warning |
+| `DialogueNPC` | `dialogue-id` (obrigatório; ausente = skip), `marker-height` (2.5 — marcador flutuante), `portrait-url`/`voice-sfx` aceites sem efeito. Componente `DialogueNpc` + marcador esférico dourado emissivo; [E] a <3.5 m abre o **diálogo real** (linhas intro/progress/complete das quests JSON, `src/quests.rs`) com balão no HUD |
 | `AudioMixer` | `master`/`music`/`sfx` (buses, default 1) — recurso `AudioMixerSettings` (`src/music.rs`); o driver de música multiplica o bus music |
-| `MusicLayer` | `layer` (obrigatório; ex. explore/battle/boss/dungeon/mountain/village), `sound` (nome `bgm-x`; URL por convenção `assets/audio/bgm/x.ogg`), `base-volume` (0.2). Spawna `AudioPlayer` em LOOP a volume 0; `music_driver` crossfada a layer da zona do player (port do `bgmZone`: dungeon caixa 770-950/205-355 → mountain wedge z≤-240 → vila r<55 → explore) com fade 0.6/s; boss/battle activam com combat |
-| `ResourceChip` | `resource` (obrigatório), `icon`, `target-entity` — chip de HUD real: texto UI absoluto (`resource 0`) empilhado no canto superior esquerdo (`src/recipes/spawn.rs`, adiado para o fim do startup); valores/ícones chegam com a fase de economia |
-| HUD (HudScreenLayer, HealthBar, XpBar, BossBar, TargetBar, Minimap, Compass, InteractionPrompt, DialogueBalloon, TabbedModal) | IR genérico `HudElement` (tag + attrs crus); UI real em `src/hud.rs` via bevy_ui: barra HP vermelha "HP 100/100", XP azul, BossBar (escondida até haver boss), TargetBar ("sem alvo"), Minimap 140×140 com `range` + borda, Compass "N", prompt "[E] Interagir" escondido até NPC a <3.5 m, balão de diálogo escondido, TabbedModal escondido e alternado pela tecla autoral (`key="q"`). Valores estáticos até existirem combat/economia |
-| `DynamicSpawner` | mesmos attrs de colocação do `StaticSpawner` (count/seed/region/avoid-*/random-yaw/max-slope/max-distance); template = `Creature`→glTF. Spawn único (respawn/comportamento chega com scripts) |
-| `SpawnExclusion` | `at` ("x z"), `radius` — círculo global; recolhido num recurso e respeitado por TODOS os spawners (rejeita candidatos dentro do raio) |
-| `Vegetation` | `meshes` (lista separada por espaços), `density-per-km2`, `seed`, `region-*`, `scale-*`, `max-slope-deg`, `avoid-water`, `max-distance`, `cluster-*`; count = densidade × área km² com cap `max-instances` (default 800/tag — o original GPU-instancia ~100k; instancing é follow-up). `smart`/`wind`/`flower-*`/`plant-*` aceites sem efeito |
+| `MusicLayer` | `layer` (obrigatório; ex. explore/battle/boss/dungeon/mountain/village), `sound` (nome `bgm-x`; URL por convenção `assets/audio/bgm/x.ogg`), `base-volume` (0.2). Spawna `AudioPlayer` em LOOP a volume 0; `music_driver` crossfada a layer da zona do player (port do `bgmZone`: dungeon caixa 770-950/205-355 → mountain wedge z≤-240 → vila r<55 → explore) com fade 0.6/s. **Combate**: `CombatMusicState` (`src/music.rs`, escrito pelo aggro da FSM em `src/ai.rs`) promove a layer para `battle` (ou `boss` se o nome da criatura contiver "boss") durante 8 s após o último evento de aggro |
+| `ResourceChip` | `resource` (obrigatório), `icon`, `target-entity` — chip de HUD com valor VIVO do vault (`gold/wood/stone`, `src/economy.rs`), empilhado no canto superior esquerdo; `icon`/`target-entity` aceites sem efeito |
+| HUD (HudScreenLayer, HealthBar, XpBar, BossBar, TargetBar, Minimap, Compass, InteractionPrompt, DialogueBalloon, TabbedModal, QuestTracker, WaypointArrow) | IR genérica `HudElement` (tag + attrs crus); UI real em `src/hud/` via bevy_ui: barras HP/XP reais (sync de vitals), TargetBar com o alvo do combate, Minimap 140×140 com `range` + borda, Compass, prompt de interação ([E] a <3.5 m ou via `viber.set_interaction`), balão de diálogo, menu de jogo [Q] (UiModal declarativo, `world/menu.xml`) e profiler em janela (F3/P). QuestTracker renderiza o tracker de quests (`src/quests.rs`), WaypointArrow a seta do waypoint (`src/travel.rs`). A tag `BossBar` é aceite mas **sem UI própria** (removida no cleanup) |
+| `DynamicSpawner` | mesmos attrs de colocação do `StaticSpawner` (densidade, footprint auto, occupancy e tentativas incluídas); template = `Creature`→glTF. Criaturas sem `script` ficam com IA da engine (`src/ai.rs`: wander/chase determinístico + respawn); com `script` o comportamento é Luau (+ `activation-radius` para o LOD de IA). Ficam sempre verticais — `align-to-terrain` é ignorado (perfil `creature` do VibeGame) |
+| `SpawnExclusion` | `at` ("x z"), `radius` — círculo global; registado no **registo de ocupação partilhado** e respeitado por TODOS os spawners (mesmo com `avoid-overlaps="0"`) |
 
-Primitivas aceitam material: `base-color`, `metallic`, `roughness`.
-Atributos universais: `name`, `tag`, `script`, `translation`, `euler` (graus XYZ),
-`rotation` (quat `x y z w`, ganha sobre `euler`), `scale`.
+**Spawner: colocação (port do `spawner` do VibeGame).** Todos os grupos de
+spawn partilham um **registo de ocupação XZ** (`SpawnOccupancy`, buckets por
+célula de 4 m): cada `<SpawnExclusion>` e cada instância colocada registra um
+disco; um candidato cujo disco encoste um disco registado — com **folga de
+0.6 m** (`SPAWN_CLEARANCE`, props nunca nascem "colados") — é rejeitado. O
+teste contra o que já está registado (exclusões, outros grupos) corre SEMPRE;
+`avoid-overlaps` liga apenas o registo dos discos do PRÓPRIO grupo (tapetes
+densos continuam a compactar entre si). O teste usa `footprint × scale-max`
+(conservador); o registo usa a escala real. As colocações de TODOS os grupos
+são computadas no MESMO frame (quando o último template resolve), pela ordem
+do XML — a ocupação partilhada torna a ordem relevante, e o gate único mantém
+a promessa "mesma seed, mesmo mundo" (um template preso em Loading > 60 s é
+desistido com warn). Por instância: `max-slope-attempts` tentativas; cada
+candidato rejeitado queima uma. Altura = **superfície renderizada**
+(`TerrainRuntime::sample_mesh_surface`: o mesh desenha cordas lineares entre
+vértices LOD0 — a amostra analítica flutuava acima delas nas cristas).
+Com `align-to-terrain`, a rotação inclina o modelo para a normal amostrada
+por **matriz 3×3 ponderada** (`BrushGrid::sample_normal_matrix`, centro 6×,
+sondas a 1 texel — estabiliza o tilt e lê o declive real de ravinas) com
+inclinação linear de 5°→60° **clampada** (`terrain_align_rotation`): troncos
+seguem o declive mas nunca deitam em falésias; o yaw aplica-se sobre o eixo
+do tronco antes do tilt. Criaturas de `<DynamicSpawner>` ficam sempre
+verticais (movem-se depois do spawn). `profile`/`variation`/`ground-align`/
+`pick-strategy` continuam aceites sem efeito.
+
+**Cliffs e anel da pegada — spawn conservador.** Com `avoid-cliff` (default
+ON em spawners, `<Vegetation>` e pedras de margem), nada nasce EM parede de
+cliff nem a `cliff-margin` (2 m) dela: a closure do spawner amostra a
+**máscara regional** (`CliffMask::is_cliff_within`, a mesma que pinta o
+triplanar e trava a relva) com folga = margem + footprint × escala máx —
+"a 2 m do cliff" conta a partir do sítio onde o prop vai caber. `in-water` é
+a exceção habitual. Além disso, todo o candidato que passa os gates do
+centro é re-testado num **anel de 8 pontos** com raio `max(footprint ×
+escala, 1.5 m)`, lendo a MESMA matriz 3×3 ponderada que alimenta o tilt do
+modelo: declive acima do limite, água (com `avoid-water`) ou cliff em
+QUALQUER ponto do anel rejeitam o candidato, e um **spread de altura**
+centro↔anel > 2 m (`SPAWN_LEDGE_DROP`) rejeita degraus/terraços que cruzam a
+pegada com declive médio baixo. Cada rejeição conta o motivo em
+`PlacementStats` e `instantiate_spawn_groups` escreve UMA linha por grupo no
+log (`spawn '<url>': N placed / M attempts (rejected … — cliff W, water A…)`)
+— visível no `viber debug logs`, ideal para afinar margens e regiões.
+
+**Água e estrada — exclusão com exceção.** `avoid-water="1"` (árvores,
+pedras, props secos) rejeita o carve de lagos/rios; `avoid-road` é **default
+ON** em todos os spawners e `<Vegetation>` (árvores/pedras/erva nunca nascem
+no leito das estradas — `avoid-road="0"` devolve o comportamento antigo).
+A exceção é `in-water="1"`: só nasce EM água e assenta À **lâmina de água**
+(`TerrainRuntime::water_surface_at`), não no fundo escavado — vitórias-régias
+e plantas aquáticas flutuam na superfície, ficam verticais e ignoram o
+declive do leito (a normal do fundo rejeitava/inclinava mal em lagoas
+fundas). `near-water="1"` é o anel de margem em seco (juncos, pedras de
+margem); não combinar com `in-water`. `avoid-water` ganha se ambos estiverem
+autrados. Zonas de exclusão autorais: `<SpawnExclusion at="x z" radius="n">`
+— sempre honrada por TODOS os spawners, mesmo com `avoid-overlaps="0"`.
+| `destructible` (attr universal) | component-string de colheita nativa (`src/harvest.rs`): `popup-text`, `popup-color` (#hex), `preset` (burst de break), `burst-count`, `hits` (3), `hit-preset` (sparks/rockshards→sparks, woodchips→leaves), `hit-burst-count`, `shake-on-hit`, `crack-on-hit`+`crack-style` (voronoi/vertical → darken ×0.85 por golpe), `break-style` (`burst` \| `fall` \| `shatter`), `cut-height` (aceite; os GLBs de árvore já vêm pré-divididos em meshes `Stump`+`Top`), `range` (3.5). Num template de spawner aplica-se a CADA instância; filho `<ResourceNode kind="wood\|stone" yield="N"/>` do template define o loot. [J]/clique perto do prop: o herói equipa picareta (mine) ou machado (fall), toca o clip `mine`/`chop`, impacto a 35 % do clip, faíscas+wobble+darken por golpe; no último: `fall` tomba o `Top` longe do player com pivô no corte e fica o toco com collider, `shatter` lança 9 pedaços balísticos que pousam e desvanecem. Loot → vault (`ResourceNode`) + 30 XP + quests de recolha (lêem o vault) + popup flutuante + SFX `chop/mine-hit/break` (`assets/audio/sfx/combat/*.ogg`) |
+| `Vegetation` | `meshes` (lista separada por espaços), `density-per-km2`, `seed`, `region-*`, `scale-*`, `max-slope-deg`, `avoid-water`, `avoid-road` (default ON — `avoid-road="0"` deixa a erva entrar nas fitas), `avoid-cliff`/`cliff-margin` (idem spawners, default ON/2 m), `max-distance`, `cluster-*`; count = densidade × área km² com cap `max-instances` (default 800/tag — o original GPU-instancia ~100k; instancing é follow-up). `smart`/`wind`/`flower-*`/`plant-*` aceites sem efeito |
+| `Sky` | domo de céu procedural WGSL (`src/sky.rs`: sol, nuvens FBM, lua, estrelas, aurora, meteoros); os attrs crus são injectados como consts no shader **escrito em disco** (`<asset_root>/shaders/sky.wgsl`) a cada `run` — especialização por mundo (o Bevy 0.19 não re-uploads uniforms de material custom) |
+| `DayCycle` | relógio dia/noite que conduz ambiente + sol: `minute-of-day`, `minutes-per-real-second`, `dawn-minute`, `dusk-minute`, `ambient-day-intensity`, `ambient-night-intensity`, `drive-ambient`, `max-sun-elevation`, `sun-azimuth-base` (`src/worldsys.rs`) |
+| `Weather` | `wind` (vec2, consts de shader no boot), `wind-strength`, `clouds`, `rain` (0..1 contínuo — intensidade; conduz emissor de chuva ancorado ao player com partículas esticadas `size_y`, loop SFX `ambient/rain_loop.ogg` com volume ∝ intensidade, fog/exposure no `AtmosphereState`), `cycle` (bool — liga o scheduler determinístico: a cada 240 s roda um alvo de chuva com SplitMix64(seed ⊕ índice·golden), transição lerp 10 s; sem `cycle` a chuva é estática como autorada) (`src/worldsys.rs` + `src/ambient.rs`: `RainEmitter`, `rain_emitter_driver`) |
+| `BiomeRegion` | polígono de bioma: `id`, `polygon` (`"[x,z;x,z;…]"`), `display-name` (nome de exposição no HUD via bind `zone.name`; ausente = tabela de fallback da engine), `fog-density`, `tint`, `pp-exposure`, `pp-bloom-strength` — fog/tint/postfx seguem a região do player (`src/ambient.rs` + `src/postfx.rs`) |
+| `WorldBorder` | clamp da posição do player: `radius` (3800), `warn-seconds` (5), `margin` (80) |
+| `NavMesh`, `SpawnGate`, `ProjectileTemplate`, `AdaptiveQuality`, `PostFxDebugToggle` | aceites → recurso `EngineConfigData` (tag + attrs crus, `src/worldsys.rs`) — **data-only**, nenhum consumidor runtime ainda |
+| `UiStyle` | stylesheet CSS-like da UI declarativa: texto do elemento ou ficheiro via `src="ui/hud.css"`, relativo à pasta do mundo (`src/ui/style.rs`) — guia: [`docs/UI.md`](docs/UI.md) |
+| `UiRoot` | árvore UI declarativa inteira (`src/ui/tree.rs`): elementos `uitext, uibutton, uibar, uilist, uimodal, uirow, uicolumn, uigrid (cols="repeat(4, 1fr)"), uicooldown, uiicon, uispacer, uicheck (toggle), uislider (min/max/step), uiinput (campo de texto)` com attrs `id, class, style, text, value, key, tab, tab-group, scroll, hidden, disabled, escape-closes, bind, anim ("spin/pulse/bob/shake"), tooltip`; folha de estilo com paleta Tailwind por nome (`rose-400/80`), `box-shadow`, grid, decoração de texto, `pointer-events`/`cursor`, estados `:hover/:active/:disabled` e RESPONSIVO: unidades `vw/vh/vmin/vmax` + blocos `@media (min-width: …)/(portrait)/(max-aspect: …)` com re-estilo em resize — guia completo: [`docs/UI.md`](docs/UI.md); `<UiList>` + `<UiTemplate>`/`<UiEmpty>` repetem uma fonte de dados com `{campo}` substituído (fontes da engine OU `viber.ui.list()` de script, que passa a possuir a fonte); scripts manuseiam-na via `viber.ui.*` (`docs/LUA_API.md`); vitrina de tudo em `examples/simple-rpg/ui-showcase.xml` |
+
+Primitivas aceitam material: `base-color`, `metallic`, `roughness`,
+`texture`/`texture-url`, `texture-tile-size` (mipmaps + anisotropia via
+`src/textures.rs`).
+Atributos universais: `name`, `tag`, `script` (Luau — ver **Scripts Luau**),
+`translation`, `euler` (graus XYZ), `rotation` (quat `x y z w`, ganha sobre
+`euler`), `scale`, `collider` (`none`/`auto`/box/mesh/precompute) e
+`rigidbody`/`body` (kinematic/dynamic/…) — física declarativa via
+`src/physics.rs`.
 Sem câmara no mundo → auto-orbit lenta na origem.
 
 ### Terreno (Fase 1)
 
 Port do `bevy_mesh_terrain` (MIT) corrigido + contratos do plugin terrain do
 VibeGame (sampler CPU único, skirts + frontier normals em vez de stitching,
-LOD com histerese, pads com falloff, tint por altura/inclinação em vertex
-colors — sem WGSL custom).
+LOD com histerese, pads com falloff). O visual do chão tem dois caminhos: o
+tint LEGADO por altura/inclinação em vertex colors (sem WGSL) ou — quando o
+mundo declara `layers` — o BLEND de 13 texturas de solo do pool por splat map
+(`splat.rs` + `layer_material.rs` + `shaders/terrain_layers.wgsl`), que
+substitui o tint e pinta areia nas margens e o LEITO DE SEIXO (`pebbles`) nos
+fundos de lagos/rios.
 
 | Tag | Atributos próprios |
 |-----|--------------------|
-| `Terrain` | `heightmap` (PNG 8/16-bit; ausente = procedural determinístico via `seed`; `.ahgt` ainda não decodifica → fallback procedural com warning), `world-size` (256), `max-height` (50), `chunk-size` (64), `resolution` (64 — verts/chunk edge), `levels` (3), `lod-distance-ratio` (2.0), `lod-hysteresis` (1.2), `render-distance` (sem default = tudo), `skirt-width` (0.015625), `skirt-depth` (1.0), `height-smoothing` (1 = Catmull-Rom monotone; 0 = bilinear), `collision-resolution` (64; 0 desliga — dados prontos para a Fase 3), `texture`/`texture-url`, `texture-tile-size` (0 = auto), `seed` (0), tint: `base-color`, `color-low`, `color-mid`, `color-high`, `color-rock`, `snow-height`, `slope-threshold`, `slope-softness`, `height-blend-strength` |
+| `Terrain` | `heightmap` (PNG 8/16-bit ou `.ahgt` — decodificado em `heightmap.rs::from_ahgt`; ausente = procedural determinístico via `seed`), `world-size` (256), `max-height` (50), `chunk-size` (64), `resolution` (64 — verts/chunk edge), `levels` (3), `lod-distance-ratio` (2.0), `lod-hysteresis` (1.2), `render-distance` (sem default = tudo), `skirt-width` (0.015625), `skirt-depth` (1.0; `> 0` liga as saias ADAPTATIVAS — profundidade automática pelo vizinho, cap 6 m — o valor em si não define a profundidade), `height-smoothing` (1 = Catmull-Rom monotone; 0 = bilinear), `collision-resolution` (64; 0 desliga os colliders de terreno — consumido pela física em `physics.rs`), `cliff-angle` (50° — gatilho bruto da varrimento; 90 desliga), `cliff-min-area` (120 m²), `cliff-min-drop` (4 m), `cliff-min-extent` (8 m) — filtro REGIONAL: um componente de declive só é cliff se passar os três (mata declives espúrios), `cliff-streaks` (0.5 — escorrimentos verticais na pele da parede), `cliff-moss` (0.35 — musgo procedural nos ombros/ledges), `sharpen` (false), `sharpen-angle` (35°), `sharpen-seed` (0 = deriva de `seed`), `texture`/`texture-url`, `texture-tile-size` (0 = auto), `seed` (0), tint (caminho LEGADO): `base-color`, `color-low`, `color-mid`, `color-high`, `color-rock`, `snow-height`, `slope-threshold`, `slope-softness`, `height-blend-strength`; blend de camadas: `layers` (lista de ≤13 aliases do pool — `grass vale_grass dirt dirt_trail forest_floor gravel mountain_stone sand desert_sand snow_peak swamp_mud dirt_road pebbles` — ou caminhos de textura; o slot do leito carrega `pebbles` mesmo que o mundo não o liste), `shore-width` (5 m — faixa de areia fora da linha de água) — **BLOQUEADO na stack actual**: materiais custom com bindings de textura crasham o driver NV 595.84 (SIGSEGV em `vkCreatePipelineLayout`, ver abaixo), pelo que `layers` DEGRADA para o tint legado com um warn; o sistema por chunk liga-se com `VIBER_CHUNK_LAYERS=1` quando a stack o permitir |
+| — | **Material de chunk (r6, por trás de `VIBER_CHUNK_LAYERS=1`)**: o bootstrap gera UM material por chunk (`generate_chunk_splats` em `splat.rs`): as 4 texturas do pool com MAIOR peso agregado no chunk + um plano splat RGBA8 32² próprio (pesos renormalizados a somar 1; chunks de montanha carregam snow/stone, de pântano mud — áreas diferentes têm blends diferentes). Material próprio (`layer_material.rs`, NÃO ExtendedMaterial) com 4 layers+splat (bindings 0–9) + uniform de estilo/posicionamento (binding 10: tiles/tints/flats/roughs + origem/tamanho + layer de rocha para paredes triplanares) + day/night tint; shader `shaders/terrain_chunk.wgsl`. ⚠ **porquê o gate**: com bevy 0.19.1 + wgpu 29.0.4 + NV 595.84, QUALQUER material custom com `#[texture]` (1, 5 ou 17 bindings; extension OU material próprio; qualquer nº de binding) morre com SIGSEGV dentro de `libnvidia-gpucomp` ao criar o pipeline layout — o `StandardMaterial` e materiais só-`#[storage]` (céu) funcionam; isolado por bissect de mundos M0–M23 (2026-09-04). Falha de textura reponta o slot para a layer dominante (leito → gravel quando o chunk o carrega) |
 | `TerrainPad` | `at` (`"x z"`), `size` (`"w d"`), `falloff` (8), `corner-radius` (4), `height` (ausente = auto: amostra o centro e escreve de volta) |
-| `Lake` | `at`, `radius` (6), `depth` (1.5), `water-offset` (0.5), `color` (#2f7a9a), `opacity` (0.78), `ripple` (0.6, reservado). Carve lower-only: contorno orgânico (±28 %, harmónicos sin 2θ/3θ/5θ com fase por posição), rim = mínimo de 32 raios, taça `rim − depth·(1−t²)^1.5` até `radius·1.25`; espelho de água em `rim − water-offset` |
-| `River` | `path` (`"x z x z …"`, ≥2 pontos), `width` (6), `depth` (1.5), `water-offset` (0.3), `bank-width` (2), `bank-height` (0.9), `color` (#2a6685), `opacity` (0.85). Chaikin ×2 + estações de 3 m; eixos amostrados pós-pads e suavizados; superfície = prefixo-mínimo descendente (água nunca sobe); carve por estação em 2 passes — banks (raise, teto `MAX_BANK_RAISE`=2) e depois canal+bank cut (lower-only) |
+| `Lake` | `at`, `radius` (6), `depth` (1.5), `water-offset` (0.5), `color` (#2f7a9a), `opacity` (0.62 — lido pelo shader como escala de extinção da coluna), `ripple` (0.6 — amplitude das ondas, especializado como `CFG_WAVE_AMP` no `water.wgsl`; o maior dos lagos do mundo vence), `bank` (`soft` \| `beach` \| `cliff` \| `terraced` \| `gorge` \| `overhang` — `gorge`/`overhang` são VOXEL: anel de parede sólida na linha de água (`overhang` soca a base sob a lâmina; o carve preserva o banco natural), os restantes esculpem a rampa no heightfield), `rocks` (false — pedras de margem automáticas), `rocks-density` (0.12/m de linha de água), `rocks-scale-max` (1.4), filhos `<Island at="x z" radius height/>` (repetível — domo RAISE na bacia com praia; o espelho faz fade sobre ela). Carve: contorno orgânico (±28 %, harmónicos sin 2θ/3θ/5θ com fase por posição), rim = mínimo de 32 raios, taça `rim − depth·(1−t²)^1.5` até `radius·1.25`; espelho de água em `rim − water-offset` e termina EXATAMENTE na linha de água da taça |
+| `River` | `path` (`"x z x z …"`, ≥2 pontos), `width` (6), `depth` (1.5), `water-offset` (0.3), `bank-width` (2), `bank-height` (0.9), `color` (#2a6685), `opacity` (0.72), `bank`/`rocks`/`rocks-density`/`rocks-scale-max` (idem `<Lake>`; `gorge` = paredes verticais sólidas dos dois lados, `overhang` = socava), `pool-spacing` (0 — poços ×1.6/rápidos ×0.4 com largura ±20 %; a superfície fica lisa, o LEITO ondula e a profundidade lê-se no shader), `cascades` (true — queda >1.2 m entre estações vira cascata: face de água vertical no mesh, caldeirão ×1.6 a jusante, névoa `mist` na base), `spring` (false — nascente na estação 0: ferradura de rocha voxel com a boca a jusante, poozinho fundo, névoa). Confluência: estações dentro do contorno de um lago sobem à cota do espelho. Chaikin ×2 + estações de 3 m; superfície = prefixo-mínimo descendente (água nunca sobe); a ribbon acaba na linha de água real e meia-largura varia por estação (pools) |
+
+**Água viva (automática, sem attrs):** espuma ambiente — emissores `foam`
+contínuos ao longo da linha de água de cada corpo (um a cada 6 m, cap 40);
+áudio ambiente — loops `water_lake.ogg`/`water_flow.ogg` com volume por
+distância à linha de água (fade 0–26 m, bus sfx, `src/ambient.rs`). As
+pedras de margem (`rocks="1"`) entram no pipeline de spawner como candidatos
+fixos determinísticos (seed = posição do corpo; `src/terrain/shore_rocks.rs`)
+— herdam occupancy partilhada, LOD ladder, colliders e `avoid-road`.
+| `Cliff` | `path` (`"x z x z …"` — linha de creste; a face pende do lado da queda), `width` (6, percurso horizontal da face), `height` (ausente = **auto**: a diferença natural entre creste e pé — a parede adapta-se ao lugar), `angle` (com `height` autoral deriva `width = height/tan(angle)`), `profile` (`vertical` \| `concave` \| `convex` \| `columnar` \| `terraced` \| `overhang` \| `arch`; columnar = colunas basálticas com cortes retos, fendas e brow dentado — a referência wargame; overhang = saliência que corta para trás por baixo da verga, abrigo com rocha por cima; arch = parede vertical com UM vão em arco furado no meio da banda — cápsula subtractiva na estação média, só abre se a queda local ≥ 3 m), `side` (`auto`/`left`/`right`), `noise` (0.15, ondulação da borda como fração de `width`), `gullies` (0 = off; 0.15–0.4 — ravinas de erosão one-sided na face, bútresses ficam na linha nominal), `notches` (0 = off; 0.1–0.3 — colos no creste como fração da queda LOCAL), `talus` (false — cone de detritos no pé, carve RAISE-only com `talus-angle` 36°; `run ≈ 0.55·queda/tan(ângulo)`, enterra até 35% da queda; o bitset `talus` entra na camada pública da máscara — splat pinta gravel, relva/spawners evitam), `seed` (0). **Sólido 3D no campo voxel — já NÃO é um carve** (`src/terrain/voxel/cliff.rs`). `vertical` é mesmo aprumado, `concave` tem UNDERCUT real (rocha por cima da cabeça), `convex` faz a sobrancelha exceder o próprio pé, `columnar` põe o offset de coluna em geometria. Colisão por `Collider::voxels`. Como a parede saiu da grid, um survey de estrada já não a lê — mantenha os cliffs afastados das artérias (o simple-rpg usa ~30 m). Banda one-side: o lado de cima NUNCA é tocado. Pele da parede (shader por chunk): estratos cromáticos (tint quente↔frio por banda + banco duro 1-em-4), meteorização vertical e AO de contacto lidos do WALL SPACE da máscara (canal R das vertex colors, 0=brow→1=pé), escorrimentos e musgo por noise — doseados por `cliff-streaks`/`cliff-moss`. Journal `cliff:i` (parede) + `cliff:i` (talus) |
+| `Cave` | `path` (`"x z x z …"` — eixo do túnel em XZ), `radius` (3), `depth` (8 — profundidade do CENTRO do tubo abaixo da superfície), `open-ends` (true — a profundidade decresce a zero nas duas pontas, portanto o túnel rompe a encosta e a gruta tem bocas; a false fica selada). **NÃO é um carve** — nada é escrito no heightfield. É um encadeado de cápsulas subtractivas no campo voxel (`src/terrain/voxel/cave.rs`), a primeira feature que põe ROCHA POR CIMA da cabeça do jogador. Construída DEPOIS do carve, portanto um túnel sob uma estrada segue o leito da estrada como construído. `depth < radius` avisa (o tubo rompe ao longo de todo o comprimento em vez de ter tecto). Viber-only: o VibeGame salta a tag com aviso |
+| `Arch` | `at` (`"x z"`, obrigatório), `width`/`span` (8 — vão livre), `height` (6 — altura livre do vão na coroa), `thickness` (2.5 — espessura das pernas), `depth` (4 — fundura do bloco ao longo do eixo), `yaw` (0). Portal de rocha autónomo: UM sólido union no campo voxel (`src/terrain/voxel/arch.rs`) com vão em arco (caixa + coroa em cápsula), base assente em `sample(at) − 1`. A coluna no centro do vão tem DOIS spans sólidos — `column()` responde 2 e `viber.ground_below` põe o andador no chão, não na fita. Spawner/relva rejeitam a fita (`has_thin_roof`: laje suspensa < 4 m de espessura). Viber-only: o VibeGame salta a tag com aviso |
 | `Road` | `path` (≥2 pontos), `width` (2), `profile` (artery), `flatten` (true; `false` = trilho decal sem carve), `flatten-falloff` (8), `flatten-window` (56), `flatten-max-grade` (0.22), `flatten-shoulder` (0), `platform-sink` (0.12), `smoothing` (2), `closed` (false), `texture-url`, `texture-scale` (6), `edge-feather` (1.0); aceites sem efeito: `edge-noise`, `end-feather-start/end`, `normal-map-url` |
+| `GroundDecal` | `at` (`"x z"`), `radius` **ou** `size` (`"w d"`, extensão total) ou `half-size`, `feather` (2.5 — banda de alpha para fora da borda, em metros), `noise` (0.1 — ondulação da borda como fração do raio), `seed` (ausente = derivado da posição), `texture`/`texture-url`, `texture-scale` (9, metros por repetição — UV **world-space**, igual às ribbons), `base-color`, `roughness`, `lift` (0.04). Mancha de chão drapejada: anéis concêntricos amostrados no heightfield (não um quad plano), borda ondulada por harmónicos periódicos e alpha 1→0 em smootherstep. **Puramente visual** — nunca toca no heightfield. Substitui os `<Plane>` decal (quadrados duros a `y` fixo que cortam/flutuam no terreno) |
 | `RoadNetwork` | `default-profile` (artery), `default-width` (4), `crossing-flare` (false — alarga ×1.45 perto de ways com grau ≥3), `flatten`, `flatten-falloff`, `flatten-window`, `flatten-max-grade`, `texture-url`, `texture-scale` (9) + filhos `Way id xz [width]` e `Segment a b [via] [width] [profile]` (1 estrada por segmento, width interpolada; `profile="bridge"` salta o carve e desenha deck plano; `bridge-url`/`bridge-lod*`/`bridge-native-span` aceites sem efeito até glTF) |
 
 **Ordem de carve (contrato do VibeGame, `features.rs`):** Pads → Lakes → Rivers →
-Roads (arteriais primeiro, **pontes por último**). Estradas saltam núcleos de pads
+Cliffs (a parede existe quando a road faz o survey) → Roads (arteriais primeiro, **pontes por último**) → decals (visuais, leem o
+heightfield final) → discos de junção. Um disco de junção coberto por um
+`GroundDecal` é **suprimido**: empilhar os dois punha duas camadas de cobble
+com alpha a poucos centímetros uma da outra sobre os mesmos UVs world-space —
+os feathers somavam-se em costuras e o par brigava no depth. Estradas saltam núcleos de pads
 e zonas de carve de água (mutuamente exclusivas; o guard do road devolve `+inf`
 em zona bloqueada). Todo o mutate passa pelo brush engine (`brush.rs`): modos
 blend/lower/raise, journal por owner (`pad:0`, `road:3`…) com revert para
-re-carve idempotente, guard anti-lip (clamp lower-only ao anel de stencil) e
-`min_effective` (larguras < 1.5 texéis são promovidas — senão o carve no-op).
+re-carve idempotente e `min_effective` (larguras < 1.5 texéis são promovidas —
+senão o carve no-op). Nota: o `BrushGrid` de produção é deliberadamente
+**unguarded** (o clamp lower-only ao anel de stencil fabricava falésias);
+a implementação com guard (`HeightSampler::apply_pads`) existe só para testes.
 
 Runtime: `TerrainFeaturesPlugin` (bootstrap one-shot: heightmap → carve
 pads→água→estradas → entidades de chunks/água/ribbons) + `TerrainPlugin` (LOD
@@ -152,9 +441,19 @@ por `render-distance`). Queries de gameplay: `TerrainRuntime::sample /
 in_water / on_road` (recurso) + `WaterBody::contains / is_near / surface_y_at`
 (`avoid-water` / `near-water`) e `RoadPath::is_on_road / distance_to_road`.
 
+**Água animada** (`water_material.rs` + `shaders/water.wgsl`): lakes/rivers
+usam `ExtendedMaterial<StandardMaterial, WaterExtension>` — o fragment
+acrescenta ondas dirigidas pelo `wind`/`wind-strength` do `<Weather>`
+(normais animadas), fresnel (transparente de cima, espelho rasante + tint de
+céu), e glint de sol/lua (segue o relógio do `<DayCycle>`, igual à luz
+real). Zero uniforms de material — consts especializadas por mundo no
+`shaders/water.wgsl` (escrito no `run`, ao lado do céu) + `Globals` para o
+tempo, mesma arquitetura do `src/sky.rs`. Cor/alpha do corpo nas VERTEX
+COLORS (fade de margem incluído); `NotShadowCaster` obrigatório.
+
 **Desvios conhecidos vs VibeGame** (documentados, nenhum afeta o simple-rpg):
 estações de road a 1 m (vs 0.35); sem berms/cross-slope; decks de ponte são
-ribbons planas (GLB chega com glTF); `.ahgt` não decodifica. Mundo demo:
+ribbons planas (GLB chega com glTF). Mundo demo:
 `worlds/terrain.xml` (`viber analyze worlds/terrain.xml`).
 
 **Regras:**
@@ -164,17 +463,75 @@ ribbons planas (GLB chega com glTF); `.ahgt` não decodifica. Mundo demo:
   contra o dir do ficheiro raiz, relativos contra o dir do ficheiro que inclui;
   fragmentos com raiz `<world>`/`<scene>` contribuem os filhos.
 - Atributos desconhecidos = **warning** (impresso no `analyze`); tags desconhecidas = **skip no-op** com relatório no `analyze` (`--strict` trata como erro).
+- **Auditoria de assets no `analyze`** (`src/audit.rs`, headless — lê só cabeçalhos): recolhe TODAS as refs a ficheiros do XML (GLB de scenes/player/spawner templates/vegetation/colliders `mesh-url`, texturas de primitivas/terreno/estradas/decals, heightmaps, BGM por convenção `assets/audio/bgm/<layer>.ogg`, scripts Luau, estilos UiStyle) e verifica: ficheiro ausente (✗ — erro em `--strict`), GLB sem magic "glTF" / com Draco ou Basis (⚠ — a engine não lê; meshopt É expandido pelo asset reader), textura com extensão fora de png/jpg/webp/ktx2/hdr/tga ou magia PNG/JPEG inválida (⚠), áudio fora de .ogg (⚠) e modelos glTF sem collider próprio nem herdado do ancestral (ℹ — passam através; o herói fica fora: character controller próprio). Caminhos resolvem como no runtime: url `/assets/…` contra a asset root; scripts contra `<mundo>/scripts`. Nota: `texture=` num `<Entity>` puro (sem primitiva) é atributo ignorado pelo parser — o audit não o conta.
 - `world`/`scene` aninhados e `<Include>` não-expandido = erro.
 - Números não finitos (`NaN`/`inf`) são rejeitados; includes podem sair da árvore
   de pastas (`..`, symlinks) — CLI local, sem sandbox (decisão consciente).
+
+### Som (SFX + BGM)
+
+- **Registry único** (`src/ambient.rs`): `SfxClip` enum + `SFX_CLIPS_ALL` — 36
+  clips `.ogg` com paths `assets/audio/sfx/…`; `SfxHandles` pré-carrega todos
+  no `PostStartup`. Os clips base (`hit/whoosh/harvest/ui`) são Text2Sound
+  (os stubs `.wav` sintéticos foram removidos). `Hit/Whoosh/EnemyHurt/Footstep
+  /FootstepWater/Coin` levam jitter de pitch ±8 % (anti-repetição).
+- **Gatilhos nativos**: melee/slam/bomba (swing/hit/enemy_hurt/enemy_death em
+  `kill_creature`), dano/morte/parry-guarda do herói (`feedback.rs` →
+  hurt/game_over/shield_block), cura/dash/bomba (`skills.rs`), level-up
+  (`vitals.rs`), quest accept/complete (`quests.rs`), save/load (`save.rs`),
+  loot de vault (`economy.rs`, clip `Loot` = chest_open), salto e passos
+  one-shot (`player.rs`), viagem rápida (`travel.rs`), aggro da FSM com voz
+  por nome — wolf/slime/boss (`ai.rs`) e nas transições dos scripts.
+- **BGM de combate**: `CombatMusicState` (`src/music.rs`) — aggro acende
+  `battle` (ou `boss`) durante `COMBAT_MUSIC_HOLD` = 8 s; o `music_driver`
+  dá-lhe prioridade sobre a zona.
+- **`viber.sound(nome)`** (Luau): registry completo em `luau::SFX_NAME_REGISTRY`
+  — ver `docs/LUA_API.md`. Um clip novo no enum SEM linha no registry falha o
+  teste `test_lua_registry_covers_all_clips`.
+- **Assets**: pool canónica `examples/shared-assets/public/assets/audio/` com
+  manifests `manifests/audio-sfx-*.yaml` (Text2Sound/Stable Audio 3; regenerar
+  com `regen_audio.py --only <id>`). O `scripts/sync_assets.py` espelha os
+  paths de áudio da engine (allowlist `ENGINE_AUDIO`) + os referenciados no
+  XML para o exemplo. Loops de água (`water_lake/water_flow`) também são
+  carregados por path fixo (`setup_water_ambience`).
+- **`analyze` audita o áudio da engine**: os paths acima são verificados no
+  asset root (`audit::engine_audio_files`) — clip ausente = issue (erro em
+  `--strict`).
+
+### Scripts Luau (Fase 2)
+
+`script="caminho.lua"` (atributo universal) liga uma entidade a um chunk em
+`<dir-do-mundo>/scripts/` (`src/luau.rs`; caminhos aceitam subpastas —
+`enemies/wolf.lua`). Hooks definidos pelo script: `on_update(dt)` e
+`on_player_attack(px, pz)` (opcional — aggro-chain: aliados scriptados a
+≤15 m do alvo atingido recebem a posição do atacante). A API `viber.*`
+(perceção, movimento com snap no terreno, IA wander/chase, combate, quests,
+vault, interação, `viber.gesture`/`viber.sound`/`viber.player_hp` para NPC) +
+`viber.ui.*` está documentada em **`docs/LUA_API.md`**.
+
+Pontos-chave: o top-level do chunk corre **1× por path** (globals partilhados
+entre entidades com o mesmo script — estado por entidade em `viber.state()`);
+os setters enfileiram comandos aplicados pós-frame; erros dão warn 1× e a
+engine segue; "LOD de IA" — além do raio de ativação (`activation-radius` no
+spawner, default 45 m) o `on_update` nem corre. **Sem hot-reload** e sem hooks
+`on_add`/`on_remove` (o ciclo de vida é top-level na ativação + `on_update`).
 
 ## ROADMAP
 
 - **Fase 0 (✅):** parse/validate, includes, primitivas, luzes, `OrbitCamera`, `run`/`analyze`.
 - **Fase 1 (terreno ✅):** heightfield chunks + LOD + pads/água/estradas (`src/terrain/`).
-  Falta: glTF (`GltfScene`) + player/movimento; `.ahgt` ainda não decodifica (fallback procedural).
-- **Fase 2:** Luau/mlua (hooks `on_add`/`on_update`/`on_remove` + hot-reload).
-- **Fase 3:** física avian (`RigidBody`/`Collider` — consumir `collision-resolution`) + simple-rpg atualizado em `Viber/examples/simple-rpg/`.
+  `.ahgt` decodifica (header JSON + grid u16 deflate); sem ficheiro → procedural.
+- **Fase 2 (Luau ✅):** runtime mlua sandboxed + API `viber.*`/`viber.ui.*`
+  (`docs/LUA_API.md`), profiler (F3/P) + bridge BRP; port do simple-rpg em
+  10 loops (combate/feedback, quests 21 JSON, economia/vault, UI & menus,
+  travel/A Nota, save/load, skills, mundo vivo, física-fx) com os 38 scripts
+  de `examples/simple-rpg/scripts/`.
+- **Fase 3 (física ✅):** Rapier via `bevy_rapier3d` — colliders/rigidbodies
+  declarativos (`collider`/`rigidbody`), character controller cinemático,
+  knockback + destrutíveis (`src/physics_fx.rs`); consome `collision-resolution`
+  do terreno.
 
-**Nota:** `script="ficheiro.lua"` já é aceite no XML e registado na IR, mas ainda
-**não executa** (chega na Fase 2).
+**Fila aberta (conhecida):** tags `EngineConfig` data-only sem consumidor
+(`NavMesh`, `SpawnGate`, `ProjectileTemplate`, `AdaptiveQuality`,
+`PostFxDebugToggle`); hot-reload de scripts; nametags de HUD (sistema
+comentado — `BISECT` em `main.rs`); instancing GPU para vegetação.

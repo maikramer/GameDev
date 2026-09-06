@@ -85,7 +85,7 @@ Monorepo for game-dev AI tools: text-to-image, text-to-3D, text-to-audio, textur
 | `Motion3D/` | Python | `motion3d` | Text-to-motion (HY-Motion-1.0 Lite/Full) → NPZ @30fps; `apply-rigged` → SkinTokens via Animator3D `hml22`; vramd |
 | `AiGameKitLab/` | Python | `aigamekit-lab` | Debug 3D, benches, profiling |
 | `Materialize/` | Rust | `materialize-cli` | PBR map generation (wgpu compute) |
-| `Viber/` | Rust | `viber` | Native Bevy engine (declarative world XML, Bevy naming; Phases: 0 ✅ XML+spawn, 1 terreno ✅ (Terrain/Pad/Lake/River/Road/RoadNetwork) + glTF pendente, 2 Luau scripts, 3 physics) |
+| `Viber/` | Rust | `viber` | Native Bevy engine (declarative world XML, Bevy naming; Phases: 0 ✅ XML+spawn, 1 terreno ✅ (Terrain/Pad/Lake/River/Road/RoadNetwork), 2 Luau scripts ✅ (API `viber.*` — `Viber/docs/LUA_API.md`), 3 physics ✅ (Rapier); simple-rpg port done in 10 loops) |
 | `Terrain3D/` | Python | `terrain3d` | AI terrain generation via diffusion (terrain-diffusion; vendored; CUDA GPU) |
 | `Rocks3D/` | Python | `rocks3d` | Procedural 3D rock generation (no PyTorch) |
 | `Vramd/` | Python | `modelserver` (CLI `vramd`/`vramd`) | Unified Model Server (vramd) — single-process GPU/VRAM supervisor |
@@ -429,7 +429,9 @@ The world XML follows **Bevy naming** (`translation`, `euler`, `half-size`, `bas
 
 **Terrain (Phase 1 ✅):** declarative heightfield + ground features ported from the VibeGame terrain/water/road plugins — `<Terrain>` (PNG/procedural heightmap, chunked LOD0+ meshes with skirts + frontier normals), `<TerrainPad>`, `<Lake>`, `<River>`, `<Road>`, `<RoadNetwork>` (Way/Segment expansion, bridge profile). Carve order is Pads → Lakes → Rivers → Roads (bridges last); roads skip pad cores and water carve zones; every mutation goes through the brush engine (`Viber/src/terrain/brush.rs`) with owner-journal reverts. Gameplay queries land as resources: `TerrainRuntime::sample/in_water/on_road`, `WaterBody`, `RoadPath` (spawner `avoid-water`/`near-water`/`isPointOnRoad` parity). Demo world: `Viber/worlds/terrain.xml`. Unknown tags are skipped as no-ops with an `analyze` report (`--strict` fails) — so worlds written for VibeGame parse natively and unimplemented tags degrade gracefully.
 
-Roadmap: Phase 0 ✅ (XML + spawn); Phase 1 terrain ✅ (heightfield + features), glTF + player pending; Phase 2 Luau scripting (mlua); Phase 3 physics (`avian`) + `simple-rpg` updated. **VibeGame (TS/browser) remains the browser engine** — Viber is the native track; both share the GLB/KTX2/meshopt assets produced by the `gameassets` pipeline.
+**Scripts + UI (Phases 2 ✅):** `script="caminho.lua"` (universal attr) binds an entity to a sandboxed Luau chunk in `<world>/scripts/` — hooks `on_update(dt)` (+ optional `on_player_attack(px, pz)` for aggro chains); the `viber.*` API (~35 functions: perception, terrain-snapped movement, wander/chase AI, combat, quests, vault, interaction) and `viber.ui.*` (declarative `<UiRoot>`/`<UiStyle>` UI) are documented in **`Viber/docs/LUA_API.md`**. Scripts outside a spawner's `activation-radius` (default 45 m) don't run at all — the AI LOD.
+
+Roadmap: Phases 0–3 ✅ — XML + spawn; terrain (heightfield + features); Luau scripting (mlua sandboxed, `viber.*`/`viber.ui.*` API in `Viber/docs/LUA_API.md`); physics via **Rapier** (`bevy_rapier3d`, declarative `collider`/`rigidbody`) + `simple-rpg` ported (combat, quests, economy, menus, travel, save, skills, living world — 10 loops done, see `docs/findings/VIBER_SIMPLE_RPG_PORT.md`). Open items: `EngineConfig` data-only tags without a runtime consumer, script hot-reload, GPU vegetation instancing. **VibeGame (TS/browser) remains the browser engine** — Viber is the native track; both share the GLB/KTX2/meshopt assets produced by the `gameassets` pipeline.
 
 ## vramd (VRAM Coordination)
 

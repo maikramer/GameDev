@@ -49,11 +49,24 @@ só o agente Sky edita o conteúdo; ver abaixo).
 
    # Consulta (exit 0 = instância a correr de outro agente):
    scripts/instance-lock.sh is-locked
+
+   # Limpeza explícita de um lock órfão/expirado (não toca em locks vivos):
+   scripts/instance-lock.sh reap
    ```
 
-   O lock falha (exit 1) se outro processo vivo o detém; lock órfão (PID
-   morto) é detectado como stale e assumido. Override de caminho:
-   `VIBER_INSTANCE_LOCK=...`.
+   O lock falha (exit 1) se outro processo vivo o detém **e** está dentro do
+   TTL. Recicla-se sozinho em dois casos:
+
+   - **órfão** — o PID dono já morreu;
+   - **expirado** — o lock tem mais de `VIBER_LOCK_TTL` segundos (default
+     **7200**, 2 h). Aqui o `acquire`/`reap` **encerra o processo dono**
+     (SIGTERM → SIGKILL). É a única excepção à regra 1, e existe porque uma
+     janela de teste esquecida aberta bloqueava a máquina indefinidamente e
+     obrigava um humano a intervir.
+
+   Dentro do TTL a regra continua a ser **esperar, nunca matar**. Overrides:
+   `VIBER_INSTANCE_LOCK=<ficheiro>`, `VIBER_LOCK_TTL=<segundos>` (`0` desliga
+   a expiração).
 3. **Builds partilham `target/`** — o cargo serializa com file lock. Se um
    build falhar com `Blocking waiting for file lock` ou erro transitório de
    lock, **reintente** (não limpar `target/`, não mudar de dir de build).
@@ -220,7 +233,7 @@ estava adicionado no `main.rs`** e nenhum `.lua` referenciado existia no disco
    ficheiro; POIs ×7 (toast + XP único); colheita (tree/rock/mushroom);
    interações (well/healer/merchant/anvil/notice-board/campfire/chest/
    crystal-shrine/stone-pillar/watch-guard); townsfolk (wander + face player);
-   building-portal (teleporte; v2 mapeia destino por `viber.name()`);
+   building-portal (teleporte; v2 mapeia destino por `viber.self_name()`);
    ambient-water (no-op reservado). XML: refs `.ts` → `.lua` (0 restantes).
 
 ### Gotchas (para o próximo que tocar)
@@ -317,3 +330,40 @@ arco/projecteis, números de dano, partículas de hit, loot.
 - Validação noturna limitada: a sessão gráfica bloqueada faz o compositor
   fechar as janelas da engine ("No windows are open, exiting") — testes 385
   verdes cobrem a lógica; validação visual pendente de sessão ativa.
+
+## Colisão — diagnóstico e fixes (2026-09-01)
+
+**Sintoma:** portão bloqueia, mas árvores/muros/casas atravessáveis.
+**Causas encontradas (evidência via árvore ECS + logs):**
+1. **Instâncias de spawner nasciam SEM collider nenhum** (só transform+cena):
+   árvores (380+), pedras, props — tudo atravessável. Fix: `template_collider`
+   extraído do `<GameObject collider="…">` no `finish_static_spawner` →
+   `SpawnGroupState::template_collider/collider_handle` (GLB pré-carregado) →
+   `apply_template_collider` insere Box imediato ou `PendingCollider` por
+   instância.
+2. **PendingColliders presos para sempre** (337 → com spawners, 3015): o
+   trimesh espera o glTF; quando ele falha/atrasa ANTES da cena ter Aabbs, o
+   antigo código desistia **silenciosamente sem collider**. Fix:
+   `PendingCollider.age` + `PENDING_TIMEOUT` (4 s) → fallback de AABB
+   (da entidade ou **união dos Aabbs dos filhos da cena**) — toda pendência
+   termina em colisor.
+3. **`.ahgt` declara world-size 8000 vs XML 4000** (warning novo do terrain
+   agent) — TODA a geo-referência fica fora de escala; sinalizado ao agente
+   de Terrain.
+4. Instrumentação restante em `physics.rs` (warns de bake/estado) — útil para
+   o próximo diagnóstico; sem custo relevante.
+**Pendente:** validação final do release bloqueada por `hud.rs` de outro
+agente em edição (fonte `cinzel-700.ttf` ausente + `CommandsWithId`); debug
+compila e 430 testes passavam antes do edit deles.
+
+## Portão/muros atravessáveis — causa raiz (2026-09-01→02)
+
+O VibeGame usa **malhas de colisão dedicadas** (`*_collision.glb`) nos
+trimesh; a migração apontou os **311** trimesh do mundo para o **visual**
+(`_lod0.glb`) — o arco do portão no visual fecha o vão em cima. Fix: os 311
+trimesh agora apontam para `_collision.glb` (todos existiam no espelho; paths
+deduplicados após bug do regex — validar `grep doubled`).
+**Bloqueador atual de validação**: `hud.rs` em edição (agente HUD) gera erro
+de validação wgpu (`ui_material_bind_group`: Sampler invalid) que QUITA a
+engine no boot — mata toda instância inclusive a deles. Assim que assentar,
+testar: caminhar norte pelo portão (deve passar por baixo).
