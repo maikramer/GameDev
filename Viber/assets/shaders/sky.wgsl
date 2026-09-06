@@ -42,7 +42,7 @@ struct SkyUniform {
     params: vec4<f32>,
 };
 
-@group(2) @binding(0) var<storage, read> sky: SkyUniform;
+@group(#{MATERIAL_BIND_GROUP}) @binding(0) var<storage, read> sky: SkyUniform;
 
 // Ganho 1.0 (r7-r8 REVERTIDO): a exposição física da câmara vive no path
 // PBR do StandardMaterial — este material custom NUNCA a recebe, pelo que

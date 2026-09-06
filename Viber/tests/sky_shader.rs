@@ -22,6 +22,12 @@ use naga::{AddressSpace, ScalarKind, ShaderStage, StorageAccess, TypeInner, Vect
 use std::{borrow::Cow, path::Path, sync::mpsc, time::Duration};
 use viber::sky::SkyConfig;
 
+/// O grupo do MATERIAL no bevy 0.19 (material.rs) — o `#{MATERIAL_BIND_GROUP}`
+/// do WGSL é substituído por este valor em runtime. O céu leu ETERNAMENTE o
+/// binding errado quando o grupo estava hardcoded a 2 (céu "congelado" em
+/// lixo que parecia aurora — regressão de 2026-09-06).
+const MATERIAL_BIND_GROUP: u32 = bevy::pbr::MATERIAL_BIND_GROUP_INDEX as u32;
+
 fn dimensions() -> (u32, u32) {
     let width = std::env::var("VIBER_SKY_CAPTURE_WIDTH")
         .map(|s| s.parse::<u32>().expect("capture width integer"))
@@ -54,7 +60,9 @@ fn standalone(source: &str) -> String {
             IMPORTS.iter().find(|(import, _)| *import == trimmed)
                 .unwrap_or_else(|| panic!("unsupported shader directive: {line}; extend the explicit harness contract"))
                 .1.to_owned()
-        } else { line.to_owned() }
+        } else {
+            line.replace("#{MATERIAL_BIND_GROUP}", &MATERIAL_BIND_GROUP.to_string())
+        }
     }).collect::<Vec<_>>().join("\n")
 }
 
@@ -121,7 +129,12 @@ fn storage_binding_and_six_vec4_abi_are_preserved() {
         }
     );
     let binding = sky.binding.as_ref().expect("bound storage");
-    assert_eq!((binding.group, binding.binding), (2, 0));
+    assert_eq!(
+        (binding.group, binding.binding),
+        (MATERIAL_BIND_GROUP, 0),
+        "o storage do céu TEM de viver no grupo do MATERIAL (#{MATERIAL_BIND_GROUP}) — \
+         um grupo hardcoded fica atrás do bevy e lê o binding errado como SkyUniform"
+    );
     let TypeInner::Struct { members, span } = &module.types[sky.ty].inner else {
         panic!("SkyUniform must be a struct")
     };

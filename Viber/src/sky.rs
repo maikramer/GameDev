@@ -384,15 +384,17 @@ fn new_sky_buffer(data: SkyUniform) -> ShaderBuffer {
 /// r4-r6; os frames intermediários ficam com o material anterior, que é
 /// visualmente idêntico dada a dedupe).
 #[allow(clippy::needless_pass_by_value)]
+#[allow(clippy::too_many_arguments)]
 pub fn sky_material_drive(
     time: Res<Time>,
     atmosphere: Res<crate::worldsys::AtmosphereState>,
     clock: Option<Res<crate::worldsys::DayCycleState>>,
     weather: Option<Res<crate::worldsys::WeatherState>>,
-    domes: Query<&MeshMaterial3d<SkyMaterial>, With<SkyDome>>,
+    domes: Query<(Entity, &MeshMaterial3d<SkyMaterial>), With<SkyDome>>,
     mut materials: ResMut<Assets<SkyMaterial>>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
     mut refresh_tick: Local<u32>,
+    mut commands: Commands,
 ) {
     let minute = clock.map(|c| c.minute_of_day).unwrap_or(720.0);
     let (wind, clouds) = weather
@@ -419,23 +421,32 @@ pub fn sky_material_drive(
     if domes.is_empty() {
         return;
     }
-    // CINTO E SUSPENSÓRIOS (r13): a cada frame, `set_data` no buffer atual
-    // (1 `Modified`/frame — o path normal); A CADA 30 frames (~0.5 s),
-    // publicar buffer+handle NOVOS — id novo = evento `Added` = upload
-    // GARANTIDO, recuperando de qualquer tempestade de eventos (boot,
-    // despawns em massa, saves) em ≤0.5 s sem inundar a fila.
+    // CINTO E SUSPENSÓRIOS (r14): a cada frame, `set_data` no buffer atual
+    // (1 `Modified`/frame — o path normal). A CADA 30 frames (~0.5 s), e é
+    // AQUI que o céu vive ou morre: publicar um MATERIAL NOVO (com buffer
+    // novo) e inseri-lo na ENTIDADE do domo. Trocar só o handle dentro do
+    // asset (`material.data = nb`) e esperar pelo `Modified<SkyMaterial>`
+    // provou-se frágil — sob carga os eventos de modificação do asset perdem-
+    // se na fila do render world e o domo fica ETERNAMENTE no 1.º upload
+    // (céu congelado, r7/r8/r13). Componente novo = binding novo = o render
+    // re-extrai tudo no frame seguinte, aconteça o que acontecer à fila.
     let refresh = *refresh_tick == 0;
     *refresh_tick = (*refresh_tick + 1) % 30;
-    let new_buffer = refresh.then(|| buffers.add(new_sky_buffer(data)));
+    let replacement = refresh.then(|| {
+        let material = materials.add(SkyMaterial {
+            data: buffers.add(new_sky_buffer(data)),
+        });
+        MeshMaterial3d::<SkyMaterial>(material)
+    });
 
-    for handle in &domes {
-        if let Some(mut material) = materials.get_mut(&handle.0)
+    for (entity, handle) in domes.iter() {
+        if let Some(material) = materials.get_mut(&handle.0)
             && let Some(mut buffer) = buffers.get_mut(&material.data)
         {
             buffer.set_data(data);
-            if let Some(nb) = &new_buffer {
-                material.data = nb.clone();
-            }
+        }
+        if let Some(mat) = &replacement {
+            commands.entity(entity).insert(mat.clone());
         }
     }
 }

@@ -807,6 +807,16 @@ fn run(path: &Path, bridge_port: Option<u16>) -> Result<()> {
             timed(Group::World, music::music_driver),
             timed(Group::World, worldsys::daycycle_drive),
             timed(Group::World, worldsys::sun_drive),
+            // Scheduler do `<Weather cycle>` (chuva alvo determinística) —
+            // tem de correr ANTES do `atmosphere_drive` (a intensidade
+            // contínua de chuva entra na paleta no mesmo frame; as constraints
+            // do ambient.rs só ordenam se o sistema existir).
+            timed(Group::World, worldsys::weather_drive),
+            // Publica a paleta da hora (AtmosphereState) a partir do sol já
+            // apontado por `sun_drive` — céu, névoa, grading e exposure a
+            // leem. Sem este registo o recurso fica no default de dia para
+            // sempre (céu/névoa congelados, aurora a visualizar-se de dia).
+            timed(Group::World, worldsys::atmosphere_drive),
         ),
     );
     // Tuplo dividido: o Bevy limita tuples de sistemas a 20 elementos e o
