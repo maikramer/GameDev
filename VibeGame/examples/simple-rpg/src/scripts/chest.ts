@@ -43,19 +43,24 @@ export function start(ctx: MonoBehaviourContext): void {
   });
   if (loadStarted) return;
   loadStarted = true;
-  void loadGltfToSceneWithAnimator(ctx.state, MODEL_URL).then((result) => {
-    group = result.group;
-    group.traverse((o) => {
-      const mesh = o as THREE.Mesh;
-      if (!mesh.isMesh) return;
-      const mat = mesh.material as THREE.MeshStandardMaterial;
-      if (mat && 'emissiveIntensity' in mat) {
-        mat.emissive = new THREE.Color(0xffd24a);
-        mat.emissiveIntensity = 0;
-        emissiveMats.push(mat);
-      }
+  void loadGltfToSceneWithAnimator(ctx.state, MODEL_URL)
+    .then((result) => {
+      group = result.group;
+      group.traverse((o) => {
+        const mesh = o as THREE.Mesh;
+        if (!mesh.isMesh) return;
+        const mat = mesh.material as THREE.MeshStandardMaterial;
+        if (mat && 'emissiveIntensity' in mat) {
+          mat.emissive = new THREE.Color(0xffd24a);
+          mat.emissiveIntensity = 0;
+          emissiveMats.push(mat);
+        }
+      });
+    })
+    .catch((err) => {
+      console.warn('[chest] failed to load', MODEL_URL, err);
+      unregisterInteractionTarget(ctx.state, ctx.entity);
     });
-  });
 }
 
 export function update(ctx: MonoBehaviourContext): void {

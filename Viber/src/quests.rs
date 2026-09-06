@@ -609,11 +609,11 @@ fn quest_dialogue_system(
                 (
                     d.lines_progress.clone(),
                     d.lines_complete.clone(),
-                    d.objective.count,
+                    d.objective.clone(),
                     d.title.clone(),
                 )
             });
-            let Some((progress_lines, complete_lines, count, title)) = snapshot else {
+            let Some((progress_lines, complete_lines, objective, title)) = snapshot else {
                 return;
             };
             if log.status(&id, vault.as_deref()) == QuestStatus::Ready {
@@ -659,8 +659,19 @@ fn quest_dialogue_system(
                 }
                 join_lines(&complete_lines)
             } else {
-                let remaining =
-                    count.saturating_sub(log.states.get(&id).map(|a| a.progress).unwrap_or(0));
+                let progress = match objective.kind.as_str() {
+                    "visit" => log
+                        .states
+                        .get(&id)
+                        .map(|a| a.visited.len() as u32)
+                        .unwrap_or(0),
+                    "collect" => vault
+                        .as_deref()
+                        .map(|v| v.count(&objective.target).min(objective.count))
+                        .unwrap_or(0),
+                    _ => log.states.get(&id).map(|a| a.progress).unwrap_or(0),
+                };
+                let remaining = objective.count.saturating_sub(progress);
                 join_lines(&progress_lines).replace("{remaining}", &remaining.to_string())
             }
         }

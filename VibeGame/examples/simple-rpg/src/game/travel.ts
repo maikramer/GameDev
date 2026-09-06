@@ -130,6 +130,8 @@ export function resolveFeetY(
   return getBodyYForFeetAt(state, player, groundY + GROUND_CONTACT_SKIN);
 }
 
+let landingAssist: ReturnType<typeof setInterval> | null = null;
+
 function startLandingAssist(
   state: State,
   player: number,
@@ -137,29 +139,34 @@ function startLandingAssist(
   y: number,
   z: number
 ): void {
+  if (landingAssist !== null) clearInterval(landingAssist);
   let ticks = 0;
   let stableTicks = 0;
   const iv = setInterval(() => {
     const body = getBodyForEntity(state, player);
     if (!body) {
       clearInterval(iv);
+      landingAssist = null;
       return;
     }
     const bodyY = body.translation().y;
     if (y - bodyY <= LANDING_ASSIST_FALL_TOLERANCE) {
       if (++stableTicks >= 2) {
         clearInterval(iv);
+        landingAssist = null;
         return;
       }
     } else {
       stableTicks = 0;
       if (++ticks > LANDING_ASSIST_MAX_TICKS) {
         clearInterval(iv);
+        landingAssist = null;
         return;
       }
       teleportEntity(state, player, x, y, z);
     }
   }, LANDING_ASSIST_TICK_MS);
+  landingAssist = iv;
 }
 
 /** Teleport onto terrain and hold the body until far-chunk colliders exist. */

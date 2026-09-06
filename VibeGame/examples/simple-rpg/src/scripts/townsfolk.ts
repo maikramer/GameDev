@@ -100,30 +100,34 @@ export function start(ctx: MonoBehaviourContext): void {
   const route = pickRoute(ctx.transform.positionX, ctx.transform.positionZ);
   void loadGltfToSceneWithAnimator(ctx.state, route.model, {
     crossfadeDuration: 0.3,
-  }).then((result) => {
-    const animator = result.animator;
-    if (!animator) return;
-    const idle = new NpcIdleAnimator({
-      idle: 'idle',
-      gestures: route.gestures,
+  })
+    .then((result) => {
+      const animator = result.animator;
+      if (!animator) return;
+      const idle = new NpcIdleAnimator({
+        idle: 'idle',
+        gestures: route.gestures,
+      });
+      animator.play('idle');
+      idle.start(animator);
+      result.group.position.set(
+        ctx.transform.positionX,
+        ctx.transform.positionY,
+        ctx.transform.positionZ
+      );
+      walkers.set(ctx.entity, {
+        group: result.group,
+        animator,
+        idle,
+        route,
+        leg: 0,
+        wait: 1 + Math.random() * 3,
+        yaw: 0,
+      });
+    })
+    .catch((err) => {
+      console.warn('[townsfolk] failed to load', route.model, err);
     });
-    animator.play('idle');
-    idle.start(animator);
-    result.group.position.set(
-      ctx.transform.positionX,
-      ctx.transform.positionY,
-      ctx.transform.positionZ
-    );
-    walkers.set(ctx.entity, {
-      group: result.group,
-      animator,
-      idle,
-      route,
-      leg: 0,
-      wait: 1 + Math.random() * 3,
-      yaw: 0,
-    });
-  });
 }
 
 export function update(ctx: MonoBehaviourContext): void {

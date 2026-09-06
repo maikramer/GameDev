@@ -17,6 +17,7 @@ import {
 } from 'aigamekit-vibegame';
 import type { State } from 'aigamekit-vibegame';
 import { playerStats } from './skills';
+import { notifyPlayerHitLanded } from './combat-mechanics';
 
 const FUSE_SECONDS = 1.5;
 const BLAST_RADIUS = 6;
@@ -207,6 +208,7 @@ function explode(state: State, b: Bomb): void {
   const merchantEid = state.getEntityByName('merchant');
   const baseDamage = BLAST_DAMAGE + playerStats.attackBonus;
   const r2 = BLAST_RADIUS * BLAST_RADIUS;
+  let hits = 0;
   for (const e of healthQuery(state.world)) {
     if (e === b.owner || e === merchantEid || isDead(e)) continue;
     const dx = Transform.posX[e] - b.x;
@@ -215,7 +217,9 @@ function explode(state: State, b: Bomb): void {
     if (d2 > r2) continue;
     const falloff = Math.max(0.3, 1 - Math.sqrt(d2) / BLAST_RADIUS);
     damageHealth(e, baseDamage * falloff);
+    hits++;
   }
+  if (hits > 0) notifyPlayerHitLanded(hits);
 }
 
 /** Nearest living enemy to `player` within `maxRange` (XZ). 0 if none. */

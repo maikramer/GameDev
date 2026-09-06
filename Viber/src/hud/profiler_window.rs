@@ -259,12 +259,8 @@ pub fn hud_profiler_window(world: &mut World) {
     };
     let mut bars = world.query::<(&mut Node, &mut BackgroundColor, &GraphBar)>();
     for (mut node, mut color, bar) in bars.iter_mut(world) {
-        let slot = if bar.slot < head {
-            bar.slot + history.len() - head
-        } else {
-            bar.slot - head
-        };
-        let ms = history[slot.min(history.len() - 1)];
+        let slot = (head + bar.slot) % history.len();
+        let ms = history[slot];
         let frac = (ms / 33.3).clamp(0.05, 1.0);
         node.height = Val::Px(4.0 + 40.0 * frac);
         *color = BackgroundColor(if ms <= 16.7 {

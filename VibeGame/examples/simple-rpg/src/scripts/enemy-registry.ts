@@ -12,10 +12,10 @@ let spawnedAny = false;
 
 // Biome regions are the 4 diagonal wedges from <BiomeRegion polygon> in index.html; the predicates mirror those polygons exactly.
 export function biomeAtPosition(x: number, z: number): string | null {
-  if (x <= -Math.abs(z)) return 'frozen-peaks';
+  if (x <= -Math.abs(z)) return 'swamp';
   if (x >= Math.abs(z)) return 'desert';
   if (z >= Math.abs(x)) return 'dark-forest';
-  if (z <= -Math.abs(x)) return 'swamp';
+  if (z <= -Math.abs(x)) return 'frozen-peaks';
   return null;
 }
 

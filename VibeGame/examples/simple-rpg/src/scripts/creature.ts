@@ -315,6 +315,8 @@ interface PresentationState {
   hitClip: string;
   /** Gate: false while dormant (boss waiting), true once activated. */
   activated: boolean;
+  /** Roar/growl SFX already fired once (gate reveal or first aggro). */
+  aggroRoared: boolean;
   /** Intro-roar countdown (holds still, plays roar clip). */
   roarTimer: number;
   /** Frames spent waiting for index.html GLTFLoader child. */
@@ -1008,6 +1010,7 @@ export function createCreatureBehaviours(
       deathTimer: 0,
       hitTimer: 0,
       activated: !cfg.gateUntil,
+      aggroRoared: false,
       roarTimer: 0,
       xmlWaitFrames: preferXml ? 0 : 999,
       sleeping: false,
@@ -1127,6 +1130,7 @@ export function createCreatureBehaviours(
       }
       if (cfg.gateUntil && !cfg.gateUntil()) return;
       s.activated = true;
+      s.aggroRoared = true;
       if (s.group) s.group.visible = true;
       if (cfg.clips.roar) {
         s.roarTimer = 2.5;
@@ -1452,8 +1456,15 @@ export function createCreatureBehaviours(
       applyHeadingToTransform(ctx.state, eid, s.heading);
     }
 
-    if (inCombat) aggroEntities.add(eid);
-    else aggroEntities.delete(eid);
+    if (inCombat) {
+      if (cfg.roarSound && !s.aggroRoared) {
+        s.aggroRoared = true;
+        playSoundAt(cfg.roarSound, x, visualY, z, { originEid: eid });
+      }
+      aggroEntities.add(eid);
+    } else {
+      aggroEntities.delete(eid);
+    }
 
     // Clip selection: hit-reaction takes priority (brief stagger).
     // Then AI mode picks the locomotion/combat clip.

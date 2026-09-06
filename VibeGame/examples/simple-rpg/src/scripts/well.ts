@@ -13,7 +13,8 @@ import { findPlayer } from '../game/player-query.ts';
 import { showToast } from '../../../shared/src/ui';
 import { WELL_COOLDOWN, WELL_HEAL } from '../game/city-amenities.ts';
 
-const RANGE_SQ = 3.6 * 3.6;
+const RANGE = 3.6;
+const RANGE_SQ = RANGE * RANGE;
 
 let readyAt = 0;
 let fPressed = false;
@@ -23,6 +24,7 @@ export function start(ctx: MonoBehaviourContext): void {
   registerInteractionTarget(ctx.state, ctx.entity, {
     label: 'Beber',
     key: 'F',
+    range: RANGE,
   });
 }
 
@@ -43,6 +45,7 @@ export function update(ctx: MonoBehaviourContext): void {
   registerInteractionTarget(ctx.state, eid, {
     label: wait > 0 ? `Beber (${wait}s)` : 'Beber',
     key: 'F',
+    range: RANGE,
   });
 
   const f = isKeyDown('KeyF');

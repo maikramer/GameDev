@@ -276,6 +276,7 @@ export function installGuardModifier(state: State): void {
   uninstallModifier?.();
   uninstallModifier = registerDamageModifier((eid, amount, source) => {
     if (!blocking || eid !== playerEidOf(state)) return amount;
+    if (source <= 0) return amount;
     // Facing (XZ) vs the direction the blow comes from — a guard doesn't
     // cover your back.
     const px = Transform.posX[eid];
@@ -427,20 +428,20 @@ export function updateCombatMechanics(
   }
 
   // Guard polling (engine input so it respects pause / the input map).
+  const guardDown = isKeyDown(BLOCK_KEY);
   if (!isGamePaused() && player > 0 && !isDead(player)) {
-    const down = isKeyDown(BLOCK_KEY);
-    if (down && !blockHeld) {
+    if (guardDown && !blockHeld) {
       blocking = true;
       blockStartTime = time;
       playerStats.blocking = true;
       if (guardEl) guardEl.style.opacity = '1';
-    } else if (!down && blockHeld) {
+    } else if (!guardDown && blockHeld) {
       stopBlocking();
     }
-    blockHeld = down;
   } else if (blocking) {
     stopBlocking();
   }
+  blockHeld = guardDown;
 
   void state;
 }
