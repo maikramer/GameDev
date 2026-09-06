@@ -565,11 +565,23 @@ impl super::mesh::HeightField for BrushGrid {
         let texel = self.texel();
         let half = self.world_size * 0.5;
         // Texel index range covering the world AABB (same index mapping as
-        // `apply`, upper bound clamped before the +1 so huge AABBs saturate).
+        // `apply`, upper bound clamped to the grid extent BEFORE the `+1` —
+        // pathological AABBs (±inf, huge authored coords) saturate the
+        // float→usize cast and the increment would overflow).
         let x0 = ((min_x + half) / texel).floor().max(0.0) as usize;
         let z0 = ((min_z + half) / texel).floor().max(0.0) as usize;
-        let x1 = ((((max_x + half) / texel).floor().max(0.0) as usize) + 1).min(self.width);
-        let z1 = ((((max_z + half) / texel).floor().max(0.0) as usize) + 1).min(self.depth);
+        let x1 = ((((max_x + half) / texel)
+            .floor()
+            .max(0.0)
+            .min(self.width as f32)) as usize
+            + 1)
+        .min(self.width);
+        let z1 = ((((max_z + half) / texel)
+            .floor()
+            .max(0.0)
+            .min(self.depth as f32)) as usize
+            + 1)
+        .min(self.depth);
         if x0 >= x1 || z0 >= z1 {
             return None;
         }

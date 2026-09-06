@@ -19,11 +19,11 @@
 //! splat + exclusão de relva/spawners na faixa da parede). Puro e
 //! determinístico: toda a sondagem ao grid acontece aqui, uma vez.
 
-use bevy::math::{Vec2, Vec3};
+use bevy::math::Vec2;
 
-use super::cliff::CliffBand;
 use super::super::cliffs::{CliffProfile, hash01};
 use super::super::mesh::HeightField;
+use super::cliff::CliffBand;
 use crate::terrain::water::{BankStyle, LakeSpec, RiverSpec, WaterBody};
 
 /// Seed determinística para as bandas, derivada do ANCORAGEM do corpo
@@ -61,6 +61,21 @@ pub fn river_banks(
         BankStyle::Overhang => CliffProfile::Overhang,
         _ => CliffProfile::Vertical,
     };
+    // As larguras do registry são EFETIVAS (linha de água — o carve guarda
+    // `half · reach`, ver `WaterBody::half_width`); a parede e a sonda do
+    // topo vivem no espaço de DESIGN (o assento carvado vai até à
+    // meia-largura de design + `bank_width`), pelo que a crista volta à
+    // largura de design — mundos voxel existentes mantêm a parede onde
+    // sempre esteve.
+    let wl_reach =
+        super::super::water::waterline_reach(spec.depth, spec.water_offset).clamp(0.4, 1.0);
+    let design_half = |i: usize| -> f32 {
+        if body.half_width.is_empty() {
+            body.water_width * 0.5
+        } else {
+            body.half_width_at(i) / wl_reach
+        }
+    };
     let mut bands = Vec::with_capacity(2);
     for side in [-1.0f32, 1.0f32] {
         let mut stations = Vec::with_capacity(n);
@@ -84,7 +99,7 @@ pub fn river_banks(
             // Normal para FORA do canal; a face pende para DENTRO (o rio é
             // o lado baixo da banda).
             let outward = Vec2::new(-dir.y, dir.x) * side;
-            let half = body.half_width_at(i);
+            let half = design_half(i);
             let crest = *st + outward * (half + BENCH);
             stations.push(crest);
             // Topo: o banco natural além da crista (o carve voxel preservou-
@@ -154,8 +169,7 @@ pub fn lake_shore_band(
         let theta = k as f32 / segments as f32 * std::f32::consts::TAU;
         // A crista fica FORA da lâmina (a parede sobe a partir dela); a
         // sonda do topo, mais para fora ainda — o banco natural.
-        let waterline = super::super::water::lake_shape_radius(spec.radius, theta, phases)
-            * reach;
+        let waterline = super::super::water::lake_shape_radius(spec.radius, theta, phases) * reach;
         let crest_r = waterline + BENCH;
         let crest = spec.at + Vec2::new(theta.cos(), theta.sin()) * crest_r;
         let probe = spec.at + Vec2::new(theta.cos(), theta.sin()) * (crest_r + TOP_PROBE);
@@ -166,9 +180,7 @@ pub fn lake_shore_band(
             acc += crest.distance(prev);
         }
         arc.push(acc);
-        width.push(
-            (base_width * (1.0 + 0.12 * (acc * 0.18 + phase).sin())).max(texel * 1.5),
-        );
+        width.push((base_width * (1.0 + 0.12 * (acc * 0.18 + phase).sin())).max(texel * 1.5));
         // O lado baixo é o lago — normal APONTA PARA O CENTRO.
         drop_normal.push(Vec2::new(-theta.cos(), -theta.sin()));
         toe_ground.push(body.water_y - TOE_SUBMERGE);
@@ -212,7 +224,15 @@ pub fn spring_band(
         return None;
     }
     let perp = Vec2::new(-downstream.y, downstream.x);
-    let radius = body.half_width_at(0) + 1.8;
+    // Raio em espaço de DESIGN (ver nota em `river_banks` — as larguras do
+    // registry são efetivas, da linha de água).
+    let wl_reach =
+        super::super::water::waterline_reach(spec.depth, spec.water_offset).clamp(0.4, 1.0);
+    let radius = if body.half_width.is_empty() {
+        body.water_width * 0.5
+    } else {
+        body.half_width_at(0) / wl_reach
+    } + 1.8;
     // Meia-abertura (rad) voltada a JUSANTE: a rocha cobre o arco de
     // montante; a boca de 90° fica virada para onde o rio corre.
     let opening = 45.0f32.to_radians();
@@ -230,8 +250,8 @@ pub fn spring_band(
     for k in 0..=segments {
         // α: 0 = montante (−downstream), π = jusante. Ignora o arco central
         // da abertura (|α − π| < opening).
-        let alpha = opening + (std::f32::consts::TAU - 2.0 * opening)
-            * (k as f32 / segments as f32);
+        let alpha =
+            opening + (std::f32::consts::TAU - 2.0 * opening) * (k as f32 / segments as f32);
         let radial = -downstream * alpha.cos() + perp * alpha.sin();
         let crest = center + radial * radius;
         stations.push(crest);
@@ -269,8 +289,8 @@ pub fn spring_band(
 mod tests {
     use super::*;
     use crate::terrain::brush::BrushGrid;
-    use crate::terrain::heightmap::HeightMapU16;
-    use crate::terrain::water::{carve_lake, carve_river, LakeSpec};
+    use crate::terrain::water::{LakeSpec, carve_lake, carve_river};
+    use bevy::math::Vec3;
 
     fn flat_grid() -> BrushGrid {
         let mut grid = BrushGrid::new(vec![0; 96 * 96], 96, 96, 96.0, 50.0, 0.0).expect("grid");
@@ -302,9 +322,13 @@ mod tests {
             for (i, st) in band.stations.iter().enumerate() {
                 // A crista fica fora da água; o pé abaixo da lâmina.
                 assert!(
-                    st.distance(*body.stations.iter().min_by(|a, b| {
-                        a.distance(*st).total_cmp(&b.distance(*st))
-                    }).expect("stations")) > 0.1,
+                    st.distance(
+                        *body
+                            .stations
+                            .iter()
+                            .min_by(|a, b| { a.distance(*st).total_cmp(&b.distance(*st)) })
+                            .expect("stations")
+                    ) > 0.1,
                     "crest off the centerline"
                 );
                 assert!(
@@ -400,7 +424,11 @@ mod tests {
         // (o heightfield natural teria aqui sólido até à borda do canal;
         // o perfil Overhang deslocou o pé da parede para dentro).
         let inward = -outward;
-        let under = Vec3::new(crest.x + inward.x * 1.6, bot + 0.2, crest.y + inward.y * 1.6);
+        let under = Vec3::new(
+            crest.x + inward.x * 1.6,
+            bot + 0.2,
+            crest.y + inward.y * 1.6,
+        );
         assert!(
             field.density(&grid, under) >= 0.0,
             "undercut must carve air: density={}",
@@ -408,7 +436,11 @@ mod tests {
         );
         // O corpo da parede (fora da crista, a meio da face): SÓLIDO —
         // a rocha está de pé sobre o rio.
-        let wall = Vec3::new(crest.x + outward.x * 0.4, (top + bot) * 0.5, crest.y + outward.y * 0.4);
+        let wall = Vec3::new(
+            crest.x + outward.x * 0.4,
+            (top + bot) * 0.5,
+            crest.y + outward.y * 0.4,
+        );
         assert!(
             field.density(&grid, wall) < 0.0,
             "wall body stays solid: density={}",

@@ -41,6 +41,7 @@ use super::splat::{
 use super::voxel::{Span, VoxelField};
 use super::water::{WaterBody, lake_water_mesh, river_water_mesh};
 use super::water_material::{WaterExtension, WaterMaterial};
+use crate::profiler::{Group, timed};
 use crate::recipes::spawn::PendingTerrain;
 use crate::textures::WorldTiledTextures;
 
@@ -388,10 +389,10 @@ impl bevy::app::Plugin for TerrainFeaturesPlugin {
             .add_systems(
                 bevy::app::Update,
                 (
-                    drop_failed_terrain_textures,
+                    timed(Group::Terrain, drop_failed_terrain_textures),
                     // Sem isto o chão do splat ficava com o albedo de dia às
                     // 23:00 (a função existia e nunca corria).
-                    super::layer_material::terrain_daynight_tint,
+                    timed(Group::Terrain, super::layer_material::terrain_daynight_tint),
                 ),
             );
     }
@@ -485,11 +486,6 @@ pub fn bootstrap(world: &mut World) {
     // into terraced cliff bands, but ONLY inside accepted cliff regions: a
     // region-filtered pre-mask gates the pass, and the mask is rebuilt over
     // the terraced field afterwards for every consumer.
-    let scan_angle = if spec.sharpen_angle.is_finite() && spec.sharpen_angle > 0.0 {
-        spec.sharpen_angle
-    } else {
-        crate::terrain::spec::DEFAULT_SHARPEN_ANGLE
-    };
     // The sharpen pass only adds steps INSIDE this mask's core, so the
     // pre-sharpen mask stays valid as the final consumer mask: rebuilding
     // over the terraced field would fragment into 5-texel riser slivers
@@ -537,7 +533,10 @@ pub fn bootstrap(world: &mut World) {
             (false, i) if i < pending.features.rivers.len() => {
                 let river = &pending.features.rivers[i];
                 bank_bands.extend(super::voxel::riverbank::river_banks(
-                    river, body, &grid, grid.texel(),
+                    river,
+                    body,
+                    &grid,
+                    grid.texel(),
                 ));
                 // Nascente: ferradura de rocha na estação 0, boca a jusante.
                 if river.spring
@@ -563,6 +562,15 @@ pub fn bootstrap(world: &mut World) {
         );
         if changed > 0 {
             info!("sharpen terraced {changed} texels into cliff bands");
+            // The pass rewrote the ground the bands resolved their walls
+            // against — re-probe the heights so the voxel solids sit on the
+            // terraced field the meshes and gameplay actually read (a foot
+            // left on the pre-sharpen ramp floated or buried). Stations,
+            // widths and columns are height-independent and stay; the mask
+            // above keeps its pre-sharpen shape on purpose.
+            for (k, band) in cliff_bands.iter_mut().enumerate() {
+                band.probe_heights(&pending.features.cliffs[cliff_band_owner[k]], &grid, texel);
+            }
         }
     }
 
@@ -973,7 +981,12 @@ fn spawn_chunk_materials(
     // texturas trocadas.
     let mut loaded: Vec<(usize, Handle<Image>)> = Vec::new();
     let mut first = None::<Handle<Image>>;
-    for (slot, entry) in spec.layers.iter().enumerate().take(super::splat::LAYER_COUNT) {
+    for (slot, entry) in spec
+        .layers
+        .iter()
+        .enumerate()
+        .take(super::splat::LAYER_COUNT)
+    {
         if entry.is_empty() {
             continue;
         }
@@ -1200,14 +1213,15 @@ fn spawn_water(
             };
             let mut mist_at = Vec::new();
             for &lip in &body.cascades {
-                if let (Some(st), Some(&y)) = (
-                    body.stations.get(lip + 1),
-                    body.surface_y.get(lip + 1),
-                ) {
+                if let (Some(st), Some(&y)) =
+                    (body.stations.get(lip + 1), body.surface_y.get(lip + 1))
+                {
                     mist_at.push((*st, y));
                 }
             }
-            if river.spring && let Some(st) = body.stations.first() {
+            if river.spring
+                && let Some(st) = body.stations.first()
+            {
                 mist_at.push((*st, body.surface_y.first().copied().unwrap_or(body.water_y)));
             }
             for (p, y) in mist_at {
