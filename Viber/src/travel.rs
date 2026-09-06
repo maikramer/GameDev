@@ -208,6 +208,10 @@ impl Plugin for TravelPlugin {
             .init_resource::<EnemyRegistry>()
             .init_resource::<TravelMenuState>()
             .init_resource::<TravelFade>()
+            // O painel de viagem espelha-se em `MenusOpen.travel` (R2-G2);
+            // nasce aqui também para apps mínimas (idempotente com o
+            // MenusPlugin — mesmo padrão de Skills/Combat).
+            .init_resource::<crate::menus::MenusOpen>()
             // Idempotente com o Ambient/Combat (apps mínimas auto-suficientes).
             .add_message::<crate::ambient::SfxEvent>()
             .add_message::<TravelPing>()

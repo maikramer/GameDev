@@ -468,14 +468,18 @@ pub fn bootstrap(world: &mut World) {
     // mask so the mask can take their footprint exactly instead of hunting
     // for it. Every terrain probe happens here, before a single mod exists —
     // the same determinism rule the carve kept by sampling before it opened
-    // its stroke.
+    // its stroke. (If the sharpen pass below rewrites the ground, the bands'
+    // HEIGHTS are re-probed against the terraced field before any mod is
+    // built; footprints stay as resolved.)
     let texel = grid.texel();
-    let cliff_bands: Vec<super::voxel::CliffBand> = pending
-        .features
-        .cliffs
-        .iter()
-        .filter_map(|spec_cliff| super::voxel::CliffBand::build(spec_cliff, &grid, texel))
-        .collect();
+    let mut cliff_bands: Vec<super::voxel::CliffBand> = Vec::new();
+    let mut cliff_band_owner: Vec<usize> = Vec::new();
+    for (i, spec_cliff) in pending.features.cliffs.iter().enumerate() {
+        if let Some(band) = super::voxel::CliffBand::build(spec_cliff, &grid, texel) {
+            cliff_band_owner.push(i);
+            cliff_bands.push(band);
+        }
+    }
 
     // 2.5 Opt-in sharpen — rewrites smooth steep ramps of the FINAL field
     // into terraced cliff bands, but ONLY inside accepted cliff regions: a

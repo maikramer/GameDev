@@ -507,18 +507,39 @@ pub fn carve_lake(grid: &mut BrushGrid, spec: &LakeSpec, index: usize) -> Option
     let surface = water_y + spec.water_offset;
     let feather_base = min_effective(FEATHER_WIDTH, texel);
     let style = spec.bank;
-    let shore: Vec<f32> = (0..RIM_RAYS)
-        .map(|i| {
-            let theta = i as f32 / RIM_RAYS as f32 * std::f32::consts::TAU;
-            let r = lake_shape_radius(spec.radius, theta, phases) * CARVE_MARGIN;
-            let p = spec.at + Vec2::new(theta.cos(), theta.sin()) * r;
-            let cut = (grid.sample(p.x, p.y) - surface).max(0.0);
-            style.band(feather_base, cut)
-        })
-        .collect();
+    // Estilos VOXEL (gorge/overhang): espelho do rio — o heightfield carva
+    // SÓ a taça até à LINHA DE ÁGUA real do perfil (a mesma métrica de
+    // `voxel::riverbank::lake_shore_band` e do espelho) e NÃO esculpe a
+    // rampa da margem: o sólido natural fica de pé e é o mod voxel que
+    // corta a parede até abaixo da lâmina. Carvar a peso 1 até
+    // contorno·CARVE_MARGIN colapsava a parede (a sonda do topo do banco
+    // lia dentro da taça → margem submersa) e pintava pedra da banda no
+    // LEITO (`add_authored_bands`).
+    let voxel_waterline = if style.is_voxel() {
+        Some((waterline_reach(spec.depth, spec.water_offset) * CARVE_MARGIN).clamp(0.5, 1.6))
+    } else {
+        None
+    };
+    let shore: Vec<f32> = if voxel_waterline.is_some() {
+        Vec::new()
+    } else {
+        (0..RIM_RAYS)
+            .map(|i| {
+                let theta = i as f32 / RIM_RAYS as f32 * std::f32::consts::TAU;
+                let r = lake_shape_radius(spec.radius, theta, phases) * CARVE_MARGIN;
+                let p = spec.at + Vec2::new(theta.cos(), theta.sin()) * r;
+                let cut = (grid.sample(p.x, p.y) - surface).max(0.0);
+                style.band(feather_base, cut)
+            })
+            .collect()
+    };
     let shore_max = shore.iter().copied().fold(feather_base, f32::max);
     // Shore width at an arbitrary angle: linear blend of the two rim rays.
+    // (No caminho voxel a banda não existe — nunca é chamado.)
     let shore_at = move |theta: f32| -> f32 {
+        if shore.is_empty() {
+            return 0.0;
+        }
         let tau = std::f32::consts::TAU;
         let f = (theta.rem_euclid(tau) / tau) * RIM_RAYS as f32;
         let i = (f.floor() as usize) % RIM_RAYS;
@@ -532,7 +553,13 @@ pub fn carve_lake(grid: &mut BrushGrid, spec: &LakeSpec, index: usize) -> Option
     let mut weight = |p: Vec2| {
         let d = p.distance(spec.at);
         let theta = (p.y - spec.at.y).atan2(p.x - spec.at.x);
-        let r = lake_shape_radius(spec.radius, theta, phases) * CARVE_MARGIN;
+        let contour = lake_shape_radius(spec.radius, theta, phases);
+        if let Some(reach) = voxel_waterline {
+            // Parede voxel: peso 1 até à linha de água, 0 para lá — sem
+            // rampa (o mod voxel trata da margem).
+            return if d < contour * reach { 1.0 } else { 0.0 };
+        }
+        let r = contour * CARVE_MARGIN;
         if d < r {
             return 1.0;
         }

@@ -1337,14 +1337,13 @@ fn apply_declaration(props: &mut StyleProps, name: &str, value: &str) -> bool {
         }
         "row-gap" => assign(&mut props.row_gap, parse_measure_in(value, name)),
         "column-gap" => assign(&mut props.column_gap, parse_measure_in(value, name)),
-        "aspect" | "aspect-ratio" => {
-            assign(&mut props.aspect_ratio, parse_number_in(value, name))
-        }
+        "aspect" | "aspect-ratio" => assign(&mut props.aspect_ratio, parse_number_in(value, name)),
         "overflow" => props.overflow_clip = Some(value == "clip" || value == "hidden"),
         // grid
-        "grid-template-columns" | "grid-cols" => {
-            assign(&mut props.grid_template_columns, parse_tracks_in(value, name))
-        }
+        "grid-template-columns" | "grid-cols" => assign(
+            &mut props.grid_template_columns,
+            parse_tracks_in(value, name),
+        ),
         "grid-template-rows" | "grid-rows" => {
             assign(&mut props.grid_template_rows, parse_tracks_in(value, name))
         }

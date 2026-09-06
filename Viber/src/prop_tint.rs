@@ -138,4 +138,26 @@ mod tests {
         let night = day_tint(0.0);
         assert!(night.iter().all(|c| *c < 0.5), "{night:?}");
     }
+
+    /// R2-G8: o tint preserva o alpha ATUAL do material — o fade de
+    /// cadáveres desce o alpha e a reescrita com alpha 1 o desfazia (o
+    /// corpo "acendia" de novo a cada tick do day/night, throttle 0,25 s).
+    #[test]
+    fn tinted_base_color_preserves_current_alpha() {
+        let original = LinearRgba::rgb(0.8, 0.4, 0.2);
+        let night = day_tint(0.0);
+        // Cadáver a meio do fade (alpha 0.35): o tint de noite mantém o 0.35.
+        let tinted = tinted_base_color(original, night, 0.35);
+        let linear = tinted.to_linear();
+        assert!((linear.alpha - 0.35).abs() < 1e-5, "alpha {:#?}", linear.alpha);
+        // RGB multiplicado pelo tint sobre o ORIGINAL (não compõe).
+        assert!((linear.red - original.red * night[0]).abs() < 1e-5);
+        assert!((linear.green - original.green * night[1]).abs() < 1e-5);
+        assert!((linear.blue - original.blue * night[2]).abs() < 1e-5);
+        // Dia (tint identidade): cor volta ao original, alpha corrente fica.
+        let noon = day_tint(1.0);
+        let back = tinted_base_color(original, noon, 0.9).to_linear();
+        assert!((back.red - original.red).abs() < 1e-5);
+        assert!((back.alpha - 0.9).abs() < 1e-5);
+    }
 }
