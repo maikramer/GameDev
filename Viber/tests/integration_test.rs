@@ -179,9 +179,11 @@ fn test_analyze_terrain_world_reports_all_features() {
         stdout.contains("terrain: heightfield 1"),
         "stdout: {stdout}"
     );
-    assert!(stdout.contains("ground features 5"), "stdout: {stdout}");
+    assert!(stdout.contains("ground features 8"), "stdout: {stdout}");
     assert!(
-        stdout.contains("pads 1, lakes 1, rivers 1, roads 1 + networks 1"),
+        stdout.contains(
+            "pads 1, lakes 1, rivers 1, cliffs 3, caves 0, arches 0, roads 1 + networks 1"
+        ),
         "stdout: {stdout}"
     );
     // The feature tags are implemented — nothing terrain-related is skipped.

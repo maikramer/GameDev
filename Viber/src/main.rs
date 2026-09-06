@@ -986,7 +986,11 @@ fn run_session(command: SessionCommand) -> Result<std::process::ExitCode> {
 /// spawna `viber run <mundo> --no-cargo --bridge <porta>` destacado com log
 /// em ficheiro e espera o bridge responder. No fim liberta o lease.
 /// Primeira porta livre a partir de `start`: nem o SO a tem ocupada, nem
-/// outra sessão a reclamou no seu `engine.json`.
+/// outra sessão a reclamou no seu `engine.json`. A varrida começa num
+/// offset aleatório do segundo: dois `session up` em corrida escolheriam
+/// ambos a MESMA primeira porta livre (a sonda bind solta-se antes de
+/// qualquer engine nascer) e o perdedor ficava a falar com o mundo do
+/// vencedor — com offset aleatório a colisão cai de 1 para 1/64.
 ///
 /// Sem isto, `viber session up` usava sempre 15702 e a segunda sessão (outro
 /// mundo) subia com o bridge morto — o cliente falava com a engine errada.
@@ -997,7 +1001,13 @@ fn free_bridge_port(start: u16) -> Result<u16> {
         .filter(|engine| probe_engine(engine.port))
         .map(|engine| engine.port)
         .collect();
-    for port in start..start.saturating_add(64) {
+    let span = 64u16;
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() as usize)
+        .unwrap_or(0);
+    for i in 0..span {
+        let port = start + ((nanos + i as usize) % span as usize) as u16;
         if taken.contains(&port) {
             continue;
         }
@@ -1007,7 +1017,7 @@ fn free_bridge_port(start: u16) -> Result<u16> {
     }
     bail!(
         "nenhuma porta livre entre {start} e {}",
-        start.saturating_add(64)
+        start.saturating_add(span - 1)
     )
 }
 

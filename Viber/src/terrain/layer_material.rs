@@ -113,6 +113,22 @@ impl bevy::pbr::Material for TerrainChunkMaterial {
     fn fragment_shader() -> ShaderRef {
         "shaders/terrain_chunk.wgsl".into()
     }
+
+    // Voxel wall shells carry sub-voxel thin sheets (a carved void passing a
+    // few centimetres under the natural terrain) whose averaged vertices
+    // yield a handful of inward-wound triangles along the sheet line; with
+    // backface culling each reads as a see-through hole in the wall. Draw
+    // both faces: the mis-wound slivers become rock-textured patches with
+    // imperfect lighting instead of holes.
+    fn specialize(
+        _pipeline: &bevy::pbr::MaterialPipeline,
+        descriptor: &mut bevy::render::render_resource::RenderPipelineDescriptor,
+        _layout: &bevy::render::mesh::MeshVertexBufferLayoutRef,
+        _key: bevy::pbr::MaterialPipelineKey<Self>,
+    ) -> Result<(), bevy::render::render_resource::SpecializedMeshPipelineError> {
+        descriptor.primitive.cull_mode = None;
+        Ok(())
+    }
 }
 
 /// Per-chunk style + placement table (uniform binding 50). `tiles[i].x` is

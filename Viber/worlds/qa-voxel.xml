@@ -48,8 +48,8 @@
        verga — abrigo com rocha por cima da cabeça. -->
   <Cliff name="beiral" profile="overhang" path="-85 -45 -80 -25" width="8" />
 
-  <!-- Câmara apontada ao portal para QA visual (mudar o target para
-       "colina" para a vista geral). -->
-  <Entity name="mirante" translation="66 24 -14" />
-  <OrbitCamera target="mirante" distance="26" height="7" pitch="14" />
+  <!-- Câmara QA apontada à boca oeste da mina (mudar o target para
+       "colina" dá a vista geral do mundo). -->
+  <Entity name="mirante" translation="-78 26 6" />
+  <OrbitCamera target="mirante" distance="28" height="5" pitch="12" />
 </world>
