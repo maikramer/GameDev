@@ -10,6 +10,7 @@ import {
   getItemQty,
   healHealth,
   Health,
+  isDead,
   isKeyDown,
   playSound,
   removeItem,
@@ -144,7 +145,10 @@ export function useConsumable(
 export function updateConsumables(state: State, player: number): void {
   buildHotbar();
 
-  const active = !isGamePaused() && player > 0;
+  // Dead is dead: the respawn window owns the hero, and a potion chugged at
+  // 0 HP would self-revive (healHealth clears the death flag) — same gate as
+  // the melee/ability/skill inputs.
+  const active = !isGamePaused() && player > 0 && !isDead(player);
   for (const s of SLOTS) {
     if (s.id === 'bomb') continue; // [B] handled by BombSystem
     const down = isKeyDown(s.keyCode);
