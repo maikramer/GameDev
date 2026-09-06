@@ -333,6 +333,19 @@ fn audit_glb(path: &Path, context: &str, issues: &mut Vec<AuditIssue>) {
         });
         return;
     }
+    // Cabeçalho truncado entre a magia e o chunk JSON (12–19 bytes): ler o
+    // chunk len ou fatiar [20..end] era index out of bounds — o analyze
+    // panicava em vez de falhar limpo.
+    if bytes.len() < 20 {
+        issues.push(AuditIssue {
+            severity: Severity::Warning,
+            message: format!(
+                "glb inválido: {} truncado antes do chunk JSON — {context}",
+                path.display()
+            ),
+        });
+        return;
+    }
     let json_len = u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]) as usize;
     let end = (20 + json_len).min(bytes.len());
     let Ok(json) = std::str::from_utf8(&bytes[20..end]) else {
