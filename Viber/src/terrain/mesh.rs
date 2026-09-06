@@ -19,10 +19,13 @@
 //!   there is no lighting seam between chunks or LOD levels.
 //! * UVs are world-space (`world / tile`), keeping texel density constant
 //!   across chunks and LODs.
-//! * Skirt walls duplicate the 4 border rows/columns and drop them to the
-//!   NEIGHBORING surface (`min` of two outside samples − 6 cm, capped), so on
-//!   flat borders the skirt is a 6 cm sliver and over road trenches it floors
-//!   out naturally — no fixed-depth hanging curtain. Normals point outward.
+//! * Skirt walls duplicate the 4 border rows/columns and drop below the
+//!   worst deviation of the field across the border SPAN each vertex
+//!   represents (sweep along the edge tangent at LOD-0 step plus the outward
+//!   probes, − 6 cm, capped): flat borders stay a 6 cm sliver, road trenches
+//!   floor out, and the T-junction crack that opens ALONG the border — the
+//!   fine polyline dipping between two coarse vertices — seals too. Normals
+//!   point outward.
 //! * Collider meshes ([`build_chunk_collider`]) use **absolute world**
 //!   positions (unlike render meshes) and are consumed by the Phase 3 physics
 //!   integration (avian).
@@ -147,6 +150,14 @@ pub struct ChunkMeshParams {
     /// resolution. Must be constant per LOD level across the whole terrain so
     /// chunk borders line up.
     pub lod_step: usize,
+    /// Grid step of the terrain's finest (LOD 0) mesh, in meters — the
+    /// spacing of the finest neighbor a chunk border can ever meet. The
+    /// skirt probe sweeps the border span at this step so T-junction cracks
+    /// narrower than this chunk's own [`ChunkMeshParams::lod_step`] still
+    /// seal. Keep it constant across the terrain (the runtime/plugin
+    /// `lod0_step`). `0` degrades the sweep to `lod_step / 4`, the
+    /// resolution the sample cap allows anyway.
+    pub lod0_step: usize,
     /// Vertical skirt depth in meters (0 disables skirts).
     pub skirt_depth: f32,
     /// World-space epsilon (meters) for frontier normals. Must be **identical
@@ -326,7 +337,15 @@ pub fn build_chunk_mesh(
             // cut); the neighboring column picks the other extreme and the
             // span survives. Gated by the mask: only real cliff regions own
             // the silhouette — spurious bumps keep their smooth shape.
-            if params.cliff_angle > 0.0 && params.lod_step > 1 && cliff_f > 0.5 {
+            //
+            // FIX borda: o snap é um ajuste visual POR CHUNK e o vértice de
+            // borda (o mesmo critério das saias: 1.ª/última linha e coluna)
+            // é PARTILHADO com o vizinho — o vizinho fino (isento do snap
+            // pelo gate `lod_step > 1`) fica na altura exata do campo, e um
+            // salto de ~9 m aqui rasga a costura em silhueta dupla. Fica
+            // restrito ao interior; a crista mantém-se lá.
+            let is_border = x == segments || z == segments;
+            if params.cliff_angle > 0.0 && params.lod_step > 1 && cliff_f > 0.5 && !is_border {
                 let threshold = params.cliff_angle.to_radians().tan() * step as f32;
                 if let Some((rmin, rmax)) = field.range_over(
                     world_x,
@@ -375,13 +394,15 @@ pub fn build_chunk_mesh(
     }
 
     // Skirts: duplicate each border row/column and drop a wall whose bottom
-    // ADAPTS to the neighboring surface: `min(própria, 2 amostras fora da
-    // borda) − 6 cm` (cap 6 m). Em bordas planas a amostra externa ≈ a
+    // ADAPTA-SE à superfície vizinha AO LONGO do vão que cada vértice
+    // representa: `min(varrimento do vão na tangente ± passo, 2·passo fora
+    // da borda) − 6 cm` (cap `skirt_depth`). Em bordas planas tudo ≈ a
     // própria altura → o skirt vira uma fresta de 6 cm (invisível); sobre
-    // valas de estrada o desce até o piso e vira continuação do chão — a
-    // cortina de profundidade fixa (`skirt_depth`) lia como parede artificial
-    // pendurada. UVs match the border vertex so the wall reads as a
-    // continuation of the surface; normals are horizontal and point outward.
+    // valetas/estradas que cruzam a borda — mesmo em diagonal, entre dois
+    // vértices — desce até o piso e sela a fratura T-junction que as 2
+    // sondas perpendiculares não apanhavam. UVs match the border vertex so
+    // the wall reads as a continuation of the surface; normals are
+    // horizontal and point outward.
     if has_skirt {
         let grid_count = verts * verts;
         for (edge, (outward, direct)) in SKIRT_EDGES.into_iter().enumerate() {
@@ -391,12 +412,14 @@ pub fn build_chunk_mesh(
                 let border_pos = mesh.positions[g];
                 let world_x = params.origin.x + border_pos[0] + half;
                 let world_z = params.origin.z + border_pos[2] + half;
-                let probe = field
-                    .sample(world_x + outward[0] * step, world_z + outward[2] * step)
-                    .min(field.sample(
-                        world_x + outward[0] * step * 2.0,
-                        world_z + outward[2] * step * 2.0,
-                    ));
+                let probe = skirt_span_probe(
+                    field,
+                    world_x,
+                    world_z,
+                    outward,
+                    step,
+                    params.lod0_step as f32,
+                );
                 let drop = (border_pos[1] - probe.min(border_pos[1]) + 0.06).clamp(0.0, skirt_cap);
                 mesh.positions
                     .push([border_pos[0], border_pos[1] - drop, border_pos[2]]);
@@ -497,6 +520,49 @@ fn grid_index(edge: usize, k: usize, verts: usize, segments: usize) -> usize {
         2 => k * verts,
         _ => k * verts + segments,
     }
+}
+
+/// Sonda de saia consciente do VÃO: a fratura T-junction abre-se AO LONGO da
+/// borda — o acorde reto do chunk grosseiro desvia-se da polilinha fina do
+/// vizinho à escala do passo LOD 0 (valetas/estradas que cruzam a borda em
+/// diagonal, cristas paralelas) — e as sondas perpendiculares ao centro do
+/// vértice falham depressões mais estreitas que `step`. O mínimo cobre o
+/// vão inteiro que o vértice de borda representa: varre `d ∈ [−step, +step]`
+/// na TANGENTE da borda (outward rodado 90° no plano XZ; o sentido é
+/// indiferente porque o vão varre os dois), com cruz tangente×outward
+/// (`± step` — os dois lados da linha de borda) a passo fino `fine_step` (o
+/// `lod0_step` do terreno), cap de 8 amostras por direção para custo O(1)
+/// por vértice. A amostra solitária a `2·step` para fora mantém o alcance
+/// do probe antigo (degrau logo além da 1.ª amostra externa).
+fn skirt_span_probe(
+    field: &impl HeightField,
+    x: f32,
+    z: f32,
+    outward: [f32; 3],
+    step: f32,
+    fine_step: f32,
+) -> f32 {
+    // Alcance perpendicular antigo, preservado.
+    let mut min = field.sample(x + outward[0] * step * 2.0, z + outward[2] * step * 2.0);
+    // Passo fino com teto de amostras: quando o vão é largo e o passo fino
+    // não cabe, o incremento sobe (nunca mais de 8 amostras por direção).
+    let fine = if fine_step > 0.0 && fine_step.is_finite() {
+        fine_step
+    } else {
+        step * 0.25
+    };
+    let samples = (((2.0 * step) / fine).ceil() as usize).clamp(1, 8);
+    let inc = (2.0 * step) / samples as f32;
+    let (tx, tz) = (-outward[2], outward[0]);
+    for side in [-1.0f32, 1.0f32] {
+        let px = x + outward[0] * step * side;
+        let pz = z + outward[2] * step * side;
+        for k in 0..=samples {
+            let d = -step + k as f32 * inc;
+            min = min.min(field.sample(px + tx * d, pz + tz * d));
+        }
+    }
+    min
 }
 
 /// Texture tile size actually used for UVs: the explicit param when positive,
@@ -652,6 +718,7 @@ mod tests {
             origin,
             size,
             lod_step: step,
+            lod0_step: 1,
             skirt_depth: 0.0,
             normal_epsilon: 0.5,
             texture_tile_size: 0.0,
@@ -712,6 +779,63 @@ mod tests {
             max_y(&lod0) > 15.0,
             "LOD0 reads the wall, got {}",
             max_y(&lod0)
+        );
+    }
+
+    /// FIX 2: o snap "peak-preserving" não toca os vértices de BORDA (o
+    /// critério das saias) — são partilhados com o vizinho, que fino fica na
+    /// altura exata do campo; um salto de ~9 m no chunk grosseiro rasgava a
+    /// costura em silhueta dupla. O interior mantém a crista.
+    #[test]
+    fn test_silhouette_snap_skips_border_vertices() {
+        // Parede vertical em x ≈ 60, colada à borda max-X (x = 64) do chunk.
+        let mut grid =
+            BrushGrid::new(vec![0u16; 128 * 128], 128, 128, 128.0, 50.0, 1.0).expect("grid");
+        grid.begin_stroke("step");
+        for z in 0..128 {
+            for x in 0..128 {
+                let h = if grid.cell_center(x, z).x < 60.0 { 24.0 } else { 2.0 };
+                grid.set_cell_height(x, z, h);
+            }
+        }
+        grid.commit_stroke();
+        let mut params = base_params(Vec3::ZERO, 64.0, 4);
+        params.cliff_angle = 50.0;
+        let mesh = build_chunk_mesh(&grid, &params, None)
+            .expect("build")
+            .expect("data");
+        let (verts, segments) = (17usize, 16usize);
+        // Última linha e coluna: altura EXATA do campo, sem snap — a célula
+        // [v, v+step] destes vértices encosta à parede e o snap
+        // levantá-los-ia contra o vizinho.
+        for k in 0..verts {
+            let border = k as f32 * 4.0;
+            let col = mesh.positions[k * verts + segments][1]; // max-X (x = 64)
+            assert_eq!(
+                col,
+                grid.sample(64.0, border),
+                "vértice de borda max-X (linha {k}) sofreu snap"
+            );
+            let row = mesh.positions[segments * verts + k][1]; // max-Z (z = 64)
+            assert_eq!(
+                row,
+                grid.sample(border, 64.0),
+                "vértice de borda max-Z (coluna {k}) sofreu snap"
+            );
+        }
+        // Interior junto à parede (coluna x = 60, célula [60, 64] contém o
+        // degrau): o snap continua vivo — ao menos um vértice sai da amostra
+        // exata do campo.
+        let snapped = (0..segments)
+            .filter(|rz| {
+                let i = rz * verts + (segments - 1);
+                let exact = grid.sample(60.0, *rz as f32 * 4.0);
+                (mesh.positions[i][1] - exact).abs() > 1.0
+            })
+            .count();
+        assert!(
+            snapped > 0,
+            "nenhum vértice interior junto à parede sofreu snap"
         );
     }
 
@@ -1015,6 +1139,57 @@ mod tests {
             let (gp, sp) = (mesh.positions[g], mesh.positions[s]);
             let drop = gp[1] - sp[1];
             assert!((drop - 0.06).abs() < 0.15, "min-X sliver: {drop}");
+        }
+    }
+
+    /// FIX 1: a valeta estreita e profunda cruza a borda max-X EM DIAGONAL,
+    /// entre dois vértices grosseiros (z = 16 e z = 20) — o acorde do chunk
+    /// lod_step 4 ponteia-a enquanto a polilinha fina (lod_step 1) desce ao
+    /// fundo. O fundo da saia de cada vértice de borda tem de ficar abaixo
+    /// do mínimo da polilinha fina no VÃO que o vértice representa; as 2
+    /// sondas perpendiculares antigas (no eixo do vértice, passo `step`)
+    /// falhavam a depressão e a cunha T-junction ficava aberta.
+    #[test]
+    fn test_skirt_drop_covers_trench_crossing_the_border_span() {
+        // Valeta diagonal (largura < step), 8 m de fundo, linha central
+        // x = 32 + (z − 18): cruza a borda x = 32 em z = 18.
+        let field = TestField::new(
+            Box::new(|x: f32, z: f32| {
+                let d = (x - 32.0 - (z - 18.0)) / std::f32::consts::SQRT_2;
+                10.0 - 8.0 * (-(d * d) / 0.72).exp()
+            }),
+            10.0,
+        );
+        let mut coarse = base_params(Vec3::ZERO, 32.0, 4);
+        coarse.skirt_depth = 10.0;
+        let mut fine = base_params(Vec3::ZERO, 32.0, 1);
+        fine.skirt_depth = 10.0;
+        let coarse = build(&field, &coarse);
+        let fine = build(&field, &fine);
+
+        // Polilinha fina da borda max-X (última coluna do grid fino).
+        let fine_verts = 33usize;
+        let fine_border = |z: usize| -> f32 { fine.positions[z * fine_verts + 32][1] };
+        let fine_min = (0..fine_verts)
+            .map(fine_border)
+            .fold(f32::INFINITY, f32::min);
+        assert!(fine_min < 3.0, "a valeta falta à polilinha fina: {fine_min}");
+
+        let verts = 9usize; // 32 / 4 + 1
+        let grid_count = verts * verts;
+        for k in 0..verts {
+            let bottom = coarse.positions[grid_count + 3 * verts + k][1]; // saia max-X
+            let z_k = k as f32 * 4.0;
+            // Mínimo da polilinha fina no vão do vértice (z ± step).
+            let span_min = (0..fine_verts)
+                .filter(|z| ((*z as f32) - z_k).abs() <= 4.0)
+                .map(|z| fine_border(z))
+                .fold(f32::INFINITY, f32::min);
+            assert!(
+                bottom < span_min - 0.01,
+                "vértice de borda k={k} (z={z_k}): fundo da saia {bottom} não desce \
+                 abaixo do mínimo do vão {span_min} — cunha T-junction aberta"
+            );
         }
     }
     #[test]

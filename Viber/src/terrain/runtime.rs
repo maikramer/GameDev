@@ -874,6 +874,7 @@ fn spawn_chunks(
                 origin,
                 size: edge,
                 lod_step: step << lod,
+                lod0_step: step,
                 skirt_depth: spec.skirt_depth_meters(),
                 normal_epsilon: epsilon,
                 texture_tile_size: spec.texture_tile_size,

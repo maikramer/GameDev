@@ -58,6 +58,7 @@ fn params(lod_step: usize) -> ChunkMeshParams {
         origin: Vec3::new(128.0, 0.0, -256.0),
         size: 64.0,
         lod_step,
+        lod0_step: 1,
         skirt_depth: 200.0 * 0.015625,
         normal_epsilon: 4000.0 / 1024.0,
         texture_tile_size: 5.0,
