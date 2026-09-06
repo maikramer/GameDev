@@ -363,6 +363,7 @@ pub struct UiTooltipLayer {
 /// keeps its text current. It carries no `Interaction`, so it can never steal
 /// hover from the element underneath.
 #[allow(clippy::type_complexity)]
+#[allow(clippy::too_many_arguments)]
 pub fn drive_ui_tooltip(
     mut commands: Commands,
     mut layer: ResMut<UiTooltipLayer>,

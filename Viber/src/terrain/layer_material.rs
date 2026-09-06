@@ -424,10 +424,9 @@ pub fn terrain_daynight_tint(
     }
     if let Some(handle) = &chunks.standard
         && let Some(mut material) = standards.get_mut(handle)
+        && material.base_color != tinted
     {
-        if material.base_color != tinted {
-            material.base_color = tinted;
-        }
+        material.base_color = tinted;
     }
 }
 

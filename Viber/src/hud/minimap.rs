@@ -198,6 +198,7 @@ fn inside_panel(x: f32, z: f32) -> bool {
 /// 4 km em 132 px são 30 m por píxel, e o resultado era um brasão bonito onde
 /// andar 50 m não movia nada. Um mini-mapa que não se mexe não é um mapa.
 #[allow(clippy::type_complexity)]
+#[allow(clippy::too_many_arguments)]
 pub fn hud_minimap_update(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,

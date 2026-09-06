@@ -207,7 +207,7 @@ pub(crate) fn map_pin_image() -> Image {
         let head_r = 13.5;
         let head = dx * dx + (dy + 5.0) * (dy + 5.0) < head_r * head_r;
         // Cauda: triângulo do fundo da cabeça à ponta (24, 42).
-        let tail = dy >= -1.0 && dy <= 18.0 && {
+        let tail = (-1.0..=18.0).contains(&dy) && {
             let t = ((dy + 1.0) / 19.0).clamp(0.0, 1.0);
             dx.abs() < head_r * (1.0 - t) * 0.9
         };
@@ -221,7 +221,7 @@ pub(crate) fn map_pin_image() -> Image {
         // Contorno: borda exterior a tinta (a cauda afina para a ponta).
         let head_edge = dx * dx + (dy + 5.0) * (dy + 5.0) < (head_r - 1.6) * (head_r - 1.6);
         let t = ((dy + 1.0) / 19.0).clamp(0.0, 1.0);
-        let tail_edge = dy >= -1.0 && dy <= 16.5 && dx.abs() < head_r * (1.0 - t) * 0.9 - 1.4;
+        let tail_edge = (-1.0..=16.5).contains(&dy) && dx.abs() < head_r * (1.0 - t) * 0.9 - 1.4;
         if !(head_edge || tail_edge) {
             return INK;
         }

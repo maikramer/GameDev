@@ -524,7 +524,6 @@ pub fn sun_azimuth(minute: f32, dawn: f32, dusk: f32, base: f32) -> f32 {
 /// replica a curva golden de [`atmosphere_for_elevation`] para que céu,
 /// névoa e ambiente concordem sobre que horas são.
 #[allow(clippy::needless_pass_by_value)]
-#[allow(clippy::needless_pass_by_value)]
 pub fn daycycle_drive(
     time: Res<Time>,
     clock: Option<ResMut<DayCycleState>>,

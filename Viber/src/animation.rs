@@ -528,6 +528,7 @@ fn find_animation_player(
 /// Characters holding a terminal clip (`locked` — corpses) are skipped on
 /// purpose: their death pose is lost to the swap either way, and re-arming
 /// would stand the corpse back up into `idle`.
+#[allow(clippy::type_complexity)]
 fn rearm_after_scene_swap(
     mut commands: Commands,
     swapped: Query<
@@ -695,6 +696,7 @@ pub fn hit_react_node(animator: &CharacterAnimator) -> Option<AnimationNodeIndex
 /// um pedido num personagem ainda não bindado (GLB a chegar) é consumido sem
 /// tentar tocar — sem isto, o marcador órfão disparava um flinch atrasado
 /// mal o bind acontecesse.
+#[allow(clippy::type_complexity)]
 pub fn hit_react_system(
     mut pending: Query<
         (

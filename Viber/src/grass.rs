@@ -875,7 +875,7 @@ fn build_tile(
     // grows the same meadow, whichever direction the player walked in from.
     let seed = ((coord.0 as i64) << 32 ^ (coord.1 as i64 & 0xFFFF_FFFF)) as u64;
     let mut rng = crate::spawner::Rng::new(
-        seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (tier as u64 + 1) * 0x1234_5678_9ABC_DEF,
+        seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ ((tier as u64 + 1) * 0x0123_4567_89AB_CDEF),
     );
 
     for _ in 0..target {
@@ -1225,10 +1225,10 @@ fn emit_blade(
 
     let color_at = |t: f32| -> [f32; 4] {
         let mut c = [0.0f32; 4];
-        for i in 0..3 {
+        for (i, slot) in c.iter_mut().enumerate().take(3) {
             let green = profile.root[i] + (profile.tip[i] - profile.root[i]) * t;
             let straw = profile.dry_root[i] + (profile.dry_tip[i] - profile.dry_root[i]) * t;
-            c[i] = ((green + (straw - green) * dry) * shade).clamp(0.0, 1.0);
+            *slot = ((green + (straw - green) * dry) * shade).clamp(0.0, 1.0);
         }
         c[3] = 1.0;
         c

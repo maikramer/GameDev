@@ -447,6 +447,7 @@ pub fn is_hostile_script(path: &str) -> bool {
         || path.starts_with("bosses\\")
 }
 
+#[allow(clippy::type_complexity)]
 pub fn ensure_creature_vitals(
     creatures: Query<
         (&LuaScriptRef, Entity),
@@ -1332,6 +1333,7 @@ pub const WEAPON_TABLE: [(&str, [f32; 3], [f32; 3], f32, &str); 3] = [
 
 /// Anexa a arma inicial (espada) e troca no [V].
 #[allow(clippy::type_complexity)]
+#[allow(clippy::too_many_arguments)]
 pub fn cycle_weapon(
     mut commands: Commands,
     keys: Res<ButtonInput<KeyCode>>,
@@ -1433,6 +1435,7 @@ pub struct Fireball {
 }
 
 #[allow(clippy::type_complexity)]
+#[allow(clippy::too_many_arguments)]
 pub fn cast_fireball(
     mut commands: Commands,
     mouse: Res<ButtonInput<MouseButton>>,
@@ -1532,6 +1535,7 @@ struct FireballFx<'w> {
 /// a paridade do melee: hit-stop + shake + solavanco + punch de pós-processo
 /// globais, flash + recoil por inimigo (o projétil é um golpe, não um número).
 #[allow(clippy::type_complexity)]
+#[allow(clippy::too_many_arguments)]
 fn fireball_step(
     mut commands: Commands,
     time: Res<Time>,

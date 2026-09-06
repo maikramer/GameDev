@@ -510,7 +510,8 @@ fn profiler_tab(params: In<Option<Value>>, world: &mut World) -> BrpResult {
         .unwrap_or("systems")
         .to_string();
     if tab == "all" {
-        return Ok(crate::profiler::export_snapshot(world));
+        // O MESMO JSON do botão COPIAR / do ficheiro de export.
+        return Ok(crate::profiler::full_snapshot(world));
     }
     if tab == "extras" {
         return Ok(json!({ "extras": crate::profiler::extras_snapshot(world) }));
@@ -580,23 +581,6 @@ fn send_key(world: &mut World, key_code: KeyCode, state: ButtonState, text: Opti
         match state {
             ButtonState::Pressed => input.press(key_code),
             ButtonState::Released => input.release(key_code),
-        }
-    }
-}
-
-fn send_mouse_button(world: &mut World, button: MouseButton, state: ButtonState) {
-    let window = primary_window(world).unwrap_or(Entity::PLACEHOLDER);
-    if let Some(mut messages) = world.get_resource_mut::<Messages<MouseButtonInput>>() {
-        messages.write(MouseButtonInput {
-            button,
-            state,
-            window,
-        });
-    }
-    if let Some(mut input) = world.get_resource_mut::<ButtonInput<MouseButton>>() {
-        match state {
-            ButtonState::Pressed => input.press(button),
-            ButtonState::Released => input.release(button),
         }
     }
 }

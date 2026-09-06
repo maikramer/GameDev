@@ -450,6 +450,7 @@ fn ensure_player_invulnerable(
 
 /// Consome `PlayerHurt`: i-frames, HP, número flutuante, vinheta.
 #[allow(clippy::type_complexity)]
+#[allow(clippy::too_many_arguments)]
 fn player_hurt_system(
     mut hurts: MessageReader<PlayerHurt>,
     mut players: Query<

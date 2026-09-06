@@ -1374,7 +1374,7 @@ fn collect_template_destructible(node: &XmlNode) -> Option<DestructibleSpec> {
 /// Primeiro `<ResourceNode kind="…" yield="…">` na subárvore do template
 /// (qualquer profundidade) — o loot nativo da colheita.
 fn collect_resource_node(node: &XmlNode) -> Option<(String, u32)> {
-    if node.tag.to_ascii_lowercase() == "resourcenode" {
+    if node.tag.eq_ignore_ascii_case("resourcenode") {
         if let Some(kind) = node.attr("kind").map(str::trim).filter(|s| !s.is_empty()) {
             let amount = node
                 .attr("yield")
@@ -2465,9 +2465,9 @@ fn finish_lake(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> {
             let mut island = crate::terrain::water::IslandSpec::default();
             for (key, value) in &child.attrs {
                 match key.as_str() {
-                    "at" => island.at = offset_point(values::parse_vec2(&value, &kctx)?, off),
-                    "radius" => island.radius = values::parse_f32(&value, &kctx)?,
-                    "height" => island.height = values::parse_f32(&value, &kctx)?,
+                    "at" => island.at = offset_point(values::parse_vec2(value, &kctx)?, off),
+                    "radius" => island.radius = values::parse_f32(value, &kctx)?,
+                    "height" => island.height = values::parse_f32(value, &kctx)?,
                     other => ctx
                         .warnings
                         .push(format!("{kctx}: ignored attribute `{other}`")),
@@ -4448,7 +4448,7 @@ mod tests {
         assert!(!spec.cascades);
         assert!(spec.spring);
 
-        let (spec, w) = parse_one(&node(
+        let (spec, _) = parse_one(&node(
             "Lake",
             &[("at", "10 -10"), ("radius", "18"), ("bank", "overhang")],
         ))

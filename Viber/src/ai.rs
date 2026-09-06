@@ -319,6 +319,7 @@ pub fn enemy_ai(
 /// Luau): nasciam sem `Health` e ficavam imunes ao strike/bomba — e o
 /// respawn (abaixo) nunca disparava. Scriptadas recebem vitals via
 /// `combat::ensure_creature_vitals` (hostis apenas).
+#[allow(clippy::type_complexity)]
 pub fn ensure_fsm_vitals(
     mut commands: Commands,
     creatures: Query<
@@ -341,6 +342,7 @@ pub fn ensure_fsm_vitals(
 /// geridas pelos seus spawners/scripts, design respeitado) vira uma entrada
 /// na [`RespawnQueue`] na HOME da criatura, [`RESPAWN_DELAY_SECS`] depois,
 /// com a cena/glTF originais para renascer do mesmo tipo.
+#[allow(clippy::type_complexity)]
 pub fn queue_creature_respawns(
     mut queue: ResMut<RespawnQueue>,
     time: Res<Time>,

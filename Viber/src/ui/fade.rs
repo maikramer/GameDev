@@ -127,6 +127,7 @@ impl UiFade {
 
 /// Drives every [`UiFade`] from its binding and marks the element dirty while
 /// the alpha is still moving, so the cascade repaints it.
+#[allow(clippy::type_complexity)]
 pub fn drive_ui_fades(
     mut commands: Commands,
     time: Res<Time>,

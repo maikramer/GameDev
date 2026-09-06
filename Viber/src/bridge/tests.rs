@@ -112,16 +112,19 @@ fn test_bridge_end_to_end_headless() {
     }
     click.join().unwrap().expect("input.click responde");
     mouse_move.join().unwrap().expect("input.move responde");
+    // As escritas do cursor acontecem no frame em que cada pedido é drenado;
+    // se click e move caírem em frames DIFERENTES, o duplo buffer do
+    // `Messages` evicta a mais velha ao fim de DOIS swaps — contar aqui, com
+    // as duas a ≤1 frame de distância, e só depois dar os frames do release.
+    let cursor_count = app.world().resource::<Messages<CursorMoved>>().len();
+    assert!(
+        cursor_count >= 2,
+        "CursorMoved de click+move: {cursor_count}"
+    );
     // O clique é injectado no PreUpdate do frame SEGUINTE (press agora,
     // release depois — ver `deferred_mouse_release`): dá-lhe dois frames.
     app.update();
     app.update();
-    let cursor = app.world().resource::<Messages<CursorMoved>>();
-    assert!(
-        cursor.len() >= 2,
-        "CursorMoved de click+move: {}",
-        cursor.len()
-    );
 
     // screenshot: pedido em fila fica pending sem render
     let shot = settle(

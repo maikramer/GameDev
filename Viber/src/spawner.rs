@@ -147,7 +147,7 @@ impl SpawnOccupancy {
     /// Registra um disco XZ. O disco entra em TODAS as células que toca, para
     /// uma consulta que caia em qualquer delas o encontrar.
     pub fn register(&mut self, x: f32, z: f32, radius: f32) {
-        if !(radius > 0.0) {
+        if radius <= 0.0 || radius.is_nan() {
             return;
         }
         if radius > LARGE_DISK_RADIUS {
@@ -610,6 +610,7 @@ pub struct SpawnGroupState {
     pub collider_handle: Option<bevy::asset::Handle<bevy::gltf::Gltf>>,
     /// Ladder de LOD por template: `(lod1, lod2, near, mid)`, mesmo índice
     /// de `handles`. Vazio = o template não autora malhas alternativas.
+    #[allow(clippy::type_complexity)]
     pub lod_handles: Vec<(Option<Handle<Gltf>>, Option<Handle<Gltf>>, f32, f32)>,
 }
 
@@ -739,6 +740,7 @@ fn apply_template_collider(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn instantiate_spawn_groups(
     mut commands: Commands,
     gltfs: Res<Assets<Gltf>>,

@@ -914,9 +914,8 @@ fn run_session(command: SessionCommand) -> Result<std::process::ExitCode> {
                         );
                     } else {
                         println!(
-                            "OCUPADO por '{owner}' MAS a engine em :{} não responde — `{oil}`",
-                            engine.port,
-                            oil = "viber session down && viber session up"
+                            "OCUPADO por '{owner}' MAS a engine em :{} não responde — `viber session down && viber session up`",
+                            engine.port
                         );
                     }
                 }
@@ -997,11 +996,9 @@ fn run_session(command: SessionCommand) -> Result<std::process::ExitCode> {
         }
         SessionCommand::List => session_list().map(|_| ExitCode::SUCCESS),
         SessionCommand::Up { world, port } => {
-            session_up(world.as_ref().map(PathBuf::as_path), port).map(|_| ExitCode::SUCCESS)
+            session_up(world.as_deref(), port).map(|_| ExitCode::SUCCESS)
         }
-        SessionCommand::Down { world } => {
-            session_down(world.as_ref().map(PathBuf::as_path)).map(|_| ExitCode::SUCCESS)
-        }
+        SessionCommand::Down { world } => session_down(world.as_deref()).map(|_| ExitCode::SUCCESS),
     }
 }
 

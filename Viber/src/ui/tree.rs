@@ -431,7 +431,10 @@ fn build_slider(world: &mut World, node: &XmlNode, track: Entity) {
     let value = match attr_f32(node, "value") {
         Some(v) if v.is_finite() => v.clamp(min, max),
         Some(_) => {
-            warn!("ui: <{}> slider com value não finito — a usar o máximo {max}", node.tag);
+            warn!(
+                "ui: <{}> slider com value não finito — a usar o máximo {max}",
+                node.tag
+            );
             max
         }
         None => max,

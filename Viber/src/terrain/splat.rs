@@ -661,11 +661,11 @@ pub fn weights_at(
     let vale = smoothstep(0.44, 0.56, n_region);
     let mut out = [0.0; LAYER_COUNT];
     let g_grass = climate.ground[SLOT_GRASS] + climate.ground[SLOT_VALE_GRASS];
-    for slot in 0..LAYER_COUNT {
+    for (slot, weight) in climate.ground.iter().enumerate() {
         if slot == SLOT_GRASS || slot == SLOT_VALE_GRASS {
             continue;
         }
-        out[slot] = ground * climate.ground[slot];
+        out[slot] = ground * weight;
     }
     out[SLOT_GRASS] = ground * g_grass * (1.0 - vale);
     out[SLOT_VALE_GRASS] = ground * g_grass * vale;
@@ -1265,7 +1265,6 @@ mod tests {
 
     #[test]
     fn test_cliffs_take_mountain_stone() {
-        let world = flat_world();
         let boxes_w: Vec<(Bounds, &WaterBody)> = Vec::new();
         let boxes_r: Vec<(Bounds, &RoadPath)> = Vec::new();
         let mut ctx = TexelCtx {
@@ -1352,7 +1351,6 @@ mod tests {
 
     #[test]
     fn test_snow_above_snow_height() {
-        let world = flat_world();
         let boxes_w: Vec<(Bounds, &WaterBody)> = Vec::new();
         let boxes_r: Vec<(Bounds, &RoadPath)> = Vec::new();
         let mut ctx = TexelCtx {

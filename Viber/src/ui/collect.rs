@@ -199,7 +199,7 @@ pub fn collect_ui_data(
         }
         // Veneno activo (`status.venom`): leitura do estado que o feedback
         // mantém no herói — o collect nunca o muta, só o publica.
-        data.status_venom = effects.map_or(false, |effects| effects.venom > 0.0);
+        data.status_venom = effects.is_some_and(|effects| effects.venom > 0.0);
     }
     data.level = levels.single().map(|l| l.level).unwrap_or(1).max(1);
     // Pontos de talento por gastar (`talent.ready` acende o badge do nível).

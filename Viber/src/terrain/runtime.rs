@@ -136,10 +136,11 @@ pub fn drop_failed_terrain_textures(
                 );
                 if let Some(chunk_materials) = chunk_materials.as_mut() {
                     if let Some(mut layer) = chunk_materials.get_mut(material) {
-                        let fallback = images
-                            .contains(repoint)
-                            .then(|| repoint.clone())
-                            .unwrap_or_else(|| images.add(solid_white_image()));
+                        let fallback = if images.contains(repoint) {
+                            repoint.clone()
+                        } else {
+                            images.add(solid_white_image())
+                        };
                         *layer.texture_mut(*slot) = fallback;
                     }
                 }
@@ -780,6 +781,20 @@ fn lod0_step(spec: &TerrainSpec) -> usize {
     }
 }
 
+/// Skirt depth (meters) a heightfield border needs where the neighbour is a
+/// **volumetric** chunk — see `ChunkMeshParams::volumetric_edges`.
+///
+/// `voxel_cells` is the voxel cell size, which is the LOD-0 step
+/// (`spawn_voxel_chunks` is called with `lod0_step` as its wanted cell). Four
+/// cells covers the worst case: surface nets can place its border vertex a
+/// full cell off the plane, and the SDF's own zero level can sit another cell
+/// below the heightfield sample. The wall is invisible when nothing shows
+/// through it, so erring deep costs nothing; erring shallow leaves the strip
+/// of sky the QA point at `(0, 46, -80)` shows.
+pub(super) fn volumetric_seal(voxel_cells: f32) -> f32 {
+    (voxel_cells.max(0.0) * 4.0).max(2.0)
+}
+
 /// Chunk grid geometry shared by the chunk materials and the mesh spawner:
 /// `(edge meters, rows per world side)`.
 fn chunk_grid(spec: &TerrainSpec) -> (f32, u32) {
@@ -890,6 +905,8 @@ fn spawn_chunks(
                 world_size: spec.world_size,
                 tint: chunk_tint.clone(),
                 cliff_angle: spec.cliff_angle,
+                volumetric_edges: voxel.volumetric_neighbors(origin.x, origin.z, edge),
+                volumetric_seal: volumetric_seal(step as f32),
             };
             // A LOD step that does not divide the chunk edge yields no mesh;
             // fall back to LOD 0, which always does.
@@ -1085,6 +1102,7 @@ fn spawn_chunk_materials(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_water(
     world: &mut World,
     meshes: &mut Assets<Mesh>,

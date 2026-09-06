@@ -521,7 +521,7 @@ pub fn apply_ui_commands(
             }
             // These address a data source / group / the game, not an element.
             UiCommand::Unlist { name } => {
-                lists.release_script(&name);
+                lists.release_script(name);
                 continue;
             }
         };

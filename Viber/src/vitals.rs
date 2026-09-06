@@ -224,6 +224,7 @@ pub fn juice_spec(
 /// uma vez por [`LevelUpEvent`]; sem herói visível, só o toast/SFX/kick
 /// perdem a posição — os bursts são os únicos que exigem a âncora.
 #[allow(clippy::type_complexity)]
+#[allow(clippy::too_many_arguments)]
 pub fn level_up_fx(
     mut events: MessageReader<LevelUpEvent>,
     players: Query<&GlobalTransform, With<Player>>,

@@ -420,6 +420,7 @@ fn guard_system(
 /// script, vira cadáver, dá XP e reporta o abate às quests — sem isto, o
 /// [R]/[B]/fireball deixava o inimigo a 0 HP de pé, com a FSM a correr e
 /// sem XP. Pub(crate): a fireball (`combat.rs`) reutiliza-a.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn kill_creature(
     commands: &mut Commands,
     target: Entity,
@@ -718,6 +719,7 @@ pub fn abilities_system(
 /// [B] lança bomba (consome `bomb` do vault). Os pré-requisitos (assets,
 /// herói) validam-se ANTES de consumir o item — sem assets a bomba
 /// desaparecia do inventário sem nada ser lançado.
+#[allow(clippy::too_many_arguments)]
 fn bomb_throw_system(
     keys: Res<ButtonInput<KeyCode>>,
     menus: Res<crate::menus::MenusOpen>,

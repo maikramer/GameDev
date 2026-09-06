@@ -1542,7 +1542,7 @@ fn build_declarative_ui(
         // lista com entidades já despanadas daria erro.
         stale.sort_unstable_by_key(|e| std::cmp::Reverse(*e));
         for entity in stale {
-            if let Ok(mut e) = world.get_entity_mut(entity) {
+            if let Ok(e) = world.get_entity_mut(entity) {
                 e.despawn();
             }
         }

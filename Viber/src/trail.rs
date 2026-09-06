@@ -235,6 +235,7 @@ fn strip_indices() -> Vec<u32> {
 /// Ciclo do ribbon: amostra a lâmina da arma atual dentro da janela de swing,
 /// envelhece as amostras e reescreve o mesh.
 #[allow(clippy::type_complexity)]
+#[allow(clippy::too_many_arguments)]
 pub fn weapon_trail_system(
     time: Res<Time>,
     mut commands: Commands,
@@ -356,7 +357,6 @@ fn compute_blade(
         min: &mut Vec3,
         max: &mut Vec3,
         found: &mut bool,
-        transforms: &Query<&GlobalTransform>,
         bounds: &Query<(&GlobalTransform, &Aabb)>,
         children: &Query<&Children>,
     ) {
@@ -374,13 +374,11 @@ fn compute_blade(
             }
         }
         for child in children.get(entity).into_iter().flatten() {
-            walk(
-                *child, inverse, min, max, found, transforms, bounds, children,
-            );
+            walk(*child, inverse, min, max, found, bounds, children);
         }
     }
     walk(
-        root, &inverse, &mut min, &mut max, &mut found, transforms, bounds, children,
+        root, &inverse, &mut min, &mut max, &mut found, bounds, children,
     );
     found.then(|| blade_from_aabb(min, max))
 }

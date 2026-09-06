@@ -341,6 +341,7 @@ pub fn immediate_collider(shape: &ColliderShape) -> Option<(Collider, Transform)
 /// `Auto` resolves from the entity's rendered [`Aabb`]; the mesh shapes bake a
 /// Rapier shape out of every primitive in the loaded glTF.
 #[allow(clippy::type_complexity)]
+#[allow(clippy::too_many_arguments)]
 pub fn resolve_pending_colliders(
     mut commands: Commands,
     time: Res<Time>,

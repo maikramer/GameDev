@@ -680,11 +680,11 @@ pub struct ParticleSprite {
 /// `Assets<Image>` — assinaturas estáveis, o WS-D chama-as — por isso o bind
 /// é post-hoc, um frame depois do spawn no pior caso: impercetível).
 #[derive(Debug, Component)]
-struct SpriteBound;
+pub(crate) struct SpriteBound;
 
 /// Liga o sprite radial ao material de cada emissor ainda não marcado.
 #[allow(clippy::type_complexity)]
-pub fn emitter_sprite_bind(
+pub(crate) fn emitter_sprite_bind(
     mut images: Option<ResMut<Assets<Image>>>,
     mut materials: Option<ResMut<Assets<StandardMaterial>>>,
     sprite: Option<Res<ParticleSprite>>,

@@ -719,7 +719,6 @@ pub fn carve_cliff(grid: &mut BrushGrid, spec: &CliffSpec, index: usize) -> Opti
                 0.85 + 0.3 * hash01(spec.seed, station.to_bits() as u64, (t * 64.0) as u64);
             ground + bury * (1.0 - t).powf(1.5) * wobble
         };
-        let talus_reach = texel * (TOE_FADE_TEXELS + 4.0) + talus_max;
         grid.begin_stroke(&format!("cliff:{index}"));
         grid.apply(BrushRequest {
             mode: BrushMode::Raise,
@@ -793,7 +792,7 @@ pub struct CliffMask {
 }
 
 /// Raw steep scan of `grid` (neighbor drop steeper than `angle_deg`).
-fn scan_steep(grid: &BrushGrid, angle_deg: f32, bits: &mut Vec<u64>) {
+fn scan_steep(grid: &BrushGrid, angle_deg: f32, bits: &mut [u64]) {
     let (width, depth) = (grid.width(), grid.depth());
     bits.iter_mut().for_each(|w| *w = 0);
     if !angle_deg.is_finite() || angle_deg <= 0.0 {
@@ -823,8 +822,8 @@ fn set_bit(bits: &mut [u64], width: usize, x: usize, z: usize) {
 }
 
 /// One dilation pass (4-neighborhood + self) over a bitset.
-fn dilate_once(bits: &mut Vec<u64>, width: usize, depth: usize) {
-    let src = bits.clone();
+fn dilate_once(bits: &mut [u64], width: usize, depth: usize) {
+    let src = bits.to_vec();
     for z in 0..depth {
         for x in 0..width {
             if get_bit(&src, width, x, z) {
@@ -845,8 +844,8 @@ fn dilate_once(bits: &mut Vec<u64>, width: usize, depth: usize) {
 /// removes 1-texel speckle before labeling. Out-of-bounds neighbors count as
 /// clear (border texels erode), which is what makes the opening eat thin
 /// needles.
-fn erode_once(bits: &mut Vec<u64>, width: usize, depth: usize) {
-    let src = bits.clone();
+fn erode_once(bits: &mut [u64], width: usize, depth: usize) {
+    let src = bits.to_vec();
     let at = |x: isize, z: isize| -> bool {
         x >= 0
             && z >= 0
@@ -1113,6 +1112,7 @@ impl CliffMask {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn label_into_core(
         grid: &BrushGrid,
         raw: &[u64],
@@ -1201,10 +1201,6 @@ impl CliffMask {
                 }
             }
         }
-    }
-
-    fn set(&mut self, x: usize, z: usize) {
-        set_bit(&mut self.bits, self.width, x, z);
     }
 
     /// Texel `(x, z)` is INSIDE an accepted cliff component (no margin).
@@ -1307,7 +1303,7 @@ impl CliffMask {
         let step_x = self.world_size / (self.width - 1).max(1) as f32;
         let step_z = self.world_size / (self.depth - 1).max(1) as f32;
         let (fx, fz) = self.texel_of(p);
-        let r = (meters / step_x.min(step_z)).ceil().max(0.0).min(128.0) as i64;
+        let r = (meters / step_x.min(step_z)).ceil().clamp(0.0, 128.0) as i64;
         let (cx, cz) = (fx.round() as i64, fz.round() as i64);
         let half = self.world_size * 0.5;
         // Metade-largura do texel: a distância mede ao RETÂNGULO do texel,

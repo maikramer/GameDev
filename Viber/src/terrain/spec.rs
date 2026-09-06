@@ -210,8 +210,7 @@ impl TerrainSpec {
     pub fn heightfield_edge(&self, samples_per_chunk_edge: usize) -> usize {
         (self.chunk_rows() as usize)
             .saturating_mul(samples_per_chunk_edge.max(1))
-            .min(MAX_GRID_EDGE_VERTS)
-            .max(1)
+            .clamp(1, MAX_GRID_EDGE_VERTS)
     }
 
     /// Parse-time sanity checks for the derived terrain geometry (shared by

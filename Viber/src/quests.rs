@@ -752,6 +752,7 @@ pub fn quest_banner_alpha(remaining: f32) -> f32 {
 /// Fanfare de entrega: burst `sparkle` no herói, `SfxEvent::QuestDone`
 /// (interface, volume cheio) e o banner com o título da quest.
 #[allow(clippy::type_complexity)]
+#[allow(clippy::too_many_arguments)]
 fn quest_done_fanfare(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,

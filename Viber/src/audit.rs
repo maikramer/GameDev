@@ -425,7 +425,7 @@ fn audit_texture(path: &Path, context: &str, issues: &mut Vec<AuditIssue>) {
 /// inteiras.
 fn read_header(path: &Path, n: u64) -> Option<Vec<u8>> {
     use std::io::Read as _;
-    let mut file = std::fs::File::open(path).ok()?;
+    let file = std::fs::File::open(path).ok()?;
     let mut buffer = Vec::new();
     file.take(n).read_to_end(&mut buffer).ok()?;
     Some(buffer)
@@ -697,7 +697,7 @@ mod tests {
         )
         .unwrap();
         std::fs::write(asset_root.join("assets/textures/vector.svg"), b"<svg/>").unwrap();
-        let with_texture = |name: &str, tex: &str, file: &str| {
+        let with_texture = |name: &str, tex: &str, _file: &str| {
             entity(
                 name,
                 EntityKind::Primitive {

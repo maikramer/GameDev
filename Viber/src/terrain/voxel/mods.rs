@@ -263,6 +263,7 @@ pub struct ArchMod {
 }
 
 impl ArchMod {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         label: impl Into<String>,
         base: Vec3,

@@ -419,7 +419,7 @@ pub fn resolve_port(flag: Option<u16>) -> u16 {
     if let Some(port) = flag {
         return port;
     }
-    if let Some(raw) = std::env::var("VIBER_BRIDGE_PORT").ok() {
+    if let Ok(raw) = std::env::var("VIBER_BRIDGE_PORT") {
         match raw.parse::<u16>() {
             Ok(port) => return port,
             // Um typo não pode cair noutra engine em silêncio (mutaria o
