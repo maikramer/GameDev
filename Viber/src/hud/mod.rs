@@ -35,7 +35,8 @@ pub use interact::{
     hud_balloon_update, hud_prompt_update, hud_toggle,
 };
 pub use minimap::{
-    MinimapArrow, MinimapDot, MinimapRange, arrow_rotation_rad, hud_minimap_update, minimap_xy,
+    MinimapAnchor, MinimapArrow, MinimapDot, MinimapRange, arrow_rotation_rad, hud_minimap_update,
+    minimap_xy,
 };
 pub use nametags::{NAME_TAG_MAX_M, NAME_TAG_MIN_M, NAME_TAG_POOL, NameTag, hud_nametags_update};
 pub use vitals::{

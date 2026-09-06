@@ -14,20 +14,34 @@ pub struct HudMenuState {
 }
 
 #[derive(Component)]
-pub struct HudMenuTab {
-    tab: usize,
-}
-
-#[derive(Component)]
 pub struct HudMenuContent {
     tab: usize,
 }
 
+/// Tecla de toggle deste menu: resolve o attr autoral `key`, mas **Q fica
+/// para o modal da engine** (`menus.rs` — Quests/Loja/Skills/Opções). Sem
+/// attr ou em conflito, o menu cai em **F1** — senão um Q abria DOIS
+/// overlays fullscreen empilhados, cada um com o seu estado de abas.
+pub fn toggle_key_from_attr(key: Option<&str>) -> KeyCode {
+    match key.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+        Some("e") => KeyCode::KeyE,
+        Some("f2") => KeyCode::F2,
+        Some("t") | Some("tab") => KeyCode::Tab,
+        _ => KeyCode::F1, // "q", ausente ou desconhecida
+    }
+}
+
 /// Constrói o menu com abas. Chamado pela tag `TabbedModal`.
-pub fn build_menu(world: &mut World, hud: &HudAssets) {
+pub fn build_menu(world: &mut World, hud: &HudAssets, toggle: KeyCode) {
     if world.get_resource::<HudMenuState>().is_none() {
         world.insert_resource(HudMenuState::default());
     }
+    let toggle_label = match toggle {
+        KeyCode::KeyE => "E".to_string(),
+        KeyCode::F2 => "F2".to_string(),
+        KeyCode::Tab => "TAB".to_string(),
+        _ => "F1".to_string(),
+    };
     let (w, h) = (560.0_f32, 380.0_f32);
     world
         .spawn((
@@ -44,7 +58,7 @@ pub fn build_menu(world: &mut World, hud: &HudAssets) {
             },
             BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.35)),
             Visibility::Hidden,
-            super::interact::HudToggle(KeyCode::KeyQ),
+            super::interact::HudToggle(toggle),
             Name::new("hud:menu"),
         ))
         .with_children(|overlay| {
@@ -104,7 +118,13 @@ pub fn build_menu(world: &mut World, hud: &HudAssets) {
                                     flex_direction: FlexDirection::Column,
                                     ..Default::default()
                                 },
-                                Visibility::Hidden,
+                                // `Visibility::Visible` on a child OVERRIDES a
+                                // hidden parent in Bevy, so the tab contents
+                                // used to render on top of the world with the
+                                // menu closed. The active tab is chosen with
+                                // `Node::display` and the whole panel stays on
+                                // the parent's inherited visibility.
+                                Visibility::Inherited,
                                 HudMenuContent { tab },
                                 Name::new(format!("hud:menu:{name}")),
                             ))
@@ -115,7 +135,8 @@ pub fn build_menu(world: &mut World, hud: &HudAssets) {
                                         ("ESPAÇO", "pular"),
                                         ("SHIFT", "correr"),
                                         ("E", "interagir"),
-                                        ("Q", "abrir/fechar este menu"),
+                                        ("Q", "menu de quests/loja"),
+                                        (&toggle_label, "abrir/fechar este menu"),
                                         ("P", "profiler"),
                                         ("H / J / K", "debug: dano / cura / XP"),
                                     ] {
@@ -143,8 +164,12 @@ pub fn build_menu(world: &mut World, hud: &HudAssets) {
 pub fn hud_menu_system(
     mut state: ResMut<HudMenuState>,
     keys: Res<ButtonInput<KeyCode>>,
-    mut tabs: Query<(&Interaction, &HudMenuTab, &mut BackgroundColor)>,
-    mut contents: Query<(&mut Visibility, &HudMenuContent)>,
+    mut tabs: Query<(
+        &Interaction,
+        &super::widgets::TabButton,
+        &mut BackgroundColor,
+    )>,
+    mut contents: Query<(&mut Node, &HudMenuContent)>,
 ) {
     let tabs_len = MENU_TAB_COUNT;
     // Clique numa aba (activa ao pressionar)…
@@ -171,20 +196,26 @@ pub fn hud_menu_system(
     // Sincroniza visual: aba activa dourada, resto escuro.
     for (interaction, tab, mut bg) in &mut tabs {
         let active = state.active == tab.tab;
-        *bg = BackgroundColor(if active {
+        let wanted = BackgroundColor(if active {
             Color::srgba(0.9, 0.7, 0.2, 0.85)
         } else if *interaction == Interaction::Hovered {
             Color::srgba(0.24, 0.22, 0.19, 0.9)
         } else {
             Color::srgba(0.16, 0.15, 0.13, 0.85)
         });
+        if bg.0 != wanted.0 {
+            *bg = wanted;
+        }
     }
-    for (mut visibility, content) in &mut contents {
-        *visibility = if state.active == content.tab {
-            Visibility::Visible
+    for (mut node, content) in &mut contents {
+        let wanted = if state.active == content.tab {
+            Display::Flex
         } else {
-            Visibility::Hidden
+            Display::None
         };
+        if node.display != wanted {
+            node.display = wanted;
+        }
     }
 }
 

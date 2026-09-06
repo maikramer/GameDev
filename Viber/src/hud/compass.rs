@@ -100,7 +100,10 @@ pub fn hud_compass_update(
         let delta = crate::camera::shortest_angle_delta_deg(heading, letter.bearing_deg);
         match compass_offset_px(delta, 230.0, 55.0) {
             Some(offset) => {
-                node.left = Val::Px(230.0 + offset);
+                let wanted = Val::Px(230.0 + offset);
+                if node.left != wanted {
+                    node.left = wanted;
+                }
                 *visibility = Visibility::Visible;
             }
             None => *visibility = Visibility::Hidden,
@@ -108,17 +111,23 @@ pub fn hud_compass_update(
     }
     for (mut node, tick) in &mut ticks {
         let delta = crate::camera::shortest_angle_delta_deg(heading, tick.bearing_deg);
-        node.left = match compass_offset_px(delta, 230.0, 55.0) {
+        let wanted = match compass_offset_px(delta, 230.0, 55.0) {
             Some(offset) => Val::Px(230.0 + offset),
             None => Val::Px(-100.0), // parked off-strip
         };
+        if node.left != wanted {
+            node.left = wanted;
+        }
     }
     for (mut node, mut visibility, dist, mut text) in &mut distances {
         let delta = crate::camera::shortest_angle_delta_deg(heading, dist.bearing_deg);
-        node.left = match compass_offset_px(delta, 230.0, 55.0) {
+        let wanted = match compass_offset_px(delta, 230.0, 55.0) {
             Some(offset) => Val::Px(230.0 + offset),
             None => Val::Px(-100.0),
         };
+        if node.left != wanted {
+            node.left = wanted;
+        }
         let sector = sector_distance(&bearings, dist.bearing_deg, 22.5);
         *visibility = if sector.is_some() {
             Visibility::Visible

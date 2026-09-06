@@ -4,13 +4,13 @@
 
 use bevy::prelude::*;
 use bevy::ui::widget::ImageNode;
+use bevy::ui::BoxShadow;
 
 use super::assets::{
     HudAssets, centered_at, gradient_overlay, label, panel_base, panel_edge, panel_shadow,
 };
-use super::compass::{CompassDistance, CompassLetter, CompassTick};
 use super::interact::{BALLOON_DURATION, HudBalloon, HudPrompt};
-use super::minimap::{MinimapArrow, MinimapDot, MinimapRange};
+use super::minimap::{MinimapAnchor, MinimapArrow, MinimapDot, MinimapRange};
 use super::nametags::NameTag;
 use super::vitals::xp_label_text;
 use super::vitals::{HudHealthFill, HudHealthLabel, HudXpFill, HudXpLabel};
@@ -20,6 +20,18 @@ fn attr<'a>(attrs: &'a [(String, String)], name: &str) -> Option<&'a str> {
         .iter()
         .find(|(k, _)| k == name)
         .map(|(_, v)| v.as_str())
+}
+
+/// Sombra quente do tema Tinta Quente (#0c0a0988): cai para baixo e
+/// espalha — a mesma assinatura dos cards declarativos.
+fn warm_shadow() -> BoxShadow {
+    BoxShadow::new(
+        Color::srgba(0.047, 0.039, 0.035, 0.53),
+        Val::Px(0.0),
+        Val::Px(4.0),
+        Val::ZERO,
+        Val::Px(10.0),
+    )
 }
 
 /// Build every deferred HUD element. `tag` is the lowercased original tag.
@@ -38,13 +50,22 @@ pub fn spawn_hud(world: &mut World, tag: &str, attrs: &[(String, String)]) {
                     height: Val::Percent(100.0),
                     ..Default::default()
                 },
+                bevy::ui::FocusPolicy::Pass,
                 Name::new("hud:layer"),
             ));
-            action_slots(world, &hud);
+            // Os antigos slots de acção saíram daqui: a barra de habilidades
+            // é agora `<UiCooldown>` no HUD declarativo (`src/ui`), onde a
+            // veladura de recarga e o aro de "pronta" são folha de estilo.
             name_tag_pool(world, &hud);
             super::profiler_window::build_profiler_window(world, &hud);
         }
         "healthbar" => {
+            // Tag legada: mantém-se a funcionar (mundos antigos não partem),
+            // mas o caminho suportado é o HUD declarativo. Warn 1× por spawn
+            // (o spawn acontece uma vez por mundo, não por frame).
+            bevy::log::warn!(
+                "hud: tag legada `HealthBar` — usa `<UiBar bind=\"health\">` num UiRoot (HUD declarativo)"
+            );
             // Rounded gradient panel: glossy heart icon + green bar with
             // "100/100" inside.
             world
@@ -176,6 +197,9 @@ pub fn spawn_hud(world: &mut World, tag: &str, attrs: &[(String, String)]) {
                 });
         }
         "xpbar" => {
+            bevy::log::warn!(
+                "hud: tag legada `XpBar` — usa `<UiBar bind=\"xp\">` num UiRoot (HUD declarativo)"
+            );
             // Level badge (gold coin) + slim dark bar with a gold fill.
             world
                 .spawn((
@@ -266,201 +290,199 @@ pub fn spawn_hud(world: &mut World, tag: &str, attrs: &[(String, String)]) {
             let range = attr(attrs, "range")
                 .and_then(|v| v.parse::<f32>().ok())
                 .unwrap_or(60.0);
+            use super::minimap::{MINIMAP_H, MINIMAP_W, MinimapThreat};
+            // Canto inferior esquerdo, como em qualquer jogo de mundo aberto
+            // que se leia: o olhar do jogador vive no centro-baixo e o mapa é
+            // a única coisa permanente que ele consulta a meio da corrida.
+            //
+            // Rectângulo de cantos redondos (não disco): é o que deixa o
+            // `Overflow::clip` funcionar — e é o clip que permite o mapa
+            // DESLIZAR por baixo da moldura em vez de ser um brasão estático.
             world
                 .spawn((
                     Node {
                         position_type: PositionType::Absolute,
-                        top: Val::Px(14.0),
-                        right: Val::Px(14.0),
-                        width: Val::Px(148.0),
-                        height: Val::Px(148.0),
-                        border: UiRect::all(Val::Px(3.0)),
-                        border_radius: BorderRadius::MAX,
+                        bottom: Val::Px(18.0),
+                        left: Val::Px(18.0),
+                        width: Val::Px(MINIMAP_W),
+                        height: Val::Px(MINIMAP_H),
+                        border: UiRect::all(Val::Px(1.5)),
+                        border_radius: BorderRadius::all(Val::Px(7.0)),
+                        overflow: Overflow::clip(),
                         ..Default::default()
                     },
-                    BackgroundColor(Color::srgba(0.045, 0.07, 0.09, 0.9)),
-                    BorderColor::all(Color::srgb(0.82, 0.74, 0.45)),
+                    // Vidro umber: escuro o bastante para o painel se
+                    // distinguir do mundo, translúcido o bastante para não
+                    // ser um bloco morto no canto.
+                    BackgroundColor(Color::srgba(0.11, 0.075, 0.045, 0.78)),
+                    BorderColor::all(Color::srgba(0.957, 0.925, 0.847, 0.4)),
                     Name::new("hud:minimap"),
                     MinimapRange(range),
                     panel_shadow(),
                 ))
                 .with_children(|map| {
-                    // North indicator.
+                    // Rosa dos ventos: só o N ganha letra (é o Norte que se
+                    // procura num relance); os outros pontos são traços.
                     map.spawn((
-                        centered_at(Val::Percent(50.0), Val::Px(7.0)),
+                        centered_at(Val::Percent(50.0), Val::Px(3.0)),
                         UiTransform::from_translation(Val2::new(Val::Percent(-50.0), Val::ZERO)),
-                        label(&hud, "N", 15.0, Color::srgb(0.95, 0.78, 0.25)),
+                        label(&hud, "N", 11.0, Color::srgba(0.98, 0.88, 0.62, 0.95)),
                     ));
-                    // Player arrow: a real textured triangle rotated per frame.
-                    map.spawn((
-                        Node {
-                            position_type: PositionType::Absolute,
-                            left: Val::Percent(50.0),
-                            top: Val::Percent(50.0),
-                            margin: UiRect::px(-10.0, 0.0, -10.0, 0.0),
-                            width: Val::Px(20.0),
-                            height: Val::Px(20.0),
-                            ..Default::default()
-                        },
-                        ImageNode {
-                            image: hud.arrow.clone(),
-                            ..Default::default()
-                        },
-                        UiTransform::IDENTITY,
-                        MinimapArrow,
-                    ));
-                    // Reusable numbered quest dots (positioned per frame).
-                    for number in 1..=6 {
+                    for (left, top, w, h) in [
+                        (Val::Percent(97.0), Val::Percent(50.0), 6.0, 2.0),
+                        (Val::Percent(50.0), Val::Percent(97.0), 2.0, 6.0),
+                        (Val::Percent(3.0), Val::Percent(50.0), 6.0, 2.0),
+                    ] {
+                        map.spawn((
+                            Node {
+                                position_type: PositionType::Absolute,
+                                left,
+                                top,
+                                width: Val::Px(w),
+                                height: Val::Px(h),
+                                border_radius: BorderRadius::all(Val::Px(1.0)),
+                                ..Default::default()
+                            },
+                            UiTransform::from_translation(Val2::new(
+                                Val::Percent(-50.0),
+                                Val::Percent(-50.0),
+                            )),
+                            BackgroundColor(Color::srgba(0.957, 0.925, 0.847, 0.5)),
+                        ));
+                    }
+                    // Hostis: aros vermelhos, POR BAIXO dos pontos de quest
+                    // na ordem de spawn (desenham primeiro). Doze chegam para
+                    // qualquer enquadramento honesto.
+                    for _ in 0..12 {
                         map.spawn((
                             Node {
                                 position_type: PositionType::Absolute,
                                 left: Val::Percent(50.0),
                                 top: Val::Percent(50.0),
-                                margin: UiRect::px(-5.5, 0.0, -5.5, 0.0),
-                                width: Val::Px(11.0),
-                                height: Val::Px(11.0),
-                                justify_content: JustifyContent::Center,
-                                align_items: AlignItems::Center,
-                                border_radius: BorderRadius::all(Val::Px(5.5)),
+                                margin: UiRect::px(-3.5, 0.0, -3.5, 0.0),
+                                width: Val::Px(7.0),
+                                height: Val::Px(7.0),
+                                border_radius: BorderRadius::MAX,
                                 ..Default::default()
                             },
-                            BackgroundColor(Color::srgb(0.86, 0.65, 0.12)),
+                            BackgroundColor(Color::srgb(0.788, 0.294, 0.259)),
                             Outline::new(
                                 Val::Px(1.0),
                                 Val::ZERO,
-                                Color::srgba(0.0, 0.0, 0.0, 0.55),
+                                Color::srgba(0.07, 0.05, 0.03, 0.75),
                             ),
+                            UiTransform::IDENTITY,
                             Visibility::Hidden,
-                            MinimapDot,
-                        ))
-                        .with_children(|dot| {
-                            dot.spawn(label(
-                                &hud,
-                                number.to_string(),
-                                8.0,
-                                Color::srgb(0.3, 0.2, 0.02),
-                            ));
-                        });
+                            MinimapThreat,
+                        ));
                     }
-                });
-        }
-        "compass" => {
-            world
-                .spawn((
-                    Node {
-                        position_type: PositionType::Absolute,
-                        top: Val::Px(10.0),
-                        left: Val::Px(0.0),
-                        right: Val::Px(0.0),
-                        justify_content: JustifyContent::Center,
-                        ..Default::default()
-                    },
-                    Name::new("hud:compass"),
-                ))
-                .with_children(|wrap| {
-                    const DIRECTIONS: [(&str, f32); 8] = [
-                        ("N", 0.0),
-                        ("NE", 45.0),
-                        ("E", 90.0),
-                        ("SE", 135.0),
-                        ("S", 180.0),
-                        ("SW", 225.0),
-                        ("W", 270.0),
-                        ("NW", 315.0),
-                    ];
-                    // Letters live INSIDE the strip so their absolute left is
-                    // relative to it (wrap is full-width, the strip is not).
-                    wrap.spawn((
-                        Node {
-                            width: Val::Px(460.0),
-                            height: Val::Px(34.0),
-                            border_radius: BorderRadius::all(Val::Px(17.0)),
-                            ..Default::default()
-                        },
-                        BackgroundColor(Color::srgba(0.03, 0.03, 0.025, 0.62)),
-                        ImageNode {
-                            image: hud.panel_gradient.clone(),
-                            color: Color::srgba(0.10, 0.095, 0.085, 0.55),
-                            ..Default::default()
-                        },
-                        BorderColor::all(Color::srgba(1.0, 0.96, 0.85, 0.12)),
-                        panel_shadow(),
-                    ))
-                    .with_children(|strip| {
-                        // Center caret (static): the heading marker.
-                        strip.spawn((
+                    // Quest markers: losango dourado com "!" de tinta
+                    // (gerado em `assets.rs`) — o vocabulário universal de
+                    // "objectivo aqui", legível sobre terreno claro e
+                    // escuro; a contagem vive no tracker.
+                    for _ in 1..=6 {
+                        map.spawn((
                             Node {
                                 position_type: PositionType::Absolute,
                                 left: Val::Percent(50.0),
-                                top: Val::Px(2.0),
-                                width: Val::Px(2.0),
-                                height: Val::Px(8.0),
-                                border_radius: BorderRadius::all(Val::Px(1.0)),
+                                top: Val::Percent(50.0),
+                                margin: UiRect::px(-6.0, 0.0, -6.0, 0.0),
+                                width: Val::Px(12.0),
+                                height: Val::Px(12.0),
                                 ..Default::default()
                             },
-                            BackgroundColor(Color::srgb(0.95, 0.78, 0.25)),
+                            ImageNode {
+                                image: hud.quest_marker.clone(),
+                                ..Default::default()
+                            },
+                            UiTransform::IDENTITY,
+                            Visibility::Hidden,
+                            MinimapDot,
                         ));
-                        for (name, bearing) in DIRECTIONS {
-                            let color = if name == "N" {
-                                Color::srgb(0.95, 0.78, 0.25)
-                            } else {
-                                Color::srgb(0.92, 0.92, 0.88)
-                            };
-                            strip.spawn((
-                                centered_at(Val::Px(230.0), Val::Px(4.0)),
-                                UiTransform::from_translation(Val2::new(
-                                    Val::Percent(-50.0),
-                                    Val::ZERO,
-                                )),
-                                label(&hud, name, 13.0, color),
-                                CompassLetter {
-                                    bearing_deg: bearing,
-                                },
-                            ));
-                            strip.spawn((
-                                centered_at(Val::Px(230.0), Val::Px(19.0)),
-                                UiTransform::from_translation(Val2::new(
-                                    Val::Percent(-50.0),
-                                    Val::ZERO,
-                                )),
-                                label(&hud, "", 9.0, Color::srgba(1.0, 0.92, 0.7, 0.85)),
-                                CompassDistance {
-                                    bearing_deg: bearing,
-                                },
-                            ));
-                        }
-                        // Tick marks every 22.5°.
-                        for i in 0..16 {
-                            let bearing = i as f32 * 22.5;
-                            let tall = i % 2 == 0;
-                            strip.spawn((
-                                Node {
-                                    position_type: PositionType::Absolute,
-                                    left: Val::Px(230.0),
-                                    top: Val::Px(0.0),
-                                    width: Val::Px(1.5),
-                                    height: Val::Px(if tall { 5.0 } else { 3.0 }),
-                                    ..Default::default()
-                                },
-                                BackgroundColor(Color::srgba(
-                                    1.0,
-                                    1.0,
-                                    0.95,
-                                    if tall { 0.4 } else { 0.22 },
-                                )),
-                                CompassTick {
-                                    bearing_deg: bearing,
-                                },
-                            ));
-                        }
+                    }
+                    // Âncora do marco assinado (A Nota): pin de mapa dourado
+                    // — par de vocabulário com o "!" ("quest = exclamação,
+                    // destino = pin"), ambos ícones e não pontos crus.
+                    map.spawn((
+                        Node {
+                            position_type: PositionType::Absolute,
+                            left: Val::Percent(50.0),
+                            top: Val::Percent(50.0),
+                            margin: UiRect::px(-6.0, 0.0, -6.0, 0.0),
+                            width: Val::Px(12.0),
+                            height: Val::Px(12.0),
+                            ..Default::default()
+                        },
+                        ImageNode {
+                            image: hud.map_pin.clone(),
+                            ..Default::default()
+                        },
+                        UiTransform::IDENTITY,
+                        Visibility::Hidden,
+                        MinimapAnchor,
+                    ));
+                    // Player arrow: puck escuro com o triângulo por cima —
+                    // desenhado POR ÚLTIMO, portanto sempre por cima dos
+                    // blips. Fica sempre no centro; é o mapa que desliza.
+                    map.spawn((
+                        Node {
+                            position_type: PositionType::Absolute,
+                            left: Val::Percent(50.0),
+                            top: Val::Percent(50.0),
+                            margin: UiRect::px(-11.0, 0.0, -11.0, 0.0),
+                            width: Val::Px(22.0),
+                            height: Val::Px(22.0),
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
+                            border: UiRect::all(Val::Px(1.5)),
+                            border_radius: BorderRadius::MAX,
+                            ..Default::default()
+                        },
+                        BackgroundColor(Color::srgba(0.07, 0.05, 0.03, 0.86)),
+                        BorderColor::all(Color::srgba(0.957, 0.925, 0.847, 0.75)),
+                        UiTransform::IDENTITY,
+                        MinimapArrow,
+                    ))
+                    .with_children(|puck| {
+                        puck.spawn((
+                            Node {
+                                width: Val::Px(15.0),
+                                height: Val::Px(15.0),
+                                ..Default::default()
+                            },
+                            ImageNode {
+                                image: hud.arrow.clone(),
+                                ..Default::default()
+                            },
+                        ));
                     });
                 });
+        }
+        "compass" => {
+            // A régua de compasso saiu do HUD.
+            //
+            // Ocupava 460 px no topo do ecrã — a faixa de céu que mais vale a
+            // pena ver — para dizer o que a rosa dos ventos do minimapa já
+            // diz, e as distâncias por sector duplicavam a seta de waypoint.
+            // A tag continua a ser aceite (mundos antigos não partem); só não
+            // desenha nada. Os helpers de `hud::compass` ficam: a matemática
+            // de rumo é testada e serve o `WaypointArrow`.
+            let _ = attrs;
         }
         "interactionprompt" => {
             let key = attr(attrs, "key").unwrap_or("E").to_string();
             let range = attr(attrs, "range")
                 .and_then(|v| v.parse::<f32>().ok())
                 .unwrap_or(3.5);
+            // Tema TINTA QUENTE (valores equivalentes ao theme.css/hud.css,
+            // que a engine não lê aqui): card stone-900 translúcido, borda
+            // dourada da casa, texto papel, keycap âmbar, sombra quente.
+            // Cinzel (HudAssets) para o selo ler como jogo, não como debug.
+            let card = Color::srgba(0.110, 0.098, 0.090, 0.92); // #1c1917eb
+            let gold_edge = Color::srgba(0.718, 0.643, 0.467, 0.44); // #b7a47770
+            let paper = Color::srgb(0.933, 0.914, 0.863); // #eee9dc
+            let keycap = Color::srgb(0.867, 0.780, 0.596); // #ddc798
+            let ink = Color::srgb(0.110, 0.098, 0.090); // #1c1917
             world
                 .spawn((
                     Node {
@@ -477,24 +499,48 @@ pub fn spawn_hud(world: &mut World, tag: &str, attrs: &[(String, String)]) {
                 .with_children(|wrap| {
                     wrap.spawn((
                         Node {
-                            padding: UiRect::axes(Val::Px(14.0), Val::Px(7.0)),
-                            border_radius: BorderRadius::all(Val::Px(14.0)),
+                            flex_direction: FlexDirection::Row,
+                            align_items: AlignItems::Center,
+                            column_gap: Val::Px(9.0),
+                            padding: UiRect::axes(Val::Px(12.0), Val::Px(7.0)),
+                            border: UiRect::all(Val::Px(1.0)),
+                            border_radius: BorderRadius::all(Val::Px(9.0)),
                             ..Default::default()
                         },
-                        panel_base(),
-                        panel_shadow(),
-                        Text::new(format!("[{key}] Interagir")),
-                        TextColor(Color::srgb(1.0, 0.95, 0.8)),
-                        TextFont {
-                            font: hud.font.clone().into(),
-                            font_size: 16.0.into(),
-                            ..Default::default()
-                        },
+                        BackgroundColor(card),
+                        BorderColor::all(gold_edge),
+                        warm_shadow(),
                         HudPrompt { range },
-                    ));
+                    ))
+                    .with_children(|card| {
+                        card.spawn((
+                            Node {
+                                padding: UiRect::axes(Val::Px(7.0), Val::Px(2.0)),
+                                border_radius: BorderRadius::all(Val::Px(4.0)),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                ..Default::default()
+                            },
+                            BackgroundColor(keycap),
+                            Text::new(key),
+                            TextColor(ink),
+                            TextFont {
+                                font: hud.font.clone().into(),
+                                font_size: 15.0.into(),
+                                ..Default::default()
+                            },
+                        ));
+                        card.spawn(label(&hud, "Interagir", 15.0, paper));
+                    });
                 });
         }
         "dialogueballoon" => {
+            // Mesma voz do prompt: tinta escura translúcida + fio dourado +
+            // papel. O TEXTO tem de ficar no PRIMEIRO filho (o fluxo de
+            // diálogo e o countdown escrevem nele directamente).
+            let card = Color::srgba(0.110, 0.098, 0.090, 0.94); // #1c1917f0
+            let gold_edge = Color::srgba(0.718, 0.643, 0.467, 0.50);
+            let paper = Color::srgb(0.933, 0.914, 0.863); // #eee9dc
             world
                 .spawn((
                     Node {
@@ -515,14 +561,16 @@ pub fn spawn_hud(world: &mut World, tag: &str, attrs: &[(String, String)]) {
                     wrap.spawn((
                         Node {
                             max_width: Val::Px(520.0),
-                            padding: UiRect::axes(Val::Px(16.0), Val::Px(9.0)),
-                            border_radius: BorderRadius::all(Val::Px(12.0)),
+                            padding: UiRect::axes(Val::Px(16.0), Val::Px(10.0)),
+                            border: UiRect::all(Val::Px(1.0)),
+                            border_radius: BorderRadius::all(Val::Px(9.0)),
                             ..Default::default()
                         },
-                        BackgroundColor(Color::srgba(0.97, 0.94, 0.86, 0.95)),
-                        BorderColor::all(Color::srgba(0.4, 0.3, 0.15, 0.5)),
+                        BackgroundColor(card),
+                        BorderColor::all(gold_edge),
+                        warm_shadow(),
                         Text::new("…"),
-                        TextColor(Color::srgb(0.15, 0.12, 0.08)),
+                        TextColor(paper),
                         TextFont {
                             font: hud.font.clone().into(),
                             font_size: 15.0.into(),
@@ -532,8 +580,11 @@ pub fn spawn_hud(world: &mut World, tag: &str, attrs: &[(String, String)]) {
                 });
         }
         "tabbedmodal" => {
-            // Menu com abas (Q): Controles (a antiga help bar) + Sobre.
-            super::menu::build_menu(world, &hud);
+            // Menu com abas: Controles (a antiga help bar) + Sobre. A tecla
+            // de toggle vem do attr autoral `key` (Q fica para o modal da
+            // engine — cai em F1).
+            let key = super::menu::toggle_key_from_attr(attr(attrs, "key"));
+            super::menu::build_menu(world, &hud, key);
         }
         other => {
             bevy::log::warn!("hud: unhandled element `{other}` — skipped");
@@ -674,131 +725,9 @@ pub fn spawn_resource_chip(world: &mut World, index: usize, resource: &str) {
 
 /// Bottom-left action slots (C/E/R): dark slots with colored glyphs and
 /// keycap letters, styled after the original buttons.
-fn action_slots(world: &mut World, hud: &HudAssets) {
-    const SLOTS: [(&str, Color); 3] = [
-        ("C", Color::srgb(0.16, 0.52, 0.92)),
-        ("E", Color::srgb(0.16, 0.66, 0.28)),
-        ("R", Color::srgb(0.92, 0.45, 0.1)),
-    ];
-    world
-        .spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                bottom: Val::Px(12.0),
-                left: Val::Px(12.0),
-                column_gap: Val::Px(10.0),
-                ..Default::default()
-            },
-            Name::new("hud:slots"),
-        ))
-        .with_children(|row| {
-            for (key, color) in SLOTS {
-                row.spawn((
-                    Node {
-                        width: Val::Px(46.0),
-                        height: Val::Px(46.0),
-                        justify_content: JustifyContent::Center,
-                        align_items: AlignItems::Center,
-                        border_radius: BorderRadius::all(Val::Px(11.0)),
-                        ..Default::default()
-                    },
-                    panel_base(),
-                    panel_shadow(),
-                    BorderColor::all(Color::srgba(1.0, 0.96, 0.85, 0.12)),
-                ))
-                .with_children(|slot| {
-                    // Colored icon square with a dark inner glyph.
-                    slot.spawn((
-                        Node {
-                            width: Val::Px(26.0),
-                            height: Val::Px(26.0),
-                            justify_content: JustifyContent::Center,
-                            align_items: AlignItems::Center,
-                            border_radius: BorderRadius::all(Val::Px(7.0)),
-                            ..Default::default()
-                        },
-                        BackgroundColor(color),
-                        Outline::new(Val::Px(1.5), Val::ZERO, Color::srgba(0.0, 0.0, 0.0, 0.45)),
-                    ))
-                    .with_children(|icon| match key {
-                        // C: compass ring.
-                        "C" => {
-                            icon.spawn((
-                                Node {
-                                    width: Val::Px(14.0),
-                                    height: Val::Px(14.0),
-                                    border_radius: BorderRadius::all(Val::Px(7.0)),
-                                    border: UiRect::all(Val::Px(3.0)),
-                                    ..Default::default()
-                                },
-                                BorderColor::all(Color::srgba(0.02, 0.1, 0.22, 0.9)),
-                            ));
-                        }
-                        // E: sword blade + guard.
-                        "E" => {
-                            icon.spawn((
-                                Node {
-                                    position_type: PositionType::Absolute,
-                                    left: Val::Px(11.0),
-                                    top: Val::Px(3.0),
-                                    width: Val::Px(4.0),
-                                    height: Val::Px(16.0),
-                                    border_radius: BorderRadius::px(2.0, 2.0, 0.0, 0.0),
-                                    ..Default::default()
-                                },
-                                UiTransform::from_rotation(Rot2::radians(
-                                    std::f32::consts::FRAC_PI_4,
-                                )),
-                                BackgroundColor(Color::srgba(0.03, 0.14, 0.05, 0.92)),
-                            ));
-                            icon.spawn((
-                                Node {
-                                    position_type: PositionType::Absolute,
-                                    left: Val::Px(6.0),
-                                    top: Val::Px(15.0),
-                                    width: Val::Px(14.0),
-                                    height: Val::Px(3.0),
-                                    border_radius: BorderRadius::all(Val::Px(1.5)),
-                                    ..Default::default()
-                                },
-                                BackgroundColor(Color::srgba(0.03, 0.14, 0.05, 0.92)),
-                            ));
-                        }
-                        // R: burst diamond.
-                        _ => {
-                            icon.spawn((
-                                Node {
-                                    width: Val::Px(13.0),
-                                    height: Val::Px(13.0),
-                                    ..Default::default()
-                                },
-                                UiTransform::from_rotation(Rot2::radians(
-                                    std::f32::consts::FRAC_PI_4,
-                                )),
-                                BackgroundColor(Color::srgba(0.2, 0.08, 0.01, 0.92)),
-                            ));
-                        }
-                    });
-                    // Keycap letter, bottom-right.
-                    slot.spawn((
-                        Node {
-                            position_type: PositionType::Absolute,
-                            right: Val::Px(2.0),
-                            bottom: Val::Px(1.0),
-                            padding: UiRect::axes(Val::Px(4.0), Val::Px(0.0)),
-                            border_radius: BorderRadius::all(Val::Px(5.0)),
-                            ..Default::default()
-                        },
-                        BackgroundColor(Color::srgba(0.04, 0.04, 0.04, 0.75)),
-                        label(hud, key, 10.0, Color::srgba(1.0, 1.0, 1.0, 0.95)),
-                    ));
-                });
-            }
-        });
-}
-
 /// Pooled world-anchored NPC name tags: reassigned every frame by the
-/// nametags module.
+/// nametags module. A pílula carrega o texto (e cor/borda por frame); o
+/// filho é o "!" dourado de quest (o mesmo marcador do minimapa).
 fn name_tag_pool(world: &mut World, hud: &HudAssets) {
     for _ in 0..super::nametags::NAME_TAG_POOL {
         world
@@ -816,14 +745,33 @@ fn name_tag_pool(world: &mut World, hud: &HudAssets) {
             .with_children(|tag| {
                 tag.spawn((
                     Node {
+                        flex_direction: FlexDirection::Row,
+                        align_items: AlignItems::Center,
+                        column_gap: Val::Px(5.0),
                         padding: UiRect::axes(Val::Px(10.0), Val::Px(5.0)),
                         border_radius: BorderRadius::all(Val::Px(11.0)),
                         ..Default::default()
                     },
                     BackgroundColor(Color::srgba(0.02, 0.02, 0.02, 0.78)),
                     BorderColor::all(Color::srgba(1.0, 0.96, 0.85, 0.14)),
+                    super::nametags::NameTagPill,
                     label(hud, "", 13.0, Color::srgb(0.96, 0.96, 0.92)),
-                ));
+                ))
+                .with_children(|pill| {
+                    pill.spawn((
+                        Node {
+                            width: Val::Px(12.0),
+                            height: Val::Px(12.0),
+                            ..Default::default()
+                        },
+                        ImageNode {
+                            image: hud.quest_marker.clone(),
+                            ..Default::default()
+                        },
+                        Visibility::Hidden,
+                        super::nametags::NameTagBang,
+                    ));
+                });
             });
     }
 }

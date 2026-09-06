@@ -1,8 +1,10 @@
 //! UI & menus (loop 5 do port simple-rpg) — o análogo nativo do
 //! TabbedModal + loja do mercador + toasts + loading screen do VibeGame:
 //!
-//! - **Toasts visuais**: pilha no topo-centro (5 máx.), fade e despawn —
-//!   continuam a ir para o log da bridge.
+//! - **Toasts visuais**: uma fila única em baixo ao centro (3 máx.), com
+//!   fade de entrada e de saída, sem sobreposição — continuam a ir para o log
+//!   da bridge. Avisos de zona são filtrados: esses têm o cartão de
+//!   descoberta do HUD declarativo (`zone.name`), que é outra hierarquia.
 //! - **Modal [Q]** com tabs reais: Quests (ativas/feitas do [`QuestLog`]),
 //!   Inventário (vault) e Ajuda (controlos + opções). ←/→ ou TAB troca de
 //!   tab, [Q]/Esc fecha.
@@ -19,12 +21,50 @@ use bevy::prelude::*;
 use crate::economy::Vault;
 use crate::luau::ScriptToast;
 use crate::player::Player;
-use crate::quests::QuestLog;
 
-/// Toasts visíveis em simultâneo.
-pub const TOAST_CAP: usize = 5;
-/// Vida de um toast (s).
-pub const TOAST_LIFETIME: f32 = 3.0;
+/// Toasts visíveis em simultâneo. Três linhas é o que se lê de relance —
+/// acima disso a fila deixa de ser informação e passa a ser ruído.
+pub const TOAST_CAP: usize = 3;
+/// Vida de um toast (s), fades incluídos.
+pub const TOAST_LIFETIME: f32 = 3.2;
+/// Fade de entrada (s).
+pub const TOAST_FADE_IN: f32 = 0.22;
+/// Fade de saída (s) — mais lento do que a entrada, para a linha sair de
+/// cena em vez de desaparecer.
+pub const TOAST_FADE_OUT: f32 = 0.55;
+
+/// Opacidade do fundo de um toast em regime.
+const TOAST_BG_ALPHA: f32 = 0.82;
+
+/// Alpha de um toast com `remaining` segundos de vida.
+///
+/// Puro para os testes: o que importa é que a curva começa e acaba em zero e
+/// que o patamar do meio é opaco.
+pub fn toast_alpha(remaining: f32) -> f32 {
+    if remaining <= 0.0 {
+        return 0.0;
+    }
+    let elapsed = (TOAST_LIFETIME - remaining).max(0.0);
+    let fade_in = if TOAST_FADE_IN > 0.0 {
+        (elapsed / TOAST_FADE_IN).min(1.0)
+    } else {
+        1.0
+    };
+    let fade_out = if TOAST_FADE_OUT > 0.0 {
+        (remaining / TOAST_FADE_OUT).min(1.0)
+    } else {
+        1.0
+    };
+    fade_in.min(fade_out).clamp(0.0, 1.0)
+}
+
+/// Um aviso de zona não é um toast: tem cartão próprio no HUD (`zone.name`),
+/// com outra tipografia e outro tempo. Deixá-lo também na fila era a mesma
+/// informação duas vezes no ecrã, uma por cima da outra.
+pub fn is_zone_notice(text: &str) -> bool {
+    let trimmed = text.trim();
+    trimmed.starts_with("Entraste em:") || trimmed == "De volta ao vale."
+}
 /// Alcance da loja ao mercador (m).
 pub const SHOP_RANGE_M: f32 = 5.0;
 
@@ -37,6 +77,18 @@ pub fn shop_catalog() -> Vec<(&'static str, i32, &'static str, u32)> {
         ("Comprar bomba", 40, "bomb", 1),
         ("Vender madeira", -3, "wood", 1),
         ("Vender pedra", -5, "stone", 1),
+        // Recompensas de quest sem consumidor (iron_axe, wolf_pelt, … eram um
+        // dead-end no inventário): SÓ venda, preço por raridade acima do
+        // feito bruto (madeira 3 g / pedra 5 g). Não à compra — o sink de
+        // loja grande fica para uma decisão de design à parte.
+        ("Vender pele de lobo", -15, "wolf_pelt", 1),
+        ("Vender fibra de cacto", -15, "cactus_fiber", 1),
+        ("Vender seda", -20, "silk_cloth", 1),
+        ("Vender poção de musgo", -20, "moss_potion", 1),
+        ("Vender machado de ferro", -30, "iron_axe", 1),
+        ("Vender amuleto da natureza", -30, "nature_amulet", 1),
+        ("Vender vara abençoada", -40, "blessed_rod", 1),
+        ("Vender relíquia ancestral", -50, "ancient_relic", 1),
     ]
 }
 
@@ -53,10 +105,6 @@ impl MenusOpen {
     }
 }
 
-/// Tab do modal atual (0=Quests, 1=Inventário, 2=Ajuda).
-#[derive(Debug, Clone, Copy, Resource, Default, PartialEq)]
-pub struct ModalTab(pub usize);
-
 pub const TAB_COUNT: usize = 4;
 
 /// Próxima tab (cíclica); pura para os testes.
@@ -68,39 +116,32 @@ pub fn next_tab(current: usize, delta: i32) -> usize {
 // ── componentes ─────────────────────────────────────────────────────────
 
 #[derive(Component)]
-struct ModalRoot;
-
-#[derive(Component)]
-struct ModalContent;
-
-#[derive(Component)]
-struct ShopRoot;
-
-#[derive(Component)]
-struct ShopContent;
-
-#[derive(Component)]
 struct LoadingScreen;
 
 #[derive(Component)]
 struct ToastPill {
     timer: f32,
+    text: String,
 }
 
 #[derive(Component)]
 struct ToastContainer;
 
-/// Empilha o container de toasts no topo-centro (uma única vez).
+/// Empilha o container de toasts em baixo ao centro (uma única vez).
+///
+/// `ColumnReverse` ancorado ao rodapé: o toast novo nasce em baixo e empurra
+/// os anteriores para cima, que é como uma fila se lê. A pilha no topo-centro
+/// disputava o mesmo espaço do aviso de zona e das barras do alvo.
 fn spawn_toast_container(mut commands: Commands) {
     commands.spawn((
         Node {
             position_type: PositionType::Absolute,
-            top: Val::Px(44.0),
+            bottom: Val::Px(104.0),
             left: Val::Px(0.0),
             right: Val::Px(0.0),
-            flex_direction: FlexDirection::Column,
+            flex_direction: FlexDirection::ColumnReverse,
             align_items: AlignItems::Center,
-            row_gap: Val::Px(4.0),
+            row_gap: Val::Px(5.0),
             ..Default::default()
         },
         Name::new("ui:toasts"),
@@ -118,16 +159,20 @@ pub struct MenusPlugin;
 impl Plugin for MenusPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MenusOpen>()
-            .init_resource::<ModalTab>()
             .add_message::<ToastSpawned>()
+            // O modal [Q] e a loja passaram para o sistema declarativo
+            // (`src/ui` + `examples/simple-rpg/world/menu.xml`): tabs, listas
+            // e ações vivem agora em XML/CSS/Luau. Ficam aqui os toasts, o
+            // banner da fogueira e o ecrã de carregamento — nenhum deles é
+            // conteúdo autoral. `MenusOpen` continua a ser a autoridade sobre
+            // "um menu roubou o input"; `mirror_ui_modals_open` mantém-no
+            // sincronizado com os modais declarativos.
             .add_systems(
                 Startup,
                 (
                     spawn_loading_screen,
                     spawn_campfire_banner,
                     spawn_toast_container,
-                    spawn_modal,
-                    spawn_shop,
                 ),
             )
             .add_systems(
@@ -135,13 +180,26 @@ impl Plugin for MenusPlugin {
                 (
                     toast_display_system,
                     toast_fade_system,
-                    modal_toggle_system,
-                    modal_content_system,
-                    shop_system,
+                    mirror_ui_modals_open,
                     campfire_banner_system,
                     loading_hide_system,
                 ),
             );
+    }
+}
+
+/// Espelha os modais declarativos em [`MenusOpen`], que é o que a hotbar, o
+/// movimento e a câmara consultam para saber se o input lhes pertence. O
+/// `main.rs` pinna-o DEPOIS de `ui::modal::drive_ui_modals` (que escreve
+/// `UiModalsOpen` em `UiSet::Script`) — sem ordem, o espelho lia o valor do
+/// frame anterior e o input viajava dessincronizado.
+pub fn mirror_ui_modals_open(
+    declarative: Res<crate::ui::UiModalsOpen>,
+    mut open: ResMut<MenusOpen>,
+) {
+    let any = declarative.any();
+    if open.modal != any {
+        open.modal = any;
     }
 }
 
@@ -153,14 +211,18 @@ pub struct ToastSpawned {
 
 // ── toasts ──────────────────────────────────────────────────────────────
 
-/// Lê `ScriptToast`, espelha no log e spawna a pílula visual (cap
-/// [`TOAST_CAP`]: a mais antiga é removida).
+/// Lê `ScriptToast`, espelha no log e spawna a pílula visual.
+///
+/// Regras da fila: cap [`TOAST_CAP`], sem duplicados consecutivos (repetir a
+/// mesma linha renova o tempo em vez de a empilhar), e os avisos de zona são
+/// desviados para o cartão de descoberta.
 fn toast_display_system(
     mut toasts: MessageReader<ScriptToast>,
     mut spawned: MessageWriter<ToastSpawned>,
     mut sfx: MessageWriter<crate::ambient::SfxEvent>,
-    active: Query<(), With<ToastPill>>,
+    mut active: Query<(Entity, &mut ToastPill)>,
     container: Query<Entity, With<ToastContainer>>,
+    hud: Option<Res<crate::hud::HudAssets>>,
     mut commands: Commands,
 ) {
     for toast in toasts.read() {
@@ -168,109 +230,125 @@ fn toast_display_system(
         spawned.write(ToastSpawned {
             text: toast.0.clone(),
         });
+        if is_zone_notice(&toast.0) {
+            // O cartão de descoberta trata deste; o SFX de UI também não se
+            // aplica (a entrada em bioma tem a sua própria camada sonora).
+            continue;
+        }
         sfx.write(crate::ambient::SfxEvent {
             clip: crate::ambient::SfxClip::Ui,
             position: None,
         });
+        // Mesma linha outra vez (colher três bagas seguidas): renova, não
+        // empilha — três cópias idênticas não dizem mais do que uma.
+        if let Some((_, mut existing)) = active
+            .iter_mut()
+            .find(|(_, pill)| pill.text == toast.0 && pill.timer > TOAST_FADE_OUT)
+        {
+            existing.timer = TOAST_LIFETIME;
+            continue;
+        }
+        // Fila cheia: o mais antigo sai já (fade curto), para o novo caber
+        // sem a pilha crescer para fora do enquadramento.
         if active.iter().count() >= TOAST_CAP {
-            continue; // pilha cheia: o mais antigo ainda está a desvanecer
+            if let Some((oldest, _)) = active
+                .iter()
+                .min_by(|a, b| {
+                    a.1.timer
+                        .partial_cmp(&b.1.timer)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .map(|(entity, pill)| (entity, pill.timer))
+            {
+                if let Ok((_, mut pill)) = active.get_mut(oldest) {
+                    pill.timer = pill.timer.min(TOAST_FADE_OUT * 0.5);
+                }
+            }
         }
         let Ok(container) = container.single() else {
             continue;
         };
+        let font = hud.as_deref().map(|assets| assets.font.clone());
         commands.entity(container).with_children(|wrap_parent| {
+            // ToastPill vive no NODE exterior (não no Text): o fade
+            // despawna-o com o filho — antes sobrava uma caixa vazia
+            // permanente por toast.
             wrap_parent
                 .spawn((
                     Node {
-                        padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
-                        border_radius: BorderRadius::all(Val::Px(10.0)),
+                        padding: UiRect::axes(Val::Px(13.0), Val::Px(6.0)),
+                        border: UiRect::all(Val::Px(1.0)),
+                        border_radius: BorderRadius::all(Val::Px(11.0)),
                         ..Default::default()
                     },
-                    BackgroundColor(Color::srgba(0.10, 0.09, 0.07, 0.92)),
+                    BackgroundColor(Color::srgba(0.051, 0.043, 0.035, 0.0)),
+                    BorderColor::all(Color::srgba(0.847, 0.706, 0.416, 0.0)),
                     Name::new("ui:toast"),
+                    ToastPill {
+                        timer: TOAST_LIFETIME,
+                        text: toast.0.clone(),
+                    },
                 ))
                 .with_children(|pill| {
+                    let mut text_font = TextFont::from_font_size(13.0);
+                    if let Some(font) = font {
+                        text_font.font = bevy::text::FontSource::Handle(font);
+                    }
                     pill.spawn((
                         Text::new(toast.0.clone()),
-                        TextColor(Color::srgb(0.96, 0.93, 0.85)),
-                        TextFont::from_font_size(14.0),
-                        ToastPill {
-                            timer: TOAST_LIFETIME,
+                        TextColor(Color::srgba(0.96, 0.93, 0.85, 0.0)),
+                        text_font,
+                        // O HUD tem de se ler sobre deserto claro e floresta
+                        // escura: a sombra é o contorno barato que garante isso.
+                        bevy::ui::widget::TextShadow {
+                            offset: Vec2::splat(1.0),
+                            color: Color::srgba(0.0, 0.0, 0.0, 0.0),
                         },
+                        ToastLabel,
                     ));
                 });
         });
     }
 }
 
-/// Vida e fade dos toasts.
+/// O texto dentro de uma pílula (o fade tem de o alcançar).
+#[derive(Component)]
+struct ToastLabel;
+
+/// Vida e fade (entrada e saída) dos toasts.
 fn toast_fade_system(
-    mut pills: Query<(Entity, &mut ToastPill, &mut TextColor)>,
+    mut pills: Query<(
+        Entity,
+        &mut ToastPill,
+        &mut BackgroundColor,
+        &mut BorderColor,
+        &Children,
+    )>,
+    mut labels: Query<(&mut TextColor, &mut bevy::ui::widget::TextShadow), With<ToastLabel>>,
     time: Res<Time>,
     mut commands: Commands,
 ) {
     let dt = time.delta_secs();
-    for (entity, mut pill, mut color) in &mut pills {
+    for (entity, mut pill, mut bg, mut border, children) in &mut pills {
         pill.timer -= dt;
         if pill.timer <= 0.0 {
+            // despawn recursivo leva o Text filho embora.
             commands.entity(entity).despawn();
             continue;
         }
-        let fade = (pill.timer / 0.6).min(1.0);
-        color.0.set_alpha(fade);
+        let alpha = toast_alpha(pill.timer);
+        bg.0.set_alpha(TOAST_BG_ALPHA * alpha);
+        *border = BorderColor::all(Color::srgba(0.847, 0.706, 0.416, 0.22 * alpha));
+        for child in children.iter() {
+            if let Ok((mut color, mut shadow)) = labels.get_mut(child) {
+                color.0.set_alpha(alpha);
+                shadow.color = Color::srgba(0.0, 0.0, 0.0, 0.7 * alpha);
+            }
+        }
     }
 }
 
 // ── modal [Q] ───────────────────────────────────────────────────────────
-
-fn spawn_modal(mut commands: Commands) {
-    commands
-        .spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                top: Val::Px(0.0),
-                left: Val::Px(0.0),
-                right: Val::Px(0.0),
-                bottom: Val::Px(0.0),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                ..Default::default()
-            },
-            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.45)),
-            Visibility::Hidden,
-            Name::new("ui:modal"),
-            ModalRoot,
-        ))
-        .with_children(|root| {
-            root.spawn((
-                Node {
-                    width: Val::Px(560.0),
-                    height: Val::Px(380.0),
-                    padding: UiRect::all(Val::Px(20.0)),
-                    flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(10.0),
-                    border_radius: BorderRadius::all(Val::Px(14.0)),
-                    ..Default::default()
-                },
-                BackgroundColor(Color::srgba(0.08, 0.06, 0.04, 0.96)),
-                BorderColor::all(Color::srgb(0.85, 0.75, 0.45)),
-                Outline::new(Val::Px(2.0), Val::ZERO, Color::srgb(0.85, 0.75, 0.45)),
-            ))
-            .with_children(|panel| {
-                panel.spawn((
-                    Text::new("DISCORDIA"),
-                    TextColor(Color::srgb(0.95, 0.85, 0.6)),
-                    TextFont::from_font_size(22.0),
-                ));
-                panel.spawn((
-                    Text::new(tab_header(0)),
-                    TextColor(Color::srgb(0.85, 0.8, 0.7)),
-                    TextFont::from_font_size(14.0),
-                    ModalContent,
-                ));
-            });
-        });
-}
 
 /// Cabeçalho das tabs (marcador > na ativa).
 pub fn tab_header(active: usize) -> String {
@@ -290,11 +368,7 @@ pub fn tab_header(active: usize) -> String {
 }
 
 /// Corpo da tab Opções: volumes ao vivo, linhas com seleção e save/load.
-pub fn options_body(
-    selected: usize,
-    volumes: (f32, f32, f32),
-    controls: &str,
-) -> String {
+pub fn options_body(selected: usize, volumes: (f32, f32, f32), controls: &str) -> String {
     let pct = |v: f32| format!("{}%", (v * 100.0).round() as i32);
     let row = |i: usize, label: &str, value: &str| {
         let marker = if i == selected { ">" } else { " " };
@@ -326,115 +400,8 @@ pub fn tab_body(tab: usize, quest_lines: &[String], vault_lines: &[String]) -> S
         _ => "Controlos:\n\
               WASD mover · Espaço saltar · Shift correr\n\
               [J] atacar/colher · [E] falar/interagir · [K] loja\n\
-              [Q] este menu · [F3] profiler".into(),
-    }
-}
-
-/// Toggle [Q]/Esc + navegação de tabs; reescreve o corpo quando aberto.
-#[allow(clippy::type_complexity)]
-fn modal_toggle_system(
-    keys: Res<ButtonInput<KeyCode>>,
-    mut open: ResMut<MenusOpen>,
-    mut tab: ResMut<ModalTab>,
-    mut roots: Query<&mut Visibility, With<ModalRoot>>,
-) {
-    if keys.just_pressed(KeyCode::KeyQ) {
-        open.modal = !open.modal;
-    }
-    if open.modal && keys.just_pressed(KeyCode::Escape) {
-        open.modal = false;
-    }
-    if open.modal {
-        let on_options = tab.0 + 1 == TAB_COUNT;
-        if keys.just_pressed(KeyCode::Tab) {
-            tab.0 = next_tab(tab.0, 1);
-        }
-        if !on_options {
-            if keys.just_pressed(KeyCode::ArrowRight) {
-                tab.0 = next_tab(tab.0, 1);
-            }
-            if keys.just_pressed(KeyCode::ArrowLeft) {
-                tab.0 = next_tab(tab.0, -1);
-            }
-        }
-    }
-    for mut visibility in roots.iter_mut() {
-        let wanted = if open.modal {
-            Visibility::Visible
-        } else {
-            Visibility::Hidden
-        };
-        if *visibility != wanted {
-            *visibility = wanted;
-        }
-    }
-}
-
-/// Conteúdo do modal (throttle 0,25 s; barato e sempre fresco).
-#[allow(clippy::type_complexity, clippy::too_many_arguments)]
-fn modal_content_system(
-    mut throttle: Local<f32>,
-    time: Res<Time>,
-    open: Res<MenusOpen>,
-    tab: Res<ModalTab>,
-    log: Option<Res<QuestLog>>,
-    vault: Option<Res<Vault>>,
-    mixer: Option<Res<crate::music::AudioMixerSettings>>,
-    rows: Option<Res<crate::save::OptionsRows>>,
-    tree: Option<Res<crate::skills::SkillTree>>,
-    selection: Res<crate::skills::SkillUiSelection>,
-    mut q_content: Query<&mut Text, With<ModalContent>>,
-) {
-    if !open.modal {
-        return;
-    }
-    *throttle -= time.delta_secs();
-    if *throttle > 0.0 {
-        return;
-    }
-    *throttle = 0.25;
-    for mut text in q_content.iter_mut() {
-        let header = tab_header(tab.0);
-        let body = match tab.0 {
-            0 => {
-                let quest_lines: Vec<String> = log
-                    .as_deref()
-                    .zip(vault.as_deref())
-                    .map(|(log, vault)| {
-                        log.active_ids(Some(vault))
-                            .iter()
-                            .filter_map(|id| {
-                                log.def(id).map(|def| {
-                                    format!(
-                                        "• {}  [{}]",
-                                        def.title,
-                                        log.progress_text(id, Some(vault))
-                                    )
-                                })
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                tab_body(0, &quest_lines, &[])
-            }
-            1 => {
-                let lines = vault
-                    .as_deref()
-                    .map(vault_lines)
-                    .unwrap_or_else(|| vec!["(inventário indisponível)".into()]);
-                tab_body(1, &[], &lines)
-            }
-            2 => skills_body(tree.as_deref(), selection.0),
-            _ => options_body(
-                rows.as_ref().map(|r| r.selected).unwrap_or(0),
-                mixer.as_ref().map(|m| (m.master, m.music, m.sfx)).unwrap_or((1.0, 1.0, 1.0)),
-                "WASD mover · Espaço saltar · Shift correr\n[J] atacar/colher · [E] falar/interagir · [K] loja\n[Q] este menu · [F3] profiler",
-            ),
-        };
-        let wanted = format!("{header}\n\n{body}");
-        if text.0 != wanted {
-            text.0 = wanted;
-        }
+              [Q] este menu · [F3] profiler"
+            .into(),
     }
 }
 
@@ -489,54 +456,6 @@ pub fn vault_lines(vault: &Vault) -> Vec<String> {
 
 // ── loja [K] ────────────────────────────────────────────────────────────
 
-fn spawn_shop(mut commands: Commands) {
-    commands
-        .spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                top: Val::Px(0.0),
-                left: Val::Px(0.0),
-                right: Val::Px(0.0),
-                bottom: Val::Px(0.0),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                ..Default::default()
-            },
-            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.45)),
-            Visibility::Hidden,
-            Name::new("ui:shop"),
-            ShopRoot,
-        ))
-        .with_children(|root| {
-            root.spawn((
-                Node {
-                    width: Val::Px(520.0),
-                    height: Val::Px(300.0),
-                    padding: UiRect::all(Val::Px(20.0)),
-                    flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(8.0),
-                    border_radius: BorderRadius::all(Val::Px(14.0)),
-                    ..Default::default()
-                },
-                BackgroundColor(Color::srgba(0.08, 0.06, 0.04, 0.96)),
-                BorderColor::all(Color::srgb(0.85, 0.75, 0.45)),
-            ))
-            .with_children(|panel| {
-                panel.spawn((
-                    Text::new("LOJA DO MERCADOR"),
-                    TextColor(Color::srgb(0.95, 0.85, 0.6)),
-                    TextFont::from_font_size(20.0),
-                ));
-                panel.spawn((
-                    Text::new(""),
-                    TextColor(Color::srgb(0.9, 0.88, 0.8)),
-                    TextFont::from_font_size(15.0),
-                    ShopContent,
-                ));
-            });
-        });
-}
-
 /// Estado da loja: seleção e resultado da última ação (puro p/ testes).
 #[derive(Debug, Clone, PartialEq)]
 pub enum ShopAction {
@@ -573,98 +492,10 @@ pub fn shop_apply(vault: &mut Vault, index: usize) -> ShopAction {
                 item: label.to_string(),
             };
         }
-        vault.gold += earned;
+        vault.gold = vault.gold.saturating_add(earned);
         ShopAction::Sold {
             item: label.to_string(),
             earned,
-        }
-    }
-}
-
-/// Abre/fecha a loja perto do mercador, navega e executa compras/vendas.
-#[allow(clippy::type_complexity, clippy::too_many_arguments)]
-fn shop_system(
-    keys: Res<ButtonInput<KeyCode>>,
-    players: Query<&GlobalTransform, With<Player>>,
-    merchants: Query<&GlobalTransform, Without<Player>>,
-    mut vault: ResMut<Vault>,
-    mut open: ResMut<MenusOpen>,
-    mut selection: Local<usize>,
-    mut q_shop: Query<&mut Visibility, With<ShopRoot>>,
-    mut q_content: Query<&mut Text, With<ShopContent>>,
-    time: Res<Time>,
-    mut throttle: Local<f32>,
-) {
-    let near_merchant = players.iter().next().is_some_and(|player| {
-        merchants
-            .iter()
-            .any(|m| m.translation().distance(player.translation()) < SHOP_RANGE_M)
-    });
-
-    if keys.just_pressed(KeyCode::KeyK) && (near_merchant || open.shop) {
-        open.shop = !open.shop;
-        *selection = 0;
-    }
-    if open.shop && !near_merchant {
-        open.shop = false;
-    }
-    for mut visibility in q_shop.iter_mut() {
-        let wanted = if open.shop {
-            Visibility::Visible
-        } else {
-            Visibility::Hidden
-        };
-        if *visibility != wanted {
-            *visibility = wanted;
-        }
-    }
-    if !open.shop {
-        return;
-    }
-
-    let catalog_len = shop_catalog().len();
-    if keys.just_pressed(KeyCode::ArrowDown) || keys.just_pressed(KeyCode::KeyS) {
-        *selection = (*selection + 1) % catalog_len;
-    }
-    if keys.just_pressed(KeyCode::ArrowUp) || keys.just_pressed(KeyCode::KeyW) {
-        *selection = (*selection + catalog_len - 1) % catalog_len;
-    }
-    let mut action = ShopAction::Nothing;
-    if keys.just_pressed(KeyCode::KeyJ) || keys.just_pressed(KeyCode::Enter) {
-        action = shop_apply(&mut vault, *selection);
-    }
-
-    *throttle += time.delta_secs();
-    let refresh = *throttle >= 0.25 || action != ShopAction::Nothing;
-    if !refresh {
-        return;
-    }
-    *throttle = 0.0;
-    let catalog = shop_catalog();
-    let mut lines = vec![format!("Ouro: {}", vault.gold), String::new()];
-    for (i, (label, price, _, _amount)) in catalog.iter().enumerate() {
-        let marker = if i == *selection { ">" } else { " " };
-        let price_text = if *price >= 0 {
-            format!("{} ouro", price)
-        } else {
-            format!("+{} ouro", -price)
-        };
-        lines.push(format!("{marker} [{label}  {price_text}]"));
-    }
-    lines.push(String::new());
-    lines.push(match &action {
-        ShopAction::Bought { item, price } => format!("✓ {item} por {price} ouro"),
-        ShopAction::Sold { item, earned } => format!("✓ {item} por {earned} ouro"),
-        ShopAction::OutOfStock { item } => format!("✗ {item}: sem stock"),
-        ShopAction::CannotAfford { item, price } => {
-            format!("✗ {item}: faltam ouro ({price} necessário)")
-        }
-        ShopAction::Nothing => "[J] confirmar · ↑↓ navegar · [K] sair".into(),
-    });
-    for mut text in q_content.iter_mut() {
-        let wanted = lines.join("\n");
-        if text.0 != wanted {
-            text.0 = wanted;
         }
     }
 }
@@ -718,37 +549,42 @@ fn loading_hide_system(
 // ── banner da fogueira ──────────────────────────────────────────────────
 
 fn spawn_campfire_banner(mut commands: Commands) {
-    commands.spawn((
-        Node {
-            position_type: PositionType::Absolute,
-            bottom: Val::Px(120.0),
-            left: Val::Px(0.0),
-            right: Val::Px(0.0),
-            justify_content: JustifyContent::Center,
-            ..Default::default()
-        },
-        Visibility::Hidden,
-        Name::new("ui:campfire"),
-        CampfireBanner,
-    ))
-    .with_children(|wrap| {
-        wrap.spawn((
-            Text::new("Fogueira: [E] descansar — o calor restaura vida"),
-            TextColor(Color::srgb(0.98, 0.8, 0.5)),
-            TextFont::from_font_size(14.0),
-        ));
-    });
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                bottom: Val::Px(120.0),
+                left: Val::Px(0.0),
+                right: Val::Px(0.0),
+                justify_content: JustifyContent::Center,
+                ..Default::default()
+            },
+            Visibility::Hidden,
+            Name::new("ui:campfire"),
+            CampfireBanner,
+        ))
+        .with_children(|wrap| {
+            wrap.spawn((
+                Text::new("Fogueira: [E] descansar — o calor restaura vida"),
+                TextColor(Color::srgb(0.98, 0.8, 0.5)),
+                TextFont::from_font_size(14.0),
+            ));
+        });
 }
 
 fn campfire_banner_system(
     players: Query<&GlobalTransform, With<Player>>,
-    camps: Query<&GlobalTransform, Without<Player>>,
+    camps: Query<(&Name, &GlobalTransform), Without<Player>>,
     mut banner: Query<&mut Visibility, With<CampfireBanner>>,
 ) {
+    // Fogueira POR NOME ("campfire") — sem o marcador o banner ficava
+    // praticamente sempre visível (o player está a <3,5 m de ALGUMA
+    // entidade quase todo o tempo).
     let near = players.iter().next().is_some_and(|player| {
-        camps
-            .iter()
-            .any(|c| c.translation().distance(player.translation()) < 3.5)
+        camps.iter().any(|(name, c)| {
+            name.to_ascii_lowercase().contains("campfire")
+                && c.translation().distance(player.translation()) < 3.5
+        })
     });
     for mut visibility in banner.iter_mut() {
         let wanted = if near {
@@ -767,6 +603,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_toast_alpha_opens_and_closes() {
+        // Acabado de nascer: ainda invisível, a entrar.
+        assert!(toast_alpha(TOAST_LIFETIME) < 0.05);
+        // Meio da vida: opaco.
+        assert!((toast_alpha(TOAST_LIFETIME * 0.5) - 1.0).abs() < 1e-4);
+        // A sair.
+        let leaving = toast_alpha(TOAST_FADE_OUT * 0.5);
+        assert!(leaving > 0.0 && leaving < 0.6, "alpha={leaving}");
+        assert_eq!(toast_alpha(0.0), 0.0);
+        assert_eq!(toast_alpha(-1.0), 0.0);
+    }
+
+    #[test]
+    fn test_zone_notices_do_not_enter_the_toast_queue() {
+        assert!(is_zone_notice("Entraste em: dark-forest"));
+        assert!(is_zone_notice("De volta ao vale."));
+        // Um toast normal continua a ser um toast.
+        assert!(!is_zone_notice("PARRY!"));
+        assert!(!is_zone_notice("+3 madeira"));
+    }
+
+    #[test]
     fn test_next_tab_cycles() {
         assert_eq!(next_tab(0, 1), 1);
         assert_eq!(next_tab(3, 1), 0);
@@ -777,9 +635,66 @@ mod tests {
     #[test]
     fn test_shop_catalog_shape() {
         let catalog = shop_catalog();
-        assert_eq!(catalog.len(), 5);
+        // 5 bases (3 compras + 2 vendas de recursos) + 8 vendas de
+        // recompensas de quest.
+        assert_eq!(catalog.len(), 13);
         assert!(catalog.iter().any(|(l, _, _, _)| l.contains("poção")));
-        assert!(catalog.iter().any(|(_, p, _, _)| *p < 0), "vendas incluídas");
+        assert!(
+            catalog.iter().any(|(_, p, _, _)| *p < 0),
+            "vendas incluídas"
+        );
+        // As 5 primeiras entradas são o catálogo histórico — os índices são
+        // contrato dos testes/de UI declarativa.
+        assert_eq!(catalog[3].1, -3, "vender madeira no índice 3");
+        assert_eq!(catalog[4].1, -5, "vender pedra no índice 4");
+        // Recompensas dead-end agora têm saída (só venda, 15-50 g).
+        let sell_keys: Vec<&str> = catalog
+            .iter()
+            .filter(|(_, p, _, _)| *p < 0)
+            .map(|(_, _, k, _)| *k)
+            .collect();
+        for key in [
+            "wolf_pelt",
+            "cactus_fiber",
+            "silk_cloth",
+            "moss_potion",
+            "iron_axe",
+            "nature_amulet",
+            "blessed_rod",
+            "ancient_relic",
+        ] {
+            assert!(sell_keys.contains(&key), "{key} à venda");
+        }
+        for (_, price, _, _) in catalog.iter().skip(5) {
+            assert!(
+                (-50..=-15).contains(price),
+                "preço de venda 15-50 g: {price}"
+            );
+            assert!(*price < 0, "recompensas só à VENDA, nunca à compra");
+        }
+    }
+
+    #[test]
+    fn test_shop_sells_quest_reward_items() {
+        let mut vault = Vault {
+            gold: 0,
+            ..Vault::default()
+        };
+        vault.item_add("wolf_pelt", 2);
+        // índice 5 = "Vender pele de lobo" (15 g)
+        match shop_apply(&mut vault, 5) {
+            ShopAction::Sold { earned, .. } => assert_eq!(earned, 15),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(vault.gold, 15);
+        assert_eq!(vault.item_count("wolf_pelt"), 1);
+        // ids de reward do JSON normalizam (caixa/trim) — venda idempotente
+        // pelo mesmo caminho do collect (vault.take).
+        assert!(matches!(shop_apply(&mut vault, 5), ShopAction::Sold { .. }));
+        assert!(matches!(
+            shop_apply(&mut vault, 5),
+            ShopAction::OutOfStock { .. }
+        ));
     }
 
     #[test]

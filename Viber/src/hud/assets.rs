@@ -14,12 +14,16 @@ use bevy::ui::BoxShadow;
 pub static DISPLAY_FONT: &[u8] = include_bytes!("../../assets/fonts/cinzel-700.ttf");
 
 /// Lazily-created HUD art: display font + generated panel gradient + minimap
-/// arrow texture. Created once per process (single world per run).
+/// arrow + minimap markers. Created once per process (single world per run).
 #[derive(Resource, Clone)]
 pub struct HudAssets {
     pub font: Handle<Font>,
     pub panel_gradient: Handle<Image>,
     pub arrow: Handle<Image>,
+    /// Marcador de quest no minimapa: losango dourado com "!" de tinta.
+    pub quest_marker: Handle<Image>,
+    /// Âncora do marco assinado no minimapa: pin de mapa dourado furado.
+    pub map_pin: Handle<Image>,
 }
 
 impl HudAssets {
@@ -34,10 +38,16 @@ impl HudAssets {
             .resource_mut::<Assets<Image>>()
             .add(panel_gradient_image());
         let arrow = world.resource_mut::<Assets<Image>>().add(arrow_image());
+        let quest_marker = world
+            .resource_mut::<Assets<Image>>()
+            .add(quest_marker_image());
+        let map_pin = world.resource_mut::<Assets<Image>>().add(map_pin_image());
         let assets = HudAssets {
             font,
             panel_gradient,
             arrow,
+            quest_marker,
+            map_pin,
         };
         world.insert_resource(assets.clone());
         assets
@@ -115,6 +125,108 @@ pub(crate) fn arrow_image() -> Image {
         TextureFormat::Rgba8UnormSrgb,
         RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
     )
+}
+
+// ------------------------------------------------------------- palette
+
+/// Renderer de ícones com anti-aliasing de caixa: desenha a `ss`× a
+/// resolução final e faz a média dos sub-píxeis. O `shade` devolve a cor
+/// RGBA por ponto em coordenadas FINAIS — é tudo o que um glifo precisa.
+fn supersampled_image(side: usize, ss: usize, shade: impl Fn(f32, f32) -> [u8; 4]) -> Image {
+    let big = side * ss;
+    let mut sum = vec![[0u32; 4]; side * side];
+    for sy in 0..big {
+        let fy = (sy / ss) as f32 + (sy % ss) as f32 / ss as f32 + 0.5 / ss as f32;
+        for sx in 0..big {
+            let fx = (sx / ss) as f32 + (sx % ss) as f32 / ss as f32 + 0.5 / ss as f32;
+            let c = shade(fx, fy);
+            let cell = &mut sum[(sy / ss) * side + (sx / ss)];
+            for (ch, value) in c.iter().enumerate() {
+                cell[ch] += *value as u32;
+            }
+        }
+    }
+    let data = sum
+        .into_iter()
+        .flat_map(|cell| cell.map(|v| (v / (ss * ss) as u32) as u8))
+        .collect();
+    Image::new(
+        Extent3d {
+            width: side as u32,
+            height: side as u32,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        data,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+    )
+}
+
+/// Marcador de quest do minimapa: losango dourado (placa que se lê sobre
+/// terreno claro E escuro) com um "!" de tinta — o vocabulário universal
+/// de "objectivo aqui", em vez de um ponto cru.
+///
+/// Gerado (não asset) por decisão: o HUD é da engine, corre em QUALQUER
+/// mundo, e um asset ausente deixaria os pontos de quest invisíveis em
+/// silêncio — exactamente a falha que o `arrow_image` já evitou.
+pub(crate) fn quest_marker_image() -> Image {
+    const GOLD: [u8; 4] = [216, 180, 106, 255];
+    const INK: [u8; 4] = [43, 29, 16, 255];
+    supersampled_image(48, 4, |x, y| {
+        let c = 24.0;
+        let (dx, dy) = (x - c, y - c);
+        // Superelipse n≈3.2: losango de cantos amaciados.
+        let d = (dx.abs().powf(3.2) + dy.abs().powf(3.2)).powf(1.0 / 3.2);
+        let edge = 17.5;
+        if d > edge + 1.0 {
+            return [0, 0, 0, 0];
+        }
+        // "!": haste + ponto, em tinta sobre o ouro.
+        let bar = dx.abs() < 2.6 && dy > -10.0 && dy < 2.0;
+        let dot = dx * dx + (dy - 8.0) * (dy - 8.0) < 3.2 * 3.2;
+        if bar || dot {
+            return INK;
+        }
+        if d > edge - 1.6 {
+            return INK; // contorno de tinta
+        }
+        GOLD
+    })
+}
+
+/// Âncora do marco assinado (A Nota) no minimapa: pin de mapa dourado
+/// furado — a forma que qualquer jogador lê como "destino", e o par
+/// "quest = !, destino = pin" distingue os dois à primeira.
+pub(crate) fn map_pin_image() -> Image {
+    const GOLD: [u8; 4] = [232, 196, 118, 255];
+    const INK: [u8; 4] = [43, 29, 16, 255];
+    supersampled_image(48, 4, |x, y| {
+        let c = 24.0;
+        let (dx, dy) = (x - c, y - c);
+        let head_r = 13.5;
+        let head = dx * dx + (dy + 5.0) * (dy + 5.0) < head_r * head_r;
+        // Cauda: triângulo do fundo da cabeça à ponta (24, 42).
+        let tail = dy >= -1.0 && dy <= 18.0 && {
+            let t = ((dy + 1.0) / 19.0).clamp(0.0, 1.0);
+            dx.abs() < head_r * (1.0 - t) * 0.9
+        };
+        if !(head || tail) {
+            return [0, 0, 0, 0];
+        }
+        // Buraco do pin: tinta.
+        if dx * dx + (dy + 5.0) * (dy + 5.0) < 5.2 * 5.2 {
+            return INK;
+        }
+        // Contorno: borda exterior a tinta (a cauda afina para a ponta).
+        let head_edge = dx * dx + (dy + 5.0) * (dy + 5.0) < (head_r - 1.6) * (head_r - 1.6);
+        let t = ((dy + 1.0) / 19.0).clamp(0.0, 1.0);
+        let tail_edge = dy >= -1.0 && dy <= 16.5 && dx.abs() < head_r * (1.0 - t) * 0.9 - 1.4;
+        if !(head_edge || tail_edge) {
+            return INK;
+        }
+        GOLD
+    })
 }
 
 // ------------------------------------------------------------- palette

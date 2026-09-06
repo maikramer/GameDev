@@ -2,11 +2,14 @@
 //! frame-times, estatísticas ao vivo (fps/ms/entidades/scripts/partículas/
 //! chunks) e posições de câmera/player. Consome os dados públicos do
 //! módulo `profiler` (`FrameStats`, `collect_counters`, `DiagnosticsStore`).
+//!
+//! Pintura no tema TINTA QUENTE: fundo stone-950 translúcido, texto papel
+//! e acentos amber — os mesmos valores que o hud.css usa nos cards.
 
 use bevy::prelude::*;
 
-use super::assets::{HudAssets, gradient_overlay, label, panel_base, panel_edge, panel_shadow};
-use super::widgets::{GraphBar, StatValue, sparkline, stat_row};
+use super::assets::{HudAssets, label};
+use super::widgets::{GraphBar, StatValue, sparkline};
 
 /// Tipos de valor que a janela actualiza (marcadores [`StatValue`]).
 mod kinds {
@@ -40,6 +43,46 @@ struct ProfilerWindowState {
 const HISTORY_SLOTS: usize = 60;
 const REFRESH_SECS: f32 = 0.2;
 
+/// Linha "rótulo → valor" com a voz do tema (papel sobre tinta, valor em
+/// destaque). Mesma métrica do `widgets::stat_row`, pintura stone/amber.
+#[allow(clippy::too_many_arguments)]
+fn stone_stat_row(
+    row: &mut bevy::ecs::hierarchy::ChildSpawner<'_>,
+    hud: &HudAssets,
+    label_text: &str,
+    value_text: &str,
+    kind: usize,
+    width: f32,
+) {
+    row.spawn((Node {
+        width: Val::Px(width),
+        justify_content: JustifyContent::SpaceBetween,
+        margin: UiRect::bottom(Val::Px(4.0)),
+        ..Default::default()
+    },))
+    .with_children(|line| {
+        line.spawn((
+            Text::new(label_text.to_string()),
+            TextColor(Color::srgba(0.839, 0.827, 0.820, 0.85)), // stone-300
+            TextFont {
+                font: hud.font.clone().into(),
+                font_size: 12.0.into(),
+                ..Default::default()
+            },
+        ));
+        line.spawn((
+            Text::new(value_text.to_string()),
+            TextColor(Color::srgb(0.980, 0.980, 0.976)), // papel (stone-50)
+            TextFont {
+                font: hud.font.clone().into(),
+                font_size: 13.0.into(),
+                ..Default::default()
+            },
+            StatValue { kind },
+        ));
+    });
+}
+
 /// Constrói a janela (chamado uma vez pelo `HudScreenLayer`).
 pub fn build_profiler_window(world: &mut World, hud: &HudAssets) {
     if world.get_resource::<ProfilerWindowState>().is_none() {
@@ -60,27 +103,32 @@ pub fn build_profiler_window(world: &mut World, hud: &HudAssets) {
                 width: Val::Px(300.0),
                 flex_direction: FlexDirection::Column,
                 padding: UiRect::all(Val::Px(14.0)),
-                border: UiRect::all(Val::Px(1.5)),
-                border_radius: BorderRadius::all(Val::Px(16.0)),
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(12.0)),
                 ..Default::default()
             },
-            panel_base(),
-            panel_edge(),
-            panel_shadow(),
+            // stone-950 translúcido + fio dourado da casa (#b7a47770) +
+            // sombra quente (#0c0a0988) — a mesma assinatura dos cards.
+            BackgroundColor(Color::srgba(0.047, 0.039, 0.035, 0.94)),
+            BorderColor::all(Color::srgba(0.718, 0.643, 0.467, 0.44)),
+            BoxShadow::new(
+                Color::srgba(0.047, 0.039, 0.035, 0.53),
+                Val::Px(0.0),
+                Val::Px(4.0),
+                Val::ZERO,
+                Val::Px(10.0),
+            ),
             Visibility::Hidden,
             Name::new("hud:profiler"),
             ProfilerWindow,
         ))
-        .with_children(|p| {
-            p.spawn(gradient_overlay(hud, 16.0));
-        })
         .with_children(|panel| {
             panel.spawn((
                 Node {
                     margin: UiRect::bottom(Val::Px(8.0)),
                     ..Default::default()
                 },
-                label(hud, "PROFILER", 18.0, Color::srgb(0.95, 0.85, 0.6)),
+                label(hud, "PROFILER", 18.0, Color::srgb(0.839, 0.725, 0.475)), // amber-300 #d6b979
             ));
             panel.spawn((
                 Node {
@@ -91,11 +139,11 @@ pub fn build_profiler_window(world: &mut World, hud: &HudAssets) {
                     hud,
                     "P alterna · valores ao vivo",
                     10.0,
-                    Color::srgba(0.85, 0.82, 0.74, 0.6),
+                    Color::srgba(0.660, 0.640, 0.610, 0.60), // stone-400 esbatido
                 ),
             ));
             sparkline(panel, HISTORY_SLOTS, 3.0, 2.0, 44.0);
-            // Estatísticas: (rótulo, valor inicial, kind).
+            // Estatísticas: (rótulo, kind).
             for (label_text, kind) in [
                 ("fps", kinds::FPS),
                 ("frame", kinds::MS),
@@ -109,20 +157,29 @@ pub fn build_profiler_window(world: &mut World, hud: &HudAssets) {
                 ("velocidade", kinds::PLAYER + 1000),
                 ("uptime", kinds::UPTIME),
             ] {
-                stat_row(panel, hud, label_text, "—", kind, 272.0);
+                stone_stat_row(panel, hud, label_text, "—", kind, 272.0);
             }
         });
 }
 
-/// Toggle **P** + atualização ao vivo: histórico de frame-times, barras do
-/// gráfico (altura ∝ ms, cor por orçamento) e textos das estatísticas.
-/// Sistema exclusivo: lê o mundo inteiro (contadores + câmera + player) e
-/// os textos da janela num só passe, a cada [`REFRESH_SECS`].
+/// Toggle **F3**/**P** + atualização ao vivo: histórico de frame-times,
+/// barras do gráfico (altura ∝ ms, cor por orçamento) e textos das
+/// estatísticas. Sistema exclusivo: lê o mundo inteiro (contadores +
+/// câmera + player) e os textos da janela num só passe, a cada
+/// [`REFRESH_SECS`]. Sem menus abertos — o P aprende skill no modal.
 pub fn hud_profiler_window(world: &mut World) {
     let dt_ms = world.resource::<Time>().delta_secs() * 1000.0;
-    let toggle = world
-        .resource::<ButtonInput<KeyCode>>()
-        .just_pressed(KeyCode::KeyP);
+    let menus_open = world
+        .get_resource::<crate::menus::MenusOpen>()
+        .map(|m| m.any())
+        .unwrap_or(false);
+    let toggle = !menus_open
+        && (world
+            .resource::<ButtonInput<KeyCode>>()
+            .just_pressed(KeyCode::KeyP)
+            || world
+                .resource::<ButtonInput<KeyCode>>()
+                .just_pressed(KeyCode::F3));
 
     // 1. Amostra o frame e avança o histórico.
     if let Some(mut state) = world.get_resource_mut::<ProfilerWindowState>() {
@@ -135,7 +192,16 @@ pub fn hud_profiler_window(world: &mut World) {
         state.filled = state.filled.max(state.head);
         state.refresh += dt_ms / 1000.0;
     }
-    let open = world.resource::<ProfilerWindowState>().open;
+    let open = world
+        .get_resource::<ProfilerWindowState>()
+        .map(|s| s.open)
+        // Mundos sem <HudScreenLayer> nunca constroem a janela — sem este
+        // guard, o world.resource() panicava no 1.º frame (terrain.xml,
+        // hello.xml, scaffold do `viber create`).
+        .unwrap_or(false);
+    if world.get_resource::<ProfilerWindowState>().is_none() {
+        return;
+    }
 
     // 2. Visibilidade da janela.
     let mut windows = world.query::<(&mut Visibility, &ProfilerWindow)>();

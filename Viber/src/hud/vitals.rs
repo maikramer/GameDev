@@ -44,8 +44,13 @@ pub fn hud_health_sync(
         .map(|h| (h.current, h.max))
         .unwrap_or((100.0, 100.0));
     let percent = health_fraction(current, max) * 100.0;
+    let wanted = Val::Percent(percent);
     for mut node in &mut fills {
-        node.width = Val::Percent(percent);
+        // Escrita gated: atribuir o mesmo valor mantinha o node em `Changed`
+        // por frame (layout re-corrido à toa).
+        if node.width != wanted {
+            node.width = wanted;
+        }
     }
     let text = health_label_text(current, max);
     for mut label in &mut labels {
@@ -68,8 +73,11 @@ pub fn hud_xp_sync(
         .map(|x| (x.current, x.next))
         .unwrap_or((0, 100));
     let percent = xp_fraction(current, next) * 100.0;
+    let wanted = Val::Percent(percent);
     for mut node in &mut fills {
-        node.width = Val::Percent(percent);
+        if node.width != wanted {
+            node.width = wanted;
+        }
     }
     let text = xp_label_text(current, next);
     for mut label in &mut labels {
