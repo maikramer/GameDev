@@ -7,14 +7,22 @@
 //! every tick (no physics bodies) and facing reuses the player's
 //! +Z-forward convention via [`crate::player::facing_rotation`].
 //!
-//! Deaths are not emitted anywhere yet, so [`respawn_spawners`] mostly idles —
-//! it exists and is wired so whoever starts pushing [`RespawnEntry`] into the
-//! queue (combat, spawner lifecycle) gets respawns for free.
+//! Deaths enter as [`crate::combat::Corpse`] (the single source is
+//! `skills::kill_creature`); [`queue_creature_respawns`] watches FSM corpses
+//! and pushes [`RespawnEntry`] items that [`respawn_spawners`] brings back
+//! after [`RESPAWN_DELAY_SECS`] at the creature's home. Scripted creatures
+//! are deliberately NOT respawned here — they belong to their spawners and
+//! Luau scripts.
 //!
 //! Wiring: `app.add_plugins(crate::ai::AiPlugin);` (see [`AiPlugin`]).
 
+#[cfg(test)]
+use std::sync::Arc;
+
+use bevy::gltf::Gltf;
 use bevy::math::Vec3;
 use bevy::prelude::*;
+use bevy::world_serialization::{WorldAsset, WorldAssetRoot};
 
 use crate::terrain::runtime::TerrainRuntime;
 
@@ -28,6 +36,9 @@ pub const WANDER_RETARGET_SECS: f32 = 4.0;
 pub const WANDER_RADIUS: f32 = 8.0;
 /// "Arrived" distance for a patrol target (triggers an early retarget).
 pub const WANDER_ARRIVE_DIST: f32 = 0.5;
+/// Delay between a creature's death and its respawn (s) — janela de design
+/// ~90-120 s para as pools dinâmicas não secarem (bounties repetíveis).
+pub const RESPAWN_DELAY_SECS: f32 = 100.0;
 
 /// Behaviour state of one [`EnemyCreature`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -41,8 +52,8 @@ pub enum EnemyState {
 
 /// A spawned creature: authored stats plus its current behaviour state.
 ///
-/// `Default` is Wander with `home` at the origin — [`enemy_ai`] latches the
-/// real home to the spawn position on the first tick.
+/// `Default` is Wander with `home` unset — [`enemy_ai`] latches the real home
+/// to the spawn position on the first tick.
 #[derive(Debug, Clone, Component)]
 pub struct EnemyCreature {
     /// Chase speed in m/s (wander runs at [`WANDER_SPEED_FRACTION`] × this).
@@ -51,8 +62,10 @@ pub struct EnemyCreature {
     pub aggro_radius: f32,
     /// Chase stops (attack range) once this close to the player.
     pub attack_radius: f32,
-    /// Patrol anchor (XZ); set by [`enemy_ai`] on the first tick.
-    pub home: Vec2,
+    /// Patrol anchor (XZ); `None` until [`enemy_ai`] latches it to the spawn
+    /// position on the first tick — um sentinela `Vec2::ZERO` re-latchava o
+    /// home a cada tick em criaturas spawnadas em (0,0) (patrulha derivava).
+    pub home: Option<Vec2>,
     pub state: EnemyState,
 }
 
@@ -62,7 +75,7 @@ impl Default for EnemyCreature {
             speed: 2.0,
             aggro_radius: 18.0,
             attack_radius: 2.2,
-            home: Vec2::ZERO,
+            home: None,
             state: EnemyState::Wander,
         }
     }
@@ -127,11 +140,16 @@ pub struct RespawnEntry {
     pub group_id: u64,
     /// `Time.elapsed_secs()` at which the creature comes back.
     pub respawn_at: f32,
+    /// Cena do modelo original (mesmo tipo da criatura morta) — `None` nasce
+    /// com o placeholder esférico do [`respawn_spawners`].
+    pub scene: Option<Handle<WorldAsset>>,
+    /// glTF original para religar os clips de animação (`AnimatedScene`) —
+    /// sem isto o respawnado patrulhava em bind pose.
+    pub animated: Option<Handle<Gltf>>,
 }
 
-/// Creatures waiting to come back. Nothing fills this yet — spawner deaths
-/// are not emitted; the queue and [`respawn_spawners`] are ready for whoever
-/// starts emitting them.
+/// Creatures waiting to come back. [`queue_creature_respawns`] fills it from
+/// FSM corpses; [`respawn_spawners`] drains it.
 #[derive(Debug, Default, Resource)]
 pub struct RespawnQueue(pub Vec<RespawnEntry>);
 
@@ -152,11 +170,14 @@ pub fn enemy_ai(
     mut commands: Commands,
     time: Res<Time>,
     runtime: Option<Res<TerrainRuntime>>,
+    mut combat_music: ResMut<crate::music::CombatMusicState>,
+    mut sfx: MessageWriter<crate::ambient::SfxEvent>,
     players: Query<&GlobalTransform, With<crate::player::Player>>,
     mut enemies: Query<(
         Entity,
         &mut Transform,
         &mut EnemyCreature,
+        Option<&Name>,
         Option<&mut WanderState>,
     )>,
 ) {
@@ -170,18 +191,44 @@ pub fn enemy_ai(
         .map(|gt| Vec2::new(gt.translation().x, gt.translation().z));
     let world_limit = runtime.spec.world_size * 0.5;
 
-    for (entity, mut transform, mut enemy, wander) in &mut enemies {
-        // First tick: the patrol anchor is wherever the creature spawned.
-        if enemy.home == Vec2::ZERO {
-            enemy.home = Vec2::new(transform.translation.x, transform.translation.z);
-        }
+    for (entity, mut transform, mut enemy, name, wander) in &mut enemies {
+        // First tick: the patrol anchor is wherever the creature spawned —
+        // latched exactly once (Option, não sentinela ZERO).
+        let home = *enemy
+            .home
+            .get_or_insert(Vec2::new(transform.translation.x, transform.translation.z));
         let pos_xz = Vec2::new(transform.translation.x, transform.translation.z);
         let player_dist = player_xz
             .map(|p| pos_xz.distance(p))
             .unwrap_or(f32::INFINITY);
 
         let deaggro = enemy.aggro_radius * DEAGGRO_HYSTERESIS;
+        let prev_state = enemy.state;
         enemy.state = enemy_next_state(player_dist, enemy.state, enemy.aggro_radius, deaggro);
+
+        // Aggro NOVO (Wander → Chase): acende a música de combate — boss
+        // (pelo nome) promove a layer `boss` — e a criatura dá a VOZ (growl
+        // por tipo de nome; criaturas sem voz conhecida ficam mudas).
+        if prev_state == EnemyState::Wander && enemy.state == EnemyState::Chase {
+            let lowered = name.map(|n| n.to_string().to_lowercase()).unwrap_or_default();
+            let is_boss = lowered.contains("boss");
+            combat_music.engage(time.elapsed_secs_f64(), is_boss);
+            let voice = if is_boss {
+                Some(crate::ambient::SfxClip::BossRoar)
+            } else if lowered.contains("wolf") || lowered.contains("lobo") {
+                Some(crate::ambient::SfxClip::WolfGrowl)
+            } else if lowered.contains("slime") || lowered.contains("gosma") {
+                Some(crate::ambient::SfxClip::SlimeSquish)
+            } else {
+                None
+            };
+            if let Some(clip) = voice {
+                sfx.write(crate::ambient::SfxEvent {
+                    clip,
+                    position: Some(transform.translation),
+                });
+            }
+        }
 
         let (speed, target) = match enemy.state {
             EnemyState::Chase => {
@@ -208,7 +255,7 @@ pub fn enemy_ai(
                 if now >= wander.next_pick_at || arrived {
                     wander.picks += 1;
                     wander.target = wander_target(
-                        enemy.home,
+                        home,
                         WANDER_RADIUS,
                         enemy_seed(entity.index().index(), wander.picks),
                     );
@@ -235,12 +282,88 @@ pub fn enemy_ai(
                     Vec3::new(moved.x, runtime.sample(moved.x, moved.z), moved.z);
                 transform.rotation = crate::player::facing_rotation(dir3);
             }
+        } else if matches!(enemy.state, EnemyState::Chase) {
+            // Parado em alcance de ataque: continuar a ENCARAR o player —
+            // sem isto a criatura congela virada para a última direção de
+            // patrulha enquanto o player orbita à volta.
+            if let Some(player_xz) = player_xz {
+                let offset = player_xz - pos_xz;
+                if offset.length_squared() > 1e-8 {
+                    let dir3 = Vec3::new(offset.x, 0.0, offset.y).normalize_or_zero();
+                    transform.rotation = crate::player::facing_rotation(dir3);
+                }
+            }
         }
     }
 }
 
-/// Spawn due [`RespawnEntry`] items back into the world with a placeholder
-/// visual (red sphere). No-op until something starts queueing respawns.
+/// HP default para as criaturas da FSM Rust (spawner dinâmico SEM script
+/// Luau): nasciam sem `Health` e ficavam imunes ao strike/bomba — e o
+/// respawn (abaixo) nunca disparava. Scriptadas recebem vitals via
+/// `combat::ensure_creature_vitals` (hostis apenas).
+pub fn ensure_fsm_vitals(
+    mut commands: Commands,
+    creatures: Query<
+        (Entity, &EnemyCreature),
+        (
+            Without<crate::vitals::Health>,
+            Without<crate::player::Player>,
+        ),
+    >,
+) {
+    for (entity, _) in &creatures {
+        commands
+            .entity(entity)
+            .insert(crate::vitals::Health::default());
+    }
+}
+
+/// Agenda o respawn das criaturas da FSM Rust mortas: um `Corpse` numa
+/// entidade com [`EnemyCreature`] (sem script Luau — as scriptadas são
+/// geridas pelos seus spawners/scripts, design respeitado) vira uma entrada
+/// na [`RespawnQueue`] na HOME da criatura, [`RESPAWN_DELAY_SECS`] depois,
+/// com a cena/glTF originais para renascer do mesmo tipo.
+pub fn queue_creature_respawns(
+    mut queue: ResMut<RespawnQueue>,
+    time: Res<Time>,
+    terrain: Option<Res<TerrainRuntime>>,
+    dead: Query<
+        (
+            &EnemyCreature,
+            &Transform,
+            Option<&WorldAssetRoot>,
+            Option<&crate::animation::AnimatedScene>,
+        ),
+        (
+            Added<crate::combat::Corpse>,
+            Without<crate::luau::LuaScriptRef>,
+        ),
+    >,
+) {
+    for (enemy, transform, scene, animated) in &dead {
+        // Respawn na home (latchada no 1.º tick da IA); o Y assenta no
+        // terreno para não renascer enterrado/voando.
+        let home = enemy
+            .home
+            .unwrap_or(Vec2::new(transform.translation.x, transform.translation.z));
+        let y = terrain
+            .as_ref()
+            .map(|t| t.sample(home.x, home.y))
+            .unwrap_or(transform.translation.y);
+        queue.0.push(RespawnEntry {
+            position: Vec3::new(home.x, y, home.y),
+            template_index: 0,
+            group_id: 0,
+            respawn_at: time.elapsed_secs() + RESPAWN_DELAY_SECS,
+            scene: scene.map(|root| root.0.clone()),
+            animated: animated.map(|a| a.gltf.clone()),
+        });
+    }
+}
+
+/// Spawn due [`RespawnEntry`] items back into the world — com a cena/glTF
+/// originais quando existem (respawn do MESMO tipo) ou, em alternativa, um
+/// placeholder visual (esfera vermelha).
 ///
 /// Assets are `Option` on purpose: Bevy 0.19 panics on failed param
 /// validation, and headless worlds carry no render asset stores — there the
@@ -267,7 +390,12 @@ pub fn respawn_spawners(
             Visibility::Inherited,
             EnemyCreature::default(),
         ));
-        if let (Some(meshes), Some(materials)) = (&mut meshes, &mut materials) {
+        if let Some(scene) = entry.scene {
+            entity.insert(WorldAssetRoot(scene));
+            if let Some(gltf) = entry.animated {
+                entity.insert(crate::animation::AnimatedScene { gltf });
+            }
+        } else if let (Some(meshes), Some(materials)) = (&mut meshes, &mut materials) {
             entity.insert((
                 Mesh3d(meshes.add(Mesh::from(bevy::math::primitives::Sphere::new(0.5)))),
                 MeshMaterial3d(materials.add(StandardMaterial {
@@ -279,14 +407,30 @@ pub fn respawn_spawners(
     }
 }
 
-/// Registers [`RespawnQueue`] plus the [`enemy_ai`] / [`respawn_spawners`]
-/// update systems. One line on top of `main`'s plugin stack.
+/// Registers [`RespawnQueue`] plus the [`enemy_ai`] / [`ensure_fsm_vitals`] /
+/// [`queue_creature_respawns`] / [`respawn_spawners`] update systems. One
+/// line on top of `main`'s plugin stack.
 pub struct AiPlugin;
 
 impl Plugin for AiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<RespawnQueue>()
-            .add_systems(Update, (enemy_ai, respawn_spawners));
+            // A música de combate é ESCRITA aqui (aggro da FSM) e LIDA pelo
+            // `music::music_driver`; o recurso nasce com a IA, que está
+            // sempre na stack de plugins.
+            .init_resource::<crate::music::CombatMusicState>()
+            // Os growls de aggro viajam em SfxEvent — apps mínimas (testes
+            // headless) precisam do registo (idempotente com o AmbientPlugin).
+            .add_message::<crate::ambient::SfxEvent>()
+            .add_systems(
+                Update,
+                (
+                    enemy_ai,
+                    ensure_fsm_vitals,
+                    queue_creature_respawns,
+                    respawn_spawners,
+                ),
+            );
     }
 }
 
@@ -302,7 +446,7 @@ mod tests {
         assert_eq!(enemy.speed, 2.0);
         assert_eq!(enemy.aggro_radius, 18.0);
         assert_eq!(enemy.attack_radius, 2.2);
-        assert_eq!(enemy.home, Vec2::ZERO);
+        assert_eq!(enemy.home, None, "home latches to the spawn on first tick");
         assert_eq!(enemy.state, EnemyState::Wander);
     }
 
@@ -403,12 +547,16 @@ mod tests {
                 template_index: 0,
                 group_id: 1,
                 respawn_at: 0.0,
+                scene: None,
+                animated: None,
             },
             RespawnEntry {
                 position: Vec3::ZERO,
                 template_index: 2,
                 group_id: 1,
                 respawn_at: 9.5,
+                scene: None,
+                animated: None,
             },
         ];
         let due = split_due(&mut queue, 4.0);
@@ -448,10 +596,11 @@ mod tests {
         .expect("grid builds");
         let runtime = TerrainRuntime {
             spec,
-            grid,
+            grid: Arc::new(grid),
             water: vec![],
             roads: vec![],
             pads: vec![],
+            voxel: Arc::new(crate::terrain::voxel::VoxelField::default()),
         };
         app.insert_resource(runtime);
 
@@ -523,17 +672,18 @@ mod tests {
         .expect("grid builds");
         app.insert_resource(TerrainRuntime {
             spec,
-            grid,
+            grid: Arc::new(grid),
             water: vec![],
             roads: vec![],
             pads: vec![],
+            voxel: Arc::new(crate::terrain::voxel::VoxelField::default()),
         });
         let world_limit = 128.0 * 0.5;
         let home = Vec2::new(40.0, -30.0); // well inside the world disc
         // Enemy B patrols around an in-world home…
         app.world_mut().spawn((
             EnemyCreature {
-                home,
+                home: Some(home),
                 ..EnemyCreature::default()
             },
             Transform::from_xyz(home.x, 0.0, home.y),
@@ -544,7 +694,7 @@ mod tests {
         let outside = Vec2::new(200.0, 200.0);
         app.world_mut().spawn((
             EnemyCreature {
-                home: outside,
+                home: Some(outside),
                 ..EnemyCreature::default()
             },
             Transform::from_xyz(outside.x, 0.0, outside.y),
@@ -563,7 +713,7 @@ mod tests {
         let mut border = None;
         let mut patroller = None;
         for (enemy, transform) in q.iter(world) {
-            if enemy.home == outside {
+            if enemy.home == Some(outside) {
                 border = Some((enemy, transform));
             } else {
                 patroller = Some((enemy, transform));
@@ -583,7 +733,7 @@ mod tests {
         );
 
         // Home latched to each spawn point on the first tick…
-        assert_eq!(patrol_enemy.home, home);
+        assert_eq!(patrol_enemy.home, Some(home));
         // …and the patrol keeps the creature around it (movement is toward a
         // target inside the patrol disc, so it can only drift that far).
         let pos = Vec2::new(
@@ -617,6 +767,8 @@ mod tests {
             template_index: 1,
             group_id: 42,
             respawn_at: 0.0, // due on the first update
+            scene: None,
+            animated: None,
         }]));
 
         app.update();
@@ -639,5 +791,120 @@ mod tests {
         assert_eq!(enemy.state, EnemyState::Wander);
         assert_eq!(transform.translation, Vec3::new(3.0, 1.0, -4.0));
         assert!(name.to_string().contains("g42"), "group id in the name");
+    }
+
+    /// A morte de uma criatura da FSM Rust (EnemyCreature + Corpse, sem
+    /// script) agenda o respawn na HOME, [`RESPAWN_DELAY_SECS`] depois; a
+    /// cena/glTF originais viajam na entrada (respawn do mesmo tipo) e o
+    /// drain insere `WorldAssetRoot` em vez do placeholder.
+    #[test]
+    fn test_fsm_death_queues_home_respawn_headless() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins.build().disable::<bevy::time::TimePlugin>())
+            .add_plugins(AiPlugin);
+        app.init_resource::<Time>();
+        let home = Vec2::new(11.0, -5.0);
+        let entity = app
+            .world_mut()
+            .spawn((
+                EnemyCreature {
+                    home: Some(home),
+                    ..EnemyCreature::default()
+                },
+                Transform::from_xyz(15.0, 2.0, -9.0), // morreu longe da home
+            ))
+            .id();
+        // Sem Health prévia: o ensure_fsm_vitals trata disso.
+        assert!(app.world().get::<crate::vitals::Health>(entity).is_none());
+
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_millis(250));
+        app.update(); // ensure_fsm_vitals insere Health
+        let now = app.world().resource::<Time>().elapsed_secs();
+        assert!(
+            app.world().get::<crate::vitals::Health>(entity).is_some(),
+            "FSM creature nasce com vitals (strike/bomba podem magoá-la)"
+        );
+
+        app.world_mut()
+            .entity_mut(entity)
+            .insert(crate::combat::Corpse { timer: 1.4 });
+        app.update(); // Added<Corpse> → queue
+
+        let queue = &app.world().resource::<RespawnQueue>().0;
+        assert_eq!(queue.len(), 1, "morte da FSM agenda exatamente 1 respawn");
+        let entry = &queue[0];
+        assert_eq!(
+            Vec2::new(entry.position.x, entry.position.z),
+            home,
+            "respawn na home, não onde morreu"
+        );
+        assert!(
+            (entry.respawn_at - (now + RESPAWN_DELAY_SECS)).abs() < 0.3,
+            "respawn_at ≈ now + {}: {} vs {}",
+            RESPAWN_DELAY_SECS,
+            entry.respawn_at,
+            now
+        );
+        assert!(
+            entry.scene.is_none() && entry.animated.is_none(),
+            "sem cena → placeholder"
+        );
+
+        // Avança o relógio para lá do delay e drena a fila.
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_secs_f32(RESPAWN_DELAY_SECS + 1.0));
+        app.update();
+        app.update(); // flush dos commands
+
+        assert!(
+            app.world()
+                .get_resource::<RespawnQueue>()
+                .expect("queue kept")
+                .0
+                .is_empty(),
+            "entrada drenada no delay"
+        );
+        let world = app.world_mut();
+        let mut enemies =
+            world.query::<(&EnemyCreature, &Transform, Option<&crate::combat::Corpse>)>();
+        let mut respawned = None;
+        let mut fsm_total = 0;
+        for (_enemy, transform, corpse) in enemies.iter(world) {
+            if corpse.is_none() {
+                respawned = Some(*transform);
+            }
+            fsm_total += 1;
+        }
+        assert_eq!(fsm_total, 2, "cadáver + respawnado");
+        let transform = respawned.expect("criatura respawnada existe");
+        assert_eq!(
+            Vec2::new(transform.translation.x, transform.translation.z),
+            home,
+            "respawnada na posição da home"
+        );
+    }
+
+    /// Criaturas com script Luau (sem `EnemyCreature`) NÃO respawnam por
+    /// aqui — são geridas pelos seus spawners/scripts (design).
+    #[test]
+    fn test_scripted_corpses_do_not_respawn() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).add_plugins(AiPlugin);
+        app.world_mut().spawn((
+            Transform::default(),
+            crate::luau::LuaScriptRef {
+                path: "enemies/wolf.lua".into(),
+            },
+            crate::combat::Corpse { timer: 1.4 },
+        ));
+        app.update();
+        app.update();
+        assert!(
+            app.world().resource::<RespawnQueue>().0.is_empty(),
+            "scripted corpse não entra na fila da FSM"
+        );
     }
 }

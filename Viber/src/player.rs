@@ -25,6 +25,29 @@ pub const SIDE_MOVE_FACTOR: f32 = 0.6;
 /// `CAMERA_TURN_SPEED`).
 pub const CAMERA_TURN_SPEED: f32 = 2.5;
 /// Jump input buffer window (VibeGame `INPUT_CONFIG.bufferWindow` = 100 ms).
+/// How far below the top surface the hero has to be before the heightfield
+/// fallback is treated as the wrong floor (meters).
+///
+/// A little slack so ordinary walking on the surface — where the controller
+/// and the sampled height disagree by centimetres — keeps its safety net.
+pub const GROUND_FALLBACK_SLACK: f32 = 1.5;
+
+/// The floor-of-last-resort height for a hero at `player_y`, given the
+/// topmost solid surface `top` at the hero's XZ.
+///
+/// Under an overhang or inside a cave `top` is the roof of the world, and
+/// snapping to it would fire the hero up through the rock. So the fallback
+/// only counts when the hero is at or above that top surface (within
+/// [`GROUND_FALLBACK_SLACK`]); anyone below it is under rock and gets
+/// `-inf` — no fallback — which leaves them to the voxel collider.
+pub fn last_resort_ground(player_y: f32, top: f32) -> f32 {
+    if player_y < top - GROUND_FALLBACK_SLACK {
+        f32::NEG_INFINITY
+    } else {
+        top
+    }
+}
+
 pub const JUMP_BUFFER: f32 = 0.1;
 /// Coyote time: jumps still land within this window after leaving the ground
 /// (VibeGame `INPUT_CONFIG.gracePeriods.coyoteTime` = 100 ms).
@@ -41,6 +64,43 @@ pub const DECEL_TAU: f32 = 0.14;
 /// instead of tracking input instantly.
 pub const AIR_TAU: f32 = 0.3;
 
+// ── passos (passe de juice r1) ──────────────────────────────────────────
+
+/// Comprimento de passada (m): o intervalo dos passos deriva da velocidade
+/// REAL (o low-pass que o movimento já calcula) — andar a 4 m/s soa a
+/// ~0.55 s, sprint a 6 m/s a ~0.37 s. Passada constante, cadência variável.
+pub const STEP_STRIDE_M: f32 = 2.2;
+/// Velocidade mínima (m/s) para haver passos — parado ou a roçar o chão
+/// não há som.
+pub const STEP_MIN_SPEED: f32 = 0.8;
+
+/// Intervalo entre passos a `speed` m/s (`None` = sem passos).
+pub fn step_interval(speed: f32) -> Option<f32> {
+    if !speed.is_finite() || speed < STEP_MIN_SPEED {
+        return None;
+    }
+    Some(STEP_STRIDE_M / speed)
+}
+
+/// Decisão de um passo (pura; o sistema só escreve o SFX): decrementa o
+/// timer e devolve `Some(intervalo)` no frame em que o passo DEVE soar.
+/// Parado/airborne reinicia o timer — o 1.º passo ao arrancar soa logo.
+pub fn footstep_due(step_timer: &mut f32, grounded: bool, speed: f32, dt: f32) -> Option<f32> {
+    *step_timer -= dt;
+    match step_interval(speed).filter(|_| grounded) {
+        Some(interval) if *step_timer <= 0.0 => {
+            *step_timer = interval;
+            Some(interval)
+        }
+        _ => {
+            if !grounded || speed < STEP_MIN_SPEED {
+                *step_timer = 0.0;
+            }
+            None
+        }
+    }
+}
+
 /// Smoothed-velocity time constant for the current motion state.
 pub fn movement_tau(grounded: bool, input_active: bool) -> f32 {
     if !grounded {
@@ -50,6 +110,17 @@ pub fn movement_tau(grounded: bool, input_active: bool) -> f32 {
     } else {
         DECEL_TAU
     }
+}
+
+/// Whether gravity integrates this frame. Never while resting on the ground:
+/// a grounded `vel_y` is reset to zero every frame, so ticking gravity there
+/// handed the character controller a constant downward push that it turns
+/// into a downhill slide on any slope (the hero kept creeping after input
+/// stopped); walking downhill stays glued through `snap_to_ground` instead.
+/// Airborne or rising (jump) always takes gravity — `grounded` lags the
+/// controller output by a frame, and skipping the jump frame overshot the apex.
+pub fn gravity_applies(grounded: bool, vel_y: f32) -> bool {
+    !grounded || vel_y > 0.0
 }
 
 /// The controllable hero (VibeGame `PlayerController` subset).
@@ -89,6 +160,8 @@ pub struct Player {
     /// walk gate) — starts at +∞ so the camera's idle settle only engages
     /// after the character has moved and then stopped.
     pub last_moving_time: f32,
+    /// Timer dos passos (s até ao próximo SFX; ver [`footstep_due`]).
+    pub step_timer: f32,
 }
 
 impl Default for Player {
@@ -109,6 +182,7 @@ impl Default for Player {
             jump_buffer_time: f32::NEG_INFINITY,
             last_steer_time: f32::NEG_INFINITY,
             last_moving_time: f32::INFINITY,
+            step_timer: 0.0,
         }
     }
 }
@@ -181,9 +255,11 @@ pub fn facing_slerp_factor(current: Quat, target: Quat, rotation_speed: f32, dt:
 #[allow(clippy::type_complexity)]
 pub fn player_movement(
     keys: Res<ButtonInput<KeyCode>>,
+    menus: Res<crate::menus::MenusOpen>,
     time: Res<Time>,
     runtime: Option<Res<TerrainRuntime>>,
     mut cameras: Query<&mut OrbitCamera>,
+    mut sfx: MessageWriter<crate::ambient::SfxEvent>,
     mut players: Query<
         (
             &mut Transform,
@@ -197,6 +273,20 @@ pub fn player_movement(
     let Some(runtime) = runtime else {
         return; // terrain bootstrap has not run yet — hero waits airborne
     };
+    // Modal aberto consome o teclado: WASD/Espaço não movem/saltam por
+    // trás da loja/menu (W/S navegavam E andavam). O `translation` PENDENTE
+    // do character controller limpa-se TAMBÉM — no bevy_rapier3d 0.36 ele
+    // persiste e é reaplicado em todos os steps (o herói deslizava com o
+    // menu aberto e, se estava em salto, subia indefinidamente).
+    if menus.any() {
+        for (_, mut player, controller, _) in &mut players {
+            player.vel_y = 0.0;
+            if let Some(mut controller) = controller {
+                controller.translation = Some(Vec3::ZERO);
+            }
+        }
+        return;
+    }
     let dt = time.delta_secs();
     let now = time.elapsed_secs();
     let (w, s, a, d) = (
@@ -283,14 +373,25 @@ pub fn player_movement(
             player.can_jump = false;
             player.jump_cooldown = JUMP_COOLDOWN;
             player.jump_buffer_time = f32::NEG_INFINITY;
+            sfx.write(crate::ambient::SfxEvent {
+                clip: crate::ambient::SfxClip::Jump,
+                position: Some(transform.translation),
+            });
         }
 
-        // Ground height under the player.
-        let ground = runtime.sample(transform.translation.x, transform.translation.z);
+        // Ground height under the player — the floor of last resort while the
+        // real colliders stream in. Under an overhang or inside a cave the
+        // top of the world is the WRONG floor and must not snap the hero up
+        // through the roof — see [`last_resort_ground`].
+        let top = runtime.sample(transform.translation.x, transform.translation.z);
+        let ground = last_resort_ground(transform.translation.y, top);
 
         // Vertical integration. Falls faster than it rises feels right
-        // (gravity is already twice the jump-fair value).
-        player.vel_y -= GRAVITY * dt;
+        // (gravity is already twice the jump-fair value); see
+        // [`gravity_applies`] for why it skips resting frames.
+        if gravity_applies(player.grounded, player.vel_y) {
+            player.vel_y -= GRAVITY * dt;
+        }
         motion.y += player.vel_y * dt;
 
         match controller.as_deref_mut() {
@@ -329,6 +430,23 @@ pub fn player_movement(
                 }
             }
         }
+
+        // Passos: cadência pela velocidade REAL (o mesmo low-pass que a
+        // animação/câmara leem) — parado/airborne não soa. Em água a variante
+        // `FootstepWater` substitui o passo seco.
+        let planar = (player.vel_x * player.vel_x + player.vel_z * player.vel_z).sqrt();
+        let grounded = player.grounded;
+        if footstep_due(&mut player.step_timer, grounded, planar, dt).is_some() {
+            let clip = if runtime.in_water(transform.translation.x, transform.translation.z) {
+                crate::ambient::SfxClip::FootstepWater
+            } else {
+                crate::ambient::SfxClip::Footstep
+            };
+            sfx.write(crate::ambient::SfxEvent {
+                clip,
+                position: Some(transform.translation),
+            });
+        }
     }
 }
 
@@ -344,11 +462,18 @@ pub fn dialogue_interaction(
         return;
     };
     let player_pos = player.translation();
+    // O MAIS PRÓXIMO em alcance, não o primeiro da ordem de query — com dois
+    // NPC em alcance, `.next()` devolvia o id errado (order-dependent).
     let nearest = npcs
         .iter()
         .filter(|(t, _)| t.translation().distance(player_pos) < 3.5)
-        .map(|(_, npc)| npc.dialogue_id.as_str())
-        .next();
+        .min_by(|(a, _), (b, _)| {
+            a.translation()
+                .distance_squared(player_pos)
+                .partial_cmp(&b.translation().distance_squared(player_pos))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|(_, npc)| npc.dialogue_id.as_str());
     let near = nearest.is_some();
     if keys.just_pressed(KeyCode::KeyE) {
         match nearest {
@@ -415,6 +540,25 @@ mod tests {
 
     fn approx(a: f32, b: f32) -> bool {
         (a - b).abs() < 1e-4
+    }
+
+    #[test]
+    fn test_last_resort_ground_holds_the_surface() {
+        // Hero walking on the surface (sample and transform disagree a bit)
+        // keeps the safety net.
+        assert_eq!(last_resort_ground(12.3, 12.0), 12.0);
+        assert_eq!(last_resort_ground(12.0 - GROUND_FALLBACK_SLACK, 12.0), 12.0);
+    }
+
+    #[test]
+    fn test_last_resort_ground_never_snaps_anyone_under_rock() {
+        // Inside a cave / under an overhang: the top of the world is NOT a
+        // floor for this hero — no fallback, the voxel collider decides.
+        assert_eq!(last_resort_ground(2.0, 30.0), f32::NEG_INFINITY);
+        assert_eq!(
+            last_resort_ground(30.0 - GROUND_FALLBACK_SLACK - 0.01, 30.0),
+            f32::NEG_INFINITY
+        );
     }
 
     #[test]
@@ -495,6 +639,19 @@ mod tests {
     }
 
     #[test]
+    fn test_gravity_skips_resting_frames_only() {
+        // Parado ou a andar numa encosta (grounded, vel_y a zero): sem tick —
+        // era este empurrão que o controller convertia em escorregar.
+        assert!(!gravity_applies(true, 0.0));
+        // Airborne (a cair ou no topo do arco): gravidade sempre.
+        assert!(gravity_applies(false, 0.0));
+        assert!(gravity_applies(false, -3.0));
+        // Frame do salto: `grounded` ainda é o output stale do frame anterior,
+        // mas vel_y > 0 — a gravidade tem de ticar ou o apex passa dos 2.3 m.
+        assert!(gravity_applies(true, jump_velocity(2.3)));
+    }
+
+    #[test]
     fn test_inertia_ramp_and_drag() {
         let dt = 1.0 / 60.0;
         // Acceleration: ~90 % of walk speed after tau·ln(10) ≈ 0.18 s
@@ -554,5 +711,71 @@ mod tests {
         assert!(p.grounded && p.can_jump);
         assert!(!p.is_jumping);
         assert!(p.last_grounded_time.is_infinite());
+        assert_eq!(p.step_timer, 0.0);
+    }
+
+    // ── passos (passe de juice r1) ──────────────────────────────────────
+
+    #[test]
+    fn test_step_interval_run_vs_walk() {
+        // Andar 4 m/s → ~0.55 s; sprint 6 m/s → ~0.37 s (passada fixa).
+        let walk = step_interval(4.0).unwrap();
+        let run = step_interval(6.0).unwrap();
+        assert!((walk - 0.55).abs() < 1e-4, "walk={walk}");
+        assert!(run > 0.33 && run < 0.42, "run={run}");
+        assert!(run < walk, "sprint tem cadência mais rápida");
+        // Passada constante: o dobro da velocidade = metade do intervalo.
+        assert!((step_interval(8.0).unwrap() * 2.0 - walk).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_footsteps_silent_when_still_and_airborne() {
+        let mut timer = 5.0;
+        // Parado: sem passos e timer REINICIADO (o 1.º passo ao arrancar
+        // soa logo, não espera um intervalo velho).
+        assert!(footstep_due(&mut timer, true, 0.0, 0.016).is_none());
+        assert_eq!(timer, 0.0);
+        // Deriva lenta (abaixo do gate): sem passos.
+        assert!(footstep_due(&mut timer, true, 0.3, 0.016).is_none());
+        // Airborne: sem passos mesmo com velocidade.
+        assert!(footstep_due(&mut timer, false, 4.0, 0.016).is_none());
+        // Lixo numérico: sem passos, sem pânico.
+        assert!(footstep_due(&mut timer, true, f32::NAN, 0.016).is_none());
+        assert!(footstep_due(&mut timer, true, f32::INFINITY, 0.016).is_none());
+    }
+
+    #[test]
+    fn test_footstep_cadence_run_vs_walk_sequence() {
+        let dt = 1.0 / 60.0;
+        // 1.º passo ao arrancar soa de imediato; depois ao intervalo —
+        // NÃO em todos os frames.
+        let mut timer = 0.0;
+        let interval = footstep_due(&mut timer, true, 4.0, dt).expect("1.º passo");
+        assert!((interval - 0.55).abs() < 1e-4);
+        // Frame seguinte: não há passo novo (o timer está a correr).
+        assert!(footstep_due(&mut timer, true, 4.0, dt).is_none());
+        // 10 s a andar: ~10/0.55 ≈ 18 passos (1.º incluído).
+        let mut walk_steps = 1;
+        for _ in 1..600 {
+            if footstep_due(&mut timer, true, 4.0, dt).is_some() {
+                walk_steps += 1;
+            }
+        }
+        assert!(
+            (17..=21).contains(&walk_steps),
+            "andar 10 s → ~18 passos: {walk_steps}"
+        );
+        // Em sprint a cadência aperta: mais passos no mesmo tempo.
+        let mut timer = 0.0;
+        let mut run_steps = 1;
+        for _ in 1..600 {
+            if footstep_due(&mut timer, true, 6.0, dt).is_some() {
+                run_steps += 1;
+            }
+        }
+        assert!(
+            run_steps > walk_steps,
+            "sprint {run_steps} > andar {walk_steps}"
+        );
     }
 }

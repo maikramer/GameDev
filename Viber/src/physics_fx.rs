@@ -39,6 +39,9 @@ pub struct Knockback {
 pub struct Falling {
     pub axis: Vec3,
     pub timer: f32,
+    /// Orientação no momento da queda — composta com o tombamento para o
+    /// prop não "popear" para identidade (perdia o yaw autoral/random-yaw).
+    pub initial: Quat,
 }
 
 // ── lógica pura (testada) ───────────────────────────────────────────────
@@ -88,7 +91,11 @@ fn knockback_system(
             commands.entity(entity).remove::<Knockback>();
         }
         if let Some(terrain) = terrain.as_deref() {
-            let y = terrain.sample(x, z);
+            // SUPERFÍCIE RENDERIZADA (igual ao assentamento dos spawners): o
+            // `sample` analítico diverge do mesh perto de carves (lagoas,
+            // estradas, pads) — cada knockback sentava o atingido 1-2 m
+            // ABAIXO do chão desenhado e ele "afundava" no primeiro empurrão.
+            let y = terrain.sample_mesh_surface(x, z);
             transform.translation.y = y;
             let _ = &mut x;
             let _ = &mut z;
@@ -113,7 +120,7 @@ fn falling_system(
         }
         let angle = fall_angle(fall.timer, FALL_DURATION);
         let axis = fall.axis.normalize_or_zero();
-        transform.rotation = Quat::from_axis_angle(axis, angle.to_radians());
+        transform.rotation = Quat::from_axis_angle(axis, angle.to_radians()) * fall.initial;
     }
 }
 
@@ -150,7 +157,10 @@ mod tests {
     fn test_fall_angle_eases_in() {
         assert!((fall_angle(0.0, 0.9).abs()) < 1e-4);
         let mid = fall_angle(0.45, 0.9);
-        assert!(mid < FALL_ANGLE_DEG / 2.0, "ease-in: metade do tempo < metade do ângulo ({mid})");
+        assert!(
+            mid < FALL_ANGLE_DEG / 2.0,
+            "ease-in: metade do tempo < metade do ângulo ({mid})"
+        );
         assert!((fall_angle(0.9, 0.9) - FALL_ANGLE_DEG).abs() < 1e-3);
         // passa do fim: clamp
         assert!((fall_angle(5.0, 0.9) - FALL_ANGLE_DEG).abs() < 1e-3);

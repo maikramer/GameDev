@@ -18,6 +18,12 @@
 //! `src/main.rs` in the `Update` schedule (add `vitals::debug_damage,` to the
 //! existing `app.add_systems(bevy::app::Update, (…))` tuple). This module
 //! intentionally does not touch `main.rs`.
+//!
+//! Passe de juice r1: [`VitalsPlugin`] monta a deteção de level-up
+//! ([`level_up_detector`], robusta — compara `Xp.next` com o último visto, por
+//! isso apanha TODAS as fontes: kills, quests, colheita, debug, scripts) e a
+//! fanfarra ([`level_up_fx`]: bursts `magic`+`sparkle` no herói, toast
+//! "NÍVEL X", kick de exposição via `PostFxState` e `SfxEvent::LevelUp`).
 
 use bevy::prelude::*;
 
@@ -83,7 +89,13 @@ pub fn xp_fraction(current: u32, next: u32) -> f32 {
 
 /// Applies damage clamped to `0..=max`; negative `amount` (a heal) clamps at
 /// `max` as well, so the pool never leaves its range.
+///
+/// `NaN`/`±inf` são ignorados: um dano não finito (via script) propagava-se ao
+/// HP e o save gravava `null` — ilegível para sempre.
 pub fn apply_damage(health: &mut Health, amount: f32) {
+    if !amount.is_finite() {
+        return;
+    }
     health.current = (health.current - amount).clamp(0.0, health.max);
 }
 
@@ -108,6 +120,186 @@ pub fn gain_xp(xp: &mut Xp, gain: u32) {
     }
 }
 
+// ── level-up (passe de juice r1) ────────────────────────────────────────
+
+/// Nível corrente do herói + o último `Xp.next` observado. Componente
+/// auxiliar da deteção: `Xp` em si não conta níveis (só current/next), e o
+/// `next` SÓ muda quando se sobe de nível — é esse sinais que o detector
+/// compara, apanhando qualquer fonte de XP sem tocar nos chamadores.
+#[derive(Debug, Clone, Copy, PartialEq, Component)]
+pub struct XpLevel {
+    pub level: u32,
+    pub last_next: u32,
+}
+
+/// Um level-up aconteceu (uma vez por transição, com multi-levels de uma
+/// só concessão colapsados num único evento com o nível final).
+#[derive(Debug, Clone, Copy, bevy::ecs::message::Message)]
+pub struct LevelUpEvent {
+    pub new_level: u32,
+}
+
+/// Kick de exposição do level-up (EV — clareia; ver `postfx::decay_kick`).
+pub const LEVELUP_KICK_EV: f32 = 0.6;
+
+/// Quantos níveis separam dois patamares de `Xp.next`: conta aplicações de
+/// [`xp_ramp`] até `new_next` BATER EXATO. Cadeias que não batem (save antigo
+/// carregado por cima) devolvem 0 — o detector ressincroniza sem fanfarra
+/// em vez de festejar um load.
+pub fn levels_between(prev_next: u32, new_next: u32) -> u32 {
+    let mut cursor = prev_next;
+    let mut levels = 0;
+    while cursor < new_next && levels < 64 {
+        cursor = xp_ramp(cursor);
+        levels += 1;
+        if cursor == new_next {
+            return levels;
+        }
+    }
+    0
+}
+
+/// Deteção ROBUSTA de level-up: compara o `Xp.next` atual com o último visto
+/// em [`XpLevel`]. Como `gain_xp` só mexe em `next` quando se sobe de nível,
+/// esta única porta apanha TODAS as fontes (kills do melee, turn-ins de
+/// quest, colheita, tecla [K], `viber.debug.xp`, scripts). A 1.ª vez que o
+/// herói é visto insere o baseline em silêncio (sem fanfarra ao arrancar).
+#[allow(clippy::type_complexity)]
+pub fn level_up_detector(
+    mut heroes: Query<(Entity, &Xp, Option<&mut XpLevel>), (With<Player>, Changed<Xp>)>,
+    mut events: MessageWriter<LevelUpEvent>,
+    mut commands: Commands,
+) {
+    for (entity, xp, level) in &mut heroes {
+        match level {
+            Some(mut lvl) => {
+                if xp.next == lvl.last_next {
+                    continue;
+                }
+                let gained = levels_between(lvl.last_next, xp.next);
+                lvl.last_next = xp.next;
+                if gained > 0 {
+                    lvl.level = lvl.level.saturating_add(gained);
+                    events.write(LevelUpEvent {
+                        new_level: lvl.level,
+                    });
+                }
+            }
+            None => {
+                commands.entity(entity).insert(XpLevel {
+                    level: 1,
+                    last_next: xp.next,
+                });
+            }
+        }
+    }
+}
+
+/// Spec de burst de juice sobre um preset — a mesma forma do `impact_spec`
+/// do combat (privado), publicada aqui para os módulos do passe de juice
+/// (`vitals`/`quests`/`travel`) não duplicarem o builder.
+pub fn juice_spec(
+    preset: &str,
+    size: (f32, f32),
+    life: (f32, f32),
+    speed: (f32, f32),
+    color: Option<[f32; 3]>,
+) -> crate::recipes::ParticleSpec {
+    crate::recipes::ParticleSpec {
+        preset: preset.to_string(),
+        emission_rate: None,
+        life: Some(life),
+        speed: Some(speed),
+        size: Some(size),
+        color,
+        shape_radius: None,
+        looping: false,
+        world_space: false,
+    }
+}
+
+/// Fanfarra do level-up: bursts `magic`+`sparkle` no herói, toast "NÍVEL X",
+/// kick de exposição (+0.6 EV com decay ~1 s) e `SfxEvent::LevelUp`. Corre
+/// uma vez por [`LevelUpEvent`]; sem herói visível, só o toast/SFX/kick
+/// perdem a posição — os bursts são os únicos que exigem a âncora.
+#[allow(clippy::type_complexity)]
+pub fn level_up_fx(
+    mut events: MessageReader<LevelUpEvent>,
+    players: Query<&GlobalTransform, With<Player>>,
+    mut postfx: Option<ResMut<crate::postfx::PostFxState>>,
+    mut sfx: MessageWriter<crate::ambient::SfxEvent>,
+    mut toasts: MessageWriter<crate::luau::ScriptToast>,
+    mut commands: Commands,
+    mut meshes: Option<ResMut<Assets<Mesh>>>,
+    mut materials: Option<ResMut<Assets<StandardMaterial>>>,
+) {
+    for event in events.read() {
+        // SFX e toast são de interface (sem posição, volume cheio).
+        sfx.write(crate::ambient::SfxEvent {
+            clip: crate::ambient::SfxClip::LevelUp,
+            position: None,
+        });
+        toasts.write(crate::luau::ScriptToast(format!("NÍVEL {}", event.new_level)));
+        if let Some(fx) = postfx.as_deref_mut() {
+            fx.kick_exposure(LEVELUP_KICK_EV);
+        }
+        // as_deref_mut por iteração: os assets têm de sobreviver a vários
+        // eventos no mesmo frame (Option<ResMut> não é Copy). Já são
+        // `&mut Assets<_>` — passam direto ao spawn_burst.
+        let (Some(meshes), Some(materials)) =
+            (meshes.as_deref_mut(), materials.as_deref_mut())
+        else {
+            continue; // apps mínimas sem AssetPlugin: bursts não aplicam
+        };
+        let Some(anchor) = players.iter().next().map(|t| t.translation()) else {
+            continue;
+        };
+        // Aura mágica a subir + faíscas douradas — o herói é a âncora.
+        crate::particles::spawn_burst(
+            &mut commands,
+            &mut *meshes,
+            &mut *materials,
+            &juice_spec(
+                "magic",
+                (0.35, 0.85),
+                (0.5, 1.0),
+                (1.2, 3.0),
+                Some([0.65, 0.5, 1.0]),
+            ),
+            anchor + Vec3::Y * 1.0,
+            12,
+        );
+        crate::particles::spawn_burst(
+            &mut commands,
+            &mut *meshes,
+            &mut *materials,
+            &juice_spec(
+                "sparkle",
+                (0.15, 0.45),
+                (0.4, 0.9),
+                (2.0, 5.0),
+                Some([1.0, 0.85, 0.4]),
+            ),
+            anchor + Vec3::Y * 1.2,
+            22,
+        );
+    }
+}
+
+/// Plugin do passe de juice nos vitals (level-up). Registo de mensagens
+/// idempotente com o Ambient/Combat/… — apps mínimas de teste ficam
+/// auto-suficientes (mesmo padrão do `CombatPlugin`).
+pub struct VitalsPlugin;
+
+impl Plugin for VitalsPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_message::<LevelUpEvent>()
+            .add_message::<crate::ambient::SfxEvent>()
+            .add_message::<crate::luau::ScriptToast>()
+            .add_systems(bevy::app::Update, (level_up_detector, level_up_fx));
+    }
+}
+
 /// Debug vitals driver for the hero: `H` deals [`DEBUG_DAMAGE`], `N` fully
 /// heals, `K` gains [`DEBUG_XP_GAIN`]. Inserts missing `Health`/`Xp` on the
 /// first relevant press (spawn recipes are intentionally left untouched).
@@ -123,10 +315,16 @@ pub fn gain_xp(xp: &mut Xp, gain: u32) {
 #[allow(clippy::type_complexity)]
 pub fn debug_damage(
     keys: Res<ButtonInput<KeyCode>>,
+    menus: Res<crate::menus::MenusOpen>,
     mut commands: Commands,
     mut players: Query<(Entity, Option<&mut Health>, Option<&mut Xp>), With<Player>>,
     mut hurts: bevy::ecs::message::MessageWriter<crate::feedback::PlayerHurt>,
 ) {
+    // [K] abre a loja no shop_system; com o modal aberto não dá +10 XP
+    // (tecla de debug da Fase 0 a entrar em conflito com o jogo real).
+    if menus.any() {
+        return;
+    }
     let Ok((entity, mut health, mut xp)) = players.single_mut() else {
         return;
     };
@@ -270,5 +468,97 @@ mod tests {
         assert_eq!(xp_ramp(100), 150);
         assert_eq!(xp_ramp(150), 225);
         assert_eq!(xp_ramp(1), 2); // +50 % rounds up, min 1
+    }
+
+    // ── level-up (passe de juice r1) ────────────────────────────────────
+
+    #[derive(Resource, Default)]
+    struct SeenLevelUps(Vec<u32>);
+
+    fn record_level_ups(
+        mut reader: MessageReader<LevelUpEvent>,
+        mut seen: ResMut<SeenLevelUps>,
+    ) {
+        for event in reader.read() {
+            seen.0.push(event.new_level);
+        }
+    }
+
+    fn detector_app() -> (App, Entity) {
+        let mut app = App::default();
+        app.add_message::<LevelUpEvent>();
+        app.init_resource::<SeenLevelUps>();
+        app.add_systems(Update, (level_up_detector, record_level_ups).chain());
+        let hero = app
+            .world_mut()
+            .spawn((Player::default(), Xp::default()))
+            .id();
+        (app, hero)
+    }
+
+    fn grant(app: &mut App, hero: Entity, amount: u32) {
+        let mut xp = app.world_mut().get_mut::<Xp>(hero).unwrap();
+        gain_xp(&mut xp, amount);
+    }
+
+    #[test]
+    fn test_level_up_detector_fires_once_per_transition() {
+        let (mut app, hero) = detector_app();
+        // 1.ª passagem: baseline silencioso (sem fanfarra ao arrancar).
+        app.update();
+        assert!(app.world().resource::<SeenLevelUps>().0.is_empty());
+
+        // XP sem cruzar o patamar: nada.
+        grant(&mut app, hero, 30); // 30/100
+        app.update();
+        assert!(
+            app.world().resource::<SeenLevelUps>().0.is_empty(),
+            "XP sem transição não fanfarra"
+        );
+
+        // Cruza o patamar: exatamente UMA mensagem, nível 2.
+        grant(&mut app, hero, 95); // 25/150
+        app.update();
+        assert_eq!(app.world().resource::<SeenLevelUps>().0, vec![2]);
+
+        // Re-update sem nova concessão: NÃO re-dispara.
+        app.update();
+        assert_eq!(
+            app.world().resource::<SeenLevelUps>().0.len(),
+            1,
+            "1 vez por transição"
+        );
+    }
+
+    #[test]
+    fn test_level_up_detector_collapses_multi_level_and_catches_all_sources() {
+        let (mut app, hero) = detector_app();
+        app.update(); // baseline
+        // Concessão enorme (500 XP a 5/150) sobe DOIS níveis de uma vez —
+        // colapsa num único evento com o nível FINAL.
+        grant(&mut app, hero, 500); // 130/337, níveis 2→4
+        app.update();
+        assert_eq!(app.world().resource::<SeenLevelUps>().0, vec![4]);
+        // E a tecla de debug/quests/etc. usam o MESMO caminho (mutação em Xp)
+        // — a deteção é pela mudança de `next`, não por fonte.
+        grant(&mut app, hero, 1000); // vários níveis outra vez
+        app.update();
+        let seen = &app.world().resource::<SeenLevelUps>().0;
+        assert_eq!(seen.len(), 2, "um evento por frame de transição");
+        assert!(seen[1] > seen[0], "nível é monotónico: {seen:?}");
+    }
+
+    #[test]
+    fn test_levels_between_counts_exact_ramp_chains_only() {
+        assert_eq!(levels_between(100, 150), 1);
+        assert_eq!(levels_between(100, 225), 2);
+        assert_eq!(levels_between(150, 225), 1);
+        assert_eq!(levels_between(100, 338), 3); // 100→150→225→338
+        // Mesmo patamar / regressão (save antigo) / cadeia que não bate
+        // (load arbitrária): 0 — o detector ressincroniza sem fanfarra.
+        assert_eq!(levels_between(150, 150), 0);
+        assert_eq!(levels_between(225, 150), 0);
+        assert_eq!(levels_between(100, 999), 0);
+        assert_eq!(levels_between(0, 0), 0);
     }
 }

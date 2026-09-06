@@ -17,9 +17,10 @@ use bevy::prelude::*;
 
 use crate::economy::Vault;
 use crate::feedback::{AttackAlert, DamageNumberEvent, Invulnerable};
-use crate::luau::{ScriptInteraction, ScriptToast};
+use crate::luau::{LuaScriptRef, ScriptInteraction, ScriptToast};
 use crate::player::Player;
-use crate::vitals::{Health, Xp, apply_damage};
+use crate::quests::QuestLog;
+use crate::vitals::{Health, Xp, apply_damage, gain_xp};
 
 // ── constantes ──────────────────────────────────────────────────────────
 
@@ -34,6 +35,37 @@ pub const STRIKE_COOLDOWN: f32 = 8.0;
 pub const BOMB_FUSE: f32 = 1.5;
 pub const BOMB_DAMAGE: f32 = 90.0;
 pub const BOMB_RADIUS: f32 = 6.0;
+
+// ── paridade de impacto com o melee (ver consts SHAKE_*/HIT_STOP_* em
+//    `combat.rs`): sem isto o slam/bomba eram "números a mais" sem peso ──
+
+/// [R]: knockback radial FORA do centro (força; deslocamento ≈
+/// força/KNOCKBACK_DECAY ≈ 1.2 m).
+pub const STRIKE_KNOCKBACK_STRENGTH: f32 = 7.0;
+/// [R]: sparks por inimigo atingido.
+pub const STRIKE_SPARK_COUNT: usize = 18;
+/// [R]: trauma de shake no slam com alvo.
+pub const STRIKE_SHAKE: f32 = 0.45;
+/// [R]: impulso vertical do kick de câmara (o chão sobe contra ela).
+pub const STRIKE_KICK_UP: f32 = 1.2;
+/// [R]: punch de pós-processo (stops de clareza, bloom).
+pub const STRIKE_PUNCH_STOPS: f32 = 0.45;
+pub const STRIKE_PUNCH_BLOOM: f32 = 0.18;
+/// [R]: raio do anel de choque (m) — casa com STRIKE_RADIUS.
+pub const STRIKE_RING_RADIUS: f32 = 4.8;
+/// [R]: fator do snap de facing no cast (1 = teleporta a rotação).
+pub const STRIKE_FACE_SNAP: f32 = 0.45;
+/// [B]: sparks por criatura apanhada pela explosão.
+pub const BOMB_SPARK_COUNT: usize = 16;
+/// [B]: trauma de shake na detonação.
+pub const BOMB_SHAKE: f32 = 0.5;
+/// [B]: impulso vertical do kick de câmara.
+pub const BOMB_KICK_UP: f32 = 1.6;
+/// [B]: punch de pós-processo (stops de clareza, bloom).
+pub const BOMB_PUNCH_STOPS: f32 = 0.55;
+pub const BOMB_PUNCH_BLOOM: f32 = 0.22;
+/// [B]: raio do anel de choque (m) — maior que o slam: é uma explosão.
+pub const BOMB_RING_RADIUS: f32 = 5.5;
 
 // ── passivas ────────────────────────────────────────────────────────────
 
@@ -55,14 +87,54 @@ pub struct SkillDef {
 
 /// As 8 passivas (espelha skills.ts).
 pub const SKILLS: [SkillDef; 8] = [
-    SkillDef { id: "vitality1", label: "Vitalidade I (+20 HP)", requires: &[], effect: SkillEffect::MaxHp(20.0) },
-    SkillDef { id: "strength1", label: "Força I (+6 dano)", requires: &[], effect: SkillEffect::Damage(6.0) },
-    SkillDef { id: "agility1", label: "Agilidade I (+10% velocidade)", requires: &[], effect: SkillEffect::Speed(0.10) },
-    SkillDef { id: "precision1", label: "Precisão I (+8% crítico)", requires: &[], effect: SkillEffect::Crit(0.08) },
-    SkillDef { id: "vitality2", label: "Vitalidade II (+30 HP)", requires: &["vitality1"], effect: SkillEffect::MaxHp(30.0) },
-    SkillDef { id: "strength2", label: "Força II (+10 dano)", requires: &["strength1"], effect: SkillEffect::Damage(10.0) },
-    SkillDef { id: "agility2", label: "Agilidade II (+15% velocidade)", requires: &["agility1"], effect: SkillEffect::Speed(0.15) },
-    SkillDef { id: "precision2", label: "Precisão II (+10% crítico)", requires: &["precision1"], effect: SkillEffect::Crit(0.10) },
+    SkillDef {
+        id: "vitality1",
+        label: "Vitalidade I (+20 HP)",
+        requires: &[],
+        effect: SkillEffect::MaxHp(20.0),
+    },
+    SkillDef {
+        id: "strength1",
+        label: "Força I (+6 dano)",
+        requires: &[],
+        effect: SkillEffect::Damage(6.0),
+    },
+    SkillDef {
+        id: "agility1",
+        label: "Agilidade I (+10% velocidade)",
+        requires: &[],
+        effect: SkillEffect::Speed(0.10),
+    },
+    SkillDef {
+        id: "precision1",
+        label: "Precisão I (+8% crítico)",
+        requires: &[],
+        effect: SkillEffect::Crit(0.08),
+    },
+    SkillDef {
+        id: "vitality2",
+        label: "Vitalidade II (+30 HP)",
+        requires: &["vitality1"],
+        effect: SkillEffect::MaxHp(30.0),
+    },
+    SkillDef {
+        id: "strength2",
+        label: "Força II (+10 dano)",
+        requires: &["strength1"],
+        effect: SkillEffect::Damage(10.0),
+    },
+    SkillDef {
+        id: "agility2",
+        label: "Agilidade II (+15% velocidade)",
+        requires: &["agility1"],
+        effect: SkillEffect::Speed(0.15),
+    },
+    SkillDef {
+        id: "precision2",
+        label: "Precisão II (+10% crítico)",
+        requires: &["precision1"],
+        effect: SkillEffect::Crit(0.10),
+    },
 ];
 
 /// Bónus agregados das passivas aprendidas.
@@ -76,7 +148,10 @@ pub struct PlayerStats {
 
 /// Puro: bónus a partir dos ids aprendidos.
 pub fn stats_from_learned(learned: &[String]) -> PlayerStats {
-    let mut stats = PlayerStats { speed_mult: 1.0, ..Default::default() };
+    let mut stats = PlayerStats {
+        speed_mult: 1.0,
+        ..Default::default()
+    };
     for id in learned {
         if let Some(def) = SKILLS.iter().find(|s| s.id == id) {
             match def.effect {
@@ -104,7 +179,10 @@ impl SkillTree {
             return false;
         }
         match SKILLS.iter().find(|s| s.id == id) {
-            Some(def) => def.requires.iter().all(|r| self.learned.iter().any(|l| l == r)),
+            Some(def) => def
+                .requires
+                .iter()
+                .all(|r| self.learned.iter().any(|l| l == r)),
             None => false,
         }
     }
@@ -139,6 +217,29 @@ impl SkillTree {
 #[derive(Debug, Clone, Resource, Default)]
 pub struct PlayerStatsResource(pub PlayerStats);
 
+/// Aplica aos componentes do herói o delta entre dois agregados de
+/// passivas — usado ao aprender (anterior → novo) e ao carregar um save
+/// (delta desde o default). Sem isto, Speed/MaxHp eram comprados e não
+/// faziam NADA: nenhum sistema consumia `speed_mult`/`max_hp_bonus`.
+pub fn apply_passive_delta(
+    health: &mut Health,
+    player: &mut Player,
+    previous: &PlayerStats,
+    new: &PlayerStats,
+) {
+    let hp_delta = new.max_hp_bonus - previous.max_hp_bonus;
+    if hp_delta != 0.0 {
+        health.max += hp_delta;
+        // O HP ganho entra já disponível (compra "Vitalidade +20" sobe o
+        // actual na mesma medida).
+        health.current = (health.current + hp_delta).clamp(0.0, health.max);
+    }
+    let speed_ratio = new.speed_mult / previous.speed_mult.max(f32::EPSILON);
+    if speed_ratio != 1.0 && speed_ratio.is_finite() {
+        player.speed *= speed_ratio;
+    }
+}
+
 // ── estado de combate ───────────────────────────────────────────────────
 
 /// Cooldowns das abilities (s restantes).
@@ -167,6 +268,14 @@ pub struct Guarding {
 pub struct LevelState {
     pub level: u32,
     pub points: u32,
+}
+
+/// Último `xp.next` visto, entre frames E entre save/loads. Resource (não
+/// `Local`) para o load sincronizá-lo — carregar um save com `xp.next`
+/// maior creditava pontos de nível GRÁTIS.
+#[derive(Debug, Clone, Resource, Default)]
+pub struct LevelProgress {
+    pub previous_next: Option<u32>,
 }
 
 /// Bomba no ar.
@@ -228,8 +337,20 @@ impl Plugin for SkillsPlugin {
             .init_resource::<AbilityCooldowns>()
             .init_resource::<ComboState>()
             .init_resource::<PlayerStatsResource>()
+            .init_resource::<LevelProgress>()
             .init_resource::<SkillUiSelection>()
-            .add_systems(Startup, (spawn_ability_bars, spawn_bomb_assets))
+            // Os sistemas [C]/[B]/[L] consultam `MenusOpen` (apps mínimas:
+            // nasce aqui; na app completa o MenusPlugin inicializa-o igual).
+            .init_resource::<crate::menus::MenusOpen>()
+            // FOV kick do dash (idempotente com o CombatPlugin).
+            .init_resource::<crate::camera::CameraFx>()
+            // FX de impacto ([R]/[B] somam hit-stop/trauma/kick/punch): nasce
+            // aqui também para apps mínimas (idempotente com os plugins donos).
+            .init_resource::<crate::combat::HitStop>()
+            .init_resource::<crate::camera::CameraShake>()
+            .init_resource::<crate::camera::CameraKick>()
+            .init_resource::<crate::postfx::PostFxState>()
+            .add_systems(Startup, spawn_bomb_assets)
             .add_systems(
                 Update,
                 (
@@ -238,95 +359,17 @@ impl Plugin for SkillsPlugin {
                     bomb_step_system,
                     guard_system,
                     level_system,
-                    ability_bars_system,
-                    skill_learn_system,
                 ),
             );
     }
 }
 
-/// [P] na tab Skills (modal aberto, tab índice 2): aprende a skill
-/// selecionada e atualiza os bónus vivos.
-fn skill_learn_system(
-    keys: Res<ButtonInput<KeyCode>>,
-    menus_open: Res<crate::menus::MenusOpen>,
-    tab: Res<crate::menus::ModalTab>,
-    mut selection: ResMut<SkillUiSelection>,
-    mut tree: ResMut<SkillTree>,
-    mut stats: ResMut<PlayerStatsResource>,
-    mut toasts: MessageWriter<ScriptToast>,
-) {
-    if !menus_open.modal || tab.0 != 2 {
-        return;
-    }
-    if keys.just_pressed(KeyCode::ArrowDown) || keys.just_pressed(KeyCode::KeyS) {
-        selection.0 = (selection.0 + 1) % SKILLS.len();
-    }
-    if keys.just_pressed(KeyCode::ArrowUp) || keys.just_pressed(KeyCode::KeyW) {
-        selection.0 = (selection.0 + SKILLS.len() - 1) % SKILLS.len();
-    }
-    if keys.just_pressed(KeyCode::KeyP) {
-        let id = SKILLS[selection.0 % SKILLS.len()].id;
-        match tree.learn(id) {
-            Some(new_stats) => {
-                stats.0 = new_stats;
-                if let Some(def) = SKILLS.iter().find(|s| s.id == id) {
-                    toasts.write(ScriptToast(format!("Aprendida: {}", def.label)));
-                }
-            }
-            None => {
-                toasts.write(ScriptToast(
-                    "Sem pontos ou requisitos por cumprir.".into(),
-                ));
-            }
-        }
-    }
-}
-
-// ── UI das barras ───────────────────────────────────────────────────────
-
-fn spawn_ability_bars(mut commands: Commands) {
-    commands
-        .spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                bottom: Val::Px(84.0),
-                left: Val::Px(12.0),
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(3.0),
-                ..Default::default()
-            },
-            Name::new("ui:abilities"),
-        ))
-        .with_children(|bar| {
-            for (i, (key, label)) in
-                [("[C]", "Dash"), ("[E]", "Cura"), ("[R]", "Golpe forte")]
-                    .into_iter()
-                    .enumerate()
-            {
-                bar.spawn((
-                    Node {
-                        padding: UiRect::axes(Val::Px(8.0), Val::Px(3.0)),
-                        border_radius: BorderRadius::all(Val::Px(8.0)),
-                        ..Default::default()
-                    },
-                    BackgroundColor(Color::srgba(0.08, 0.08, 0.07, 0.8)),
-                    Name::new(format!("ability-{i}")),
-                ))
-                .with_children(|slot| {
-                    slot.spawn((
-                        Text::new(format!("{key} {label}")),
-                        TextColor(Color::srgba(0.95, 0.93, 0.85, 0.9)),
-                        TextFont::from_font_size(12.0),
-                        AbilityBarText,
-                    ));
-                });
-            }
-        });
-}
-
-#[derive(Component)]
-struct AbilityBarText;
+// ── UI das habilidades ──────────────────────────────────────────────────
+// As três barras de texto ("[C] Dash pronto", …) foram substituídas pelos
+// slots `<UiCooldown>` do HUD declarativo: a tecla é o ícone, a veladura
+// mostra o recarregamento e a folha de estilo acende o aro quando fica
+// pronta. Os cooldowns continuam a viver em `AbilityCooldowns`, que a UI lê
+// pelos bindings `cd.dash` / `cd.heal` / `cd.strike` (`src/ui/bind.rs`).
 
 fn spawn_bomb_assets(
     mut commands: Commands,
@@ -349,6 +392,7 @@ fn spawn_bomb_assets(
 fn guard_system(
     keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
+    menus: Res<crate::menus::MenusOpen>,
     players: Query<Entity, With<Player>>,
     mut guards: Query<&mut Guarding>,
     mut commands: Commands,
@@ -356,7 +400,9 @@ fn guard_system(
     let Ok(player) = players.single() else {
         return;
     };
-    let holding = keys.pressed(KeyCode::KeyL);
+    // Menu aberto rouba [L]: trata como "largo" — sem isto, o Guarding
+    // ficava preso no herói até fechar o modal (−75 % de dano eterno).
+    let holding = !menus.any() && keys.pressed(KeyCode::KeyL);
     if holding && guards.get_mut(player).is_err() {
         commands.entity(player).insert(Guarding { timer: 0.0 });
     }
@@ -369,26 +415,122 @@ fn guard_system(
     }
 }
 
+/// Paridade com o melee (`combat.rs`): um morto por qualquer via perde o
+/// script, vira cadáver, dá XP e reporta o abate às quests — sem isto, o
+/// [R]/[B]/fireball deixava o inimigo a 0 HP de pé, com a FSM a correr e
+/// sem XP. Pub(crate): a fireball (`combat.rs`) reutiliza-a.
+pub(crate) fn kill_creature(
+    commands: &mut Commands,
+    target: Entity,
+    script: Option<&LuaScriptRef>,
+    position: Vec3,
+    hero_xp: &mut Query<&mut Xp, With<crate::player::Player>>,
+    numbers: &mut MessageWriter<DamageNumberEvent>,
+    toasts: &mut MessageWriter<ScriptToast>,
+    quests: &mut Option<ResMut<QuestLog>>,
+    sfx: &mut MessageWriter<crate::ambient::SfxEvent>,
+) {
+    commands
+        .entity(target)
+        .remove::<LuaScriptRef>()
+        .insert(crate::combat::Corpse {
+            timer: crate::combat::CORPSE_LIFETIME,
+        });
+    sfx.write(crate::ambient::SfxEvent {
+        clip: crate::ambient::SfxClip::EnemyDeath,
+        position: Some(position),
+    });
+    if let Ok(mut xp) = hero_xp.single_mut() {
+        gain_xp(&mut xp, crate::combat::KILL_XP);
+    }
+    numbers.write(DamageNumberEvent {
+        position: position + Vec3::Y * 0.4,
+        text: format!("+{} XP", crate::combat::KILL_XP),
+        color: Color::srgb(1.0, 0.8, 0.25),
+    });
+    toasts.write(ScriptToast(format!(
+        "Inimigo derrotado (+{} XP)",
+        crate::combat::KILL_XP
+    )));
+    if let (Some(script), Some(quests)) = (script, quests.as_deref_mut()) {
+        let kind = crate::combat::script_kind(&script.path);
+        for ready in quests.report_kill(&kind) {
+            if let Some(def) = quests.def(&ready) {
+                toasts.write(ScriptToast(format!(
+                    "Objetivo completo: {} — volta ao NPC",
+                    def.title
+                )));
+            }
+        }
+    }
+}
+
+/// Contexto de FX das abilities — o `abilities_system` vive no teto de 16
+/// params de sistema, pelo que os efeitos de impacto (paridade com o melee:
+/// bursts + anéis de choque, hit-stop, trauma, solavanco direcional e pulso
+/// de pós-processo) e o FOV kick da câmara (dash) viajam juntos.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct AbilityFx<'w> {
+    sfx: bevy::ecs::message::MessageWriter<'w, crate::ambient::SfxEvent>,
+    camera_fx: ResMut<'w, crate::camera::CameraFx>,
+    // Música de combate: o slam também renova a layer battle/boss.
+    combat_music: ResMut<'w, crate::music::CombatMusicState>,
+    time: Res<'w, Time>,
+    meshes: ResMut<'w, Assets<Mesh>>,
+    materials: ResMut<'w, Assets<StandardMaterial>>,
+    hit_stop: ResMut<'w, crate::combat::HitStop>,
+    shake: ResMut<'w, crate::camera::CameraShake>,
+    kick: ResMut<'w, crate::camera::CameraKick>,
+    postfx: ResMut<'w, crate::postfx::PostFxState>,
+}
+
 /// [C] dash · [E] cura (fora de interação) · [R] golpe forte radial.
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
-fn abilities_system(
+pub fn abilities_system(
     keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
+    menus: Res<crate::menus::MenusOpen>,
     mut cds: ResMut<AbilityCooldowns>,
-    mut players: Query<(Entity, &GlobalTransform, &mut Transform, Option<&mut Health>), With<Player>>,
+    mut players: Query<
+        (
+            Entity,
+            &GlobalTransform,
+            &mut Transform,
+            Option<&mut Health>,
+        ),
+        With<Player>,
+    >,
     interactions: Query<(&GlobalTransform, &ScriptInteraction), Without<Player>>,
-    mut creatures: Query<(&GlobalTransform, &mut Health), Without<Player>>,
+    npcs: Query<&GlobalTransform, (With<crate::recipes::spawn::DialogueNpc>, Without<Player>)>,
+    mut creatures: Query<
+        (
+            Entity,
+            &GlobalTransform,
+            &mut Health,
+            Option<&LuaScriptRef>,
+            Option<&crate::impact::HitRecoil>,
+        ),
+        (Without<Player>, Without<crate::combat::Corpse>),
+    >,
+    mut hero_xp: Query<&mut Xp, With<Player>>,
     mut numbers: MessageWriter<DamageNumberEvent>,
     mut toasts: MessageWriter<ScriptToast>,
     stats: Res<PlayerStatsResource>,
     terrain: Option<Res<crate::terrain::runtime::TerrainRuntime>>,
     mut commands: Commands,
-    mut sfx: MessageWriter<crate::ambient::SfxEvent>,
+    mut fx: AbilityFx,
+    mut quests: Option<ResMut<QuestLog>>,
 ) {
     let dt = time.delta_secs();
     cds.dash = (cds.dash - dt).max(0.0);
     cds.heal = (cds.heal - dt).max(0.0);
     cds.strike = (cds.strike - dt).max(0.0);
+    // Menu aberto consome [C]/[E]/[R]: dashava, curava e gastava cooldown
+    // por trás do modal (os cooldowns continuam a correr, como as janelas
+    // do melee).
+    if menus.any() {
+        return;
+    }
     let Ok((entity, global, mut transform, mut health)) = players.single_mut() else {
         return;
     };
@@ -396,19 +538,34 @@ fn abilities_system(
 
     // [C] dash
     if keys.just_pressed(KeyCode::KeyC) && cds.dash <= 0.0 {
-        let forward = transform.forward().normalize_or_zero() * DASH_DISTANCE;
+        // O modelo olha +Z (convenção da pipeline) — o `forward()` (−Z)
+        // dashava PARA TRÁS (mesma correção do melee, `combat::hero_forward`).
+        let forward = crate::combat::hero_forward(global) * DASH_DISTANCE;
         let (x, z) = (pos.x + forward.x, pos.z + forward.z);
         let y = terrain.as_ref().map(|t| t.sample(x, z)).unwrap_or(pos.y);
         transform.translation = Vec3::new(x, y, z);
-        commands.entity(entity).insert(Invulnerable { timer: DASH_IFRAMES });
+        commands.entity(entity).insert(Invulnerable {
+            timer: DASH_IFRAMES,
+        });
         cds.dash = DASH_COOLDOWN;
+        // FOV kick do dash: punch de +8° que decai em 0,3 s (sensação de
+        // rajada — o mundo "abre" e fecha de volta ao FOV autoral).
+        crate::camera::fov_kick(&mut fx.camera_fx, crate::camera::FOV_KICK_DASH);
+        fx.sfx.write(crate::ambient::SfxEvent {
+            clip: crate::ambient::SfxClip::Dash,
+            position: Some(pos),
+        });
     }
 
     // [E] cura — só quando NÃO há interação em alcance ([E] interagir ganha)
     if keys.just_pressed(KeyCode::KeyE) && cds.heal <= 0.0 {
-        let near_interaction = interactions
-            .iter()
-            .any(|(t, _)| t.translation().distance(pos) < 3.5);
+        // O [E] de interagir ganha: DialogueNPC (diálogo a 3,5 m, sem
+        // ScriptInteraction) e interações com range autoral > 3,5 m contam
+        // também — senão a cura saía AQUI e o diálogo/prompt em cima.
+        let near_interaction = npcs.iter().any(|t| t.translation().distance(pos) < 3.5)
+            || interactions
+                .iter()
+                .any(|(t, i)| t.translation().distance(pos) < i.range.max(3.5));
         if !near_interaction {
             if let Some(health) = health.as_mut() {
                 let healed = HEAL_ABILITY_AMOUNT.min(health.max - health.current);
@@ -419,26 +576,89 @@ fn abilities_system(
                     text: format!("+{}", healed.round() as i32),
                     color: Color::srgb(0.4, 1.0, 0.45),
                 });
+                if healed > 0.0 {
+                    fx.sfx.write(crate::ambient::SfxEvent {
+                        clip: crate::ambient::SfxClip::Heal,
+                        position: None,
+                    });
+                }
             }
         }
     }
 
-    // [R] golpe forte radial
+    // [R] golpe forte radial — SLAM no chão: o herói vira-se para o inimigo
+    // mais próximo do raio, o impacto leva a paridade completa do melee
+    // (flash + sparks + recoil + knockback por inimigo; hit-stop + shake +
+    // solavanco + punch de pós-processo globais) e um anel de choque onda o
+    // chão. Antes disto era só um número a mais.
     if keys.just_pressed(KeyCode::KeyR) && cds.strike <= 0.0 {
         cds.strike = STRIKE_COOLDOWN;
         let damage = STRIKE_DAMAGE + stats.0.bonus_damage;
+        let mut kills: Vec<(Entity, Option<&LuaScriptRef>, Vec3)> = Vec::new();
         let mut hit_any = false;
-        for (t, mut health) in creatures.iter_mut() {
-            let d = t.translation().distance(pos);
-            if d <= STRIKE_RADIUS {
-                apply_damage(&mut health, damage);
-                numbers.write(DamageNumberEvent {
-                    position: t.translation() + Vec3::Y * 1.8,
-                    text: format!("-{}", damage as i32),
-                    color: Color::srgb(1.0, 0.5, 0.2),
-                });
-                hit_any = true;
+        let mut face_dir: Option<Vec3> = None;
+        for (target, t, mut health, script, recoil) in creatures.iter_mut() {
+            let delta = t.translation() - pos;
+            let d = delta.length();
+            if d > STRIKE_RADIUS {
+                continue;
             }
+            // Snap de facing para o PRIMEIRO inimigo no raio (o mais próximo
+            // na ordem de query não é garantido, mas para um slam radial
+            // qualquer direção válida serve — o MODELO tem de apontar).
+            if face_dir.is_none() {
+                face_dir = Some(delta.with_y(0.0).normalize_or_zero());
+            }
+            // Combate vivo: renova a layer battle/boss no driver de BGM.
+            let is_boss = script
+                .map(|s| s.path.replace('\\', "/").starts_with("bosses/"))
+                .unwrap_or(false);
+            fx.combat_music.engage(fx.time.elapsed_secs_f64(), is_boss);
+            apply_damage(&mut health, damage);
+            commands.entity(target).insert(crate::feedback::HitFlash {
+                timer: crate::feedback::HIT_FLASH_SECS,
+            });
+            if health.current > 0.0 {
+                // Stagger visual (squash) — reutiliza a base de um recoil em
+                // curso para o re-hit não compor a deformação.
+                commands.entity(target).insert(crate::impact::HitRecoil::new(
+                    recoil.map(|r| r.base_scale).unwrap_or(t.scale()),
+                ));
+                // Knockback para fora do centro do slam (~1.2 m de recuo).
+                commands.entity(target).insert(
+                    crate::physics_fx::knockback_after(delta, STRIKE_KNOCKBACK_STRENGTH),
+                );
+            }
+            crate::particles::spawn_burst(
+                &mut commands,
+                &mut fx.meshes,
+                &mut fx.materials,
+                &crate::combat::hit_sparks_spec(),
+                t.translation() + Vec3::Y * 1.0,
+                STRIKE_SPARK_COUNT,
+            );
+            numbers.write(DamageNumberEvent {
+                position: t.translation() + Vec3::Y * 1.8,
+                text: format!("-{}", damage as i32),
+                color: Color::srgb(1.0, 0.5, 0.2),
+            });
+            hit_any = true;
+            if health.current <= 0.0 {
+                kills.push((target, script, t.translation()));
+            }
+        }
+        for (target, script, position) in kills {
+            kill_creature(
+                &mut commands,
+                target,
+                script,
+                position,
+                &mut hero_xp,
+                &mut numbers,
+                &mut toasts,
+                &mut quests,
+                &mut fx.sfx,
+            );
         }
         toasts.write(ScriptToast(if hit_any {
             "GOLPE FORTE!".into()
@@ -446,38 +666,95 @@ fn abilities_system(
             "Golpe forte ao ar!".into()
         }));
         if hit_any {
-            sfx.write(crate::ambient::SfxEvent {
+            fx.sfx.write(crate::ambient::SfxEvent {
                 clip: crate::ambient::SfxClip::Whoosh,
                 position: Some(pos),
             });
+            fx.sfx.write(crate::ambient::SfxEvent {
+                clip: crate::ambient::SfxClip::Hit,
+                position: Some(pos),
+            });
+            crate::combat::request_hit_stop(&mut fx.hit_stop, crate::combat::HIT_STOP_HEAVY);
+            crate::camera::add_camera_shake(&mut fx.shake, STRIKE_SHAKE);
+            // O slam empurra a câmara PARA CIMA (o chão sobe contra ela).
+            crate::camera::add_camera_kick(&mut fx.kick, Vec3::Y * STRIKE_KICK_UP);
+            crate::postfx::punch_impact(
+                &mut fx.postfx,
+                STRIKE_PUNCH_STOPS,
+                STRIKE_PUNCH_BLOOM,
+            );
+        }
+        // O anel + poeira saem SEMPRE: o slam aterra, acerte ou não.
+        crate::impact::spawn_impact_ring(
+            &mut commands,
+            &mut fx.meshes,
+            &mut fx.materials,
+            pos.with_y(pos.y + 0.08),
+            STRIKE_RING_RADIUS,
+            Color::srgb(1.0, 0.85, 0.6),
+        );
+        crate::particles::spawn_burst(
+            &mut commands,
+            &mut fx.meshes,
+            &mut fx.materials,
+            &crate::combat::impact_spec(
+                "ground-dust",
+                (0.5, 1.0),
+                (0.5, 1.0),
+                (2.0, 4.5),
+                None,
+            ),
+            pos.with_y(pos.y + 0.15),
+            12,
+        );
+        if let Some(dir) = face_dir {
+            crate::combat::snap_facing(&mut transform, dir, STRIKE_FACE_SNAP);
         }
     }
 }
 
-/// [B] lança bomba (consome `bomb` do vault).
+/// [B] lança bomba (consome `bomb` do vault). Os pré-requisitos (assets,
+/// herói) validam-se ANTES de consumir o item — sem assets a bomba
+/// desaparecia do inventário sem nada ser lançado.
 fn bomb_throw_system(
     keys: Res<ButtonInput<KeyCode>>,
+    menus: Res<crate::menus::MenusOpen>,
     mut vault: ResMut<Vault>,
-    players: Query<(&GlobalTransform, &Transform), With<Player>>,
+    players: Query<&GlobalTransform, With<Player>>,
     assets: Option<Res<BombAssets>>,
     mut commands: Commands,
     mut toasts: MessageWriter<ScriptToast>,
+    mut sfx: MessageWriter<crate::ambient::SfxEvent>,
 ) {
-    if !keys.just_pressed(KeyCode::KeyB) {
+    // Menu aberto consome [B]: deixava de consumir bombas do vault por trás
+    // do modal.
+    if menus.any() {
         return;
     }
-    if !vault.item_take("bomb") {
-        toasts.write(ScriptToast("Sem bombas — compra ao mercador.".into()));
+    if !keys.just_pressed(KeyCode::KeyB) {
         return;
     }
     let Some(assets) = assets else {
         return;
     };
-    let Ok((global, transform)) = players.single() else {
+    let Ok(global) = players.single() else {
         return;
     };
+    if !vault.item_take("bomb") {
+        toasts.write(ScriptToast("Sem bombas — compra ao mercador.".into()));
+        sfx.write(crate::ambient::SfxEvent {
+            clip: crate::ambient::SfxClip::Error,
+            position: None,
+        });
+        return;
+    }
     let origin = global.translation() + Vec3::Y * 1.2;
-    let dir = transform.forward().normalize_or_zero();
+    // O modelo olha +Z — o `forward()` (−Z) lançava a bomba para trás.
+    let dir = crate::combat::hero_forward(global);
+    sfx.write(crate::ambient::SfxEvent {
+        clip: crate::ambient::SfxClip::BombDrop,
+        position: Some(origin),
+    });
     commands.spawn((
         Mesh3d(assets.mesh.clone()),
         MeshMaterial3d(assets.material.clone()),
@@ -492,17 +769,37 @@ fn bomb_throw_system(
     ));
 }
 
-/// Bomba: voo parabólico + explosão radial no fim do pavio.
+/// Bomba: voo parabólico + explosão radial no fim do pavio. A detonação tem
+/// a paridade de impacto do melee: flash + sparks + recoil por criatura,
+/// hit-stop + shake + solavanco + punch + anel de choque globais (o
+/// knockback radial já cá estava).
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn bomb_step_system(
     time: Res<Time>,
     mut bombs: Query<(Entity, &mut Transform, &mut Bomb)>,
-    mut creatures: Query<(Entity, &GlobalTransform, &mut Health), Without<Player>>,
+    mut creatures: Query<
+        (
+            Entity,
+            &GlobalTransform,
+            &mut Health,
+            Option<&LuaScriptRef>,
+            Option<&crate::impact::HitRecoil>,
+        ),
+        (Without<Player>, Without<crate::combat::Corpse>),
+    >,
+    mut hero_xp: Query<&mut Xp, With<Player>>,
     mut commands: Commands,
     mut numbers: MessageWriter<DamageNumberEvent>,
     mut alerts: MessageWriter<AttackAlert>,
     mut toasts: MessageWriter<ScriptToast>,
     mut sfx: MessageWriter<crate::ambient::SfxEvent>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut hit_stop: ResMut<crate::combat::HitStop>,
+    mut shake: ResMut<crate::camera::CameraShake>,
+    mut kick: ResMut<crate::camera::CameraKick>,
+    mut postfx: ResMut<crate::postfx::PostFxState>,
+    mut quests: Option<ResMut<QuestLog>>,
 ) {
     let dt = time.delta_secs();
     for (entity, mut transform, mut bomb) in &mut bombs {
@@ -513,17 +810,49 @@ fn bomb_step_system(
             continue;
         }
         let center = transform.translation;
-        for (target, t, mut health) in creatures.iter_mut() {
+        let mut kills: Vec<(Entity, Option<&LuaScriptRef>, Vec3)> = Vec::new();
+        for (target, t, mut health, script, recoil) in creatures.iter_mut() {
             let d = t.translation().distance(center);
             if let Some(dmg) = radial_damage(d, BOMB_RADIUS, BOMB_DAMAGE) {
                 apply_damage(&mut health, dmg);
+                commands.entity(target).insert(crate::feedback::HitFlash {
+                    timer: crate::feedback::HIT_FLASH_SECS,
+                });
+                if health.current > 0.0 {
+                    commands.entity(target).insert(crate::impact::HitRecoil::new(
+                        recoil.map(|r| r.base_scale).unwrap_or(t.scale()),
+                    ));
+                }
+                crate::particles::spawn_burst(
+                    &mut commands,
+                    &mut meshes,
+                    &mut materials,
+                    &crate::combat::hit_sparks_spec(),
+                    t.translation() + Vec3::Y * 1.0,
+                    BOMB_SPARK_COUNT,
+                );
                 numbers.write(DamageNumberEvent {
                     position: t.translation() + Vec3::Y * 1.8,
                     text: format!("-{}", dmg as i32),
                     color: Color::srgb(1.0, 0.6, 0.1),
                 });
-                let _ = target;
+                if health.current <= 0.0 {
+                    kills.push((target, script, t.translation()));
+                }
             }
+        }
+        for (target, script, position) in kills {
+            kill_creature(
+                &mut commands,
+                target,
+                script,
+                position,
+                &mut hero_xp,
+                &mut numbers,
+                &mut toasts,
+                &mut quests,
+                &mut sfx,
+            );
         }
         alerts.write(AttackAlert { position: center });
         sfx.write(crate::ambient::SfxEvent {
@@ -531,18 +860,33 @@ fn bomb_step_system(
             position: Some(center),
         });
         toasts.write(ScriptToast("BOOM!".into()));
+        // Peso de explosão: hit-stop + shake + solavanco vertical + punch +
+        // anel de choque (sempre — uma bomba detona, acerte ou não).
+        crate::combat::request_hit_stop(&mut hit_stop, crate::combat::HIT_STOP_HEAVY);
+        crate::camera::add_camera_shake(&mut shake, BOMB_SHAKE);
+        crate::camera::add_camera_kick(&mut kick, Vec3::Y * BOMB_KICK_UP);
+        crate::postfx::punch_impact(&mut postfx, BOMB_PUNCH_STOPS, BOMB_PUNCH_BLOOM);
+        crate::impact::spawn_impact_ring(
+            &mut commands,
+            &mut meshes,
+            &mut materials,
+            center.with_y(center.y + 0.08),
+            BOMB_RING_RADIUS,
+            Color::srgb(1.0, 0.75, 0.45),
+        );
         // knockback radial (loop 10): empurra as criaturas sobreviventes
-        for (target, t, mut health) in creatures.iter_mut() {
+        for (target, t, _health, _script, _recoil) in creatures.iter_mut() {
             let delta = t.translation() - center;
             let distance = delta.length();
             if let Some(strength) =
                 crate::physics_fx::radial_strength(distance, BOMB_RADIUS * 1.5, 9.0)
             {
-                commands.entity(target).insert(crate::physics_fx::Knockback {
-                    velocity: delta.normalize_or_zero() * strength,
-                });
+                commands
+                    .entity(target)
+                    .insert(crate::physics_fx::Knockback {
+                        velocity: delta.normalize_or_zero() * strength,
+                    });
             }
-            let _ = &mut health;
         }
         commands.entity(entity).despawn();
     }
@@ -554,14 +898,14 @@ fn level_system(
     players: Query<(Entity, &Xp), (Changed<Xp>, With<Player>)>,
     mut levels: Query<(Entity, &mut LevelState)>,
     mut tree: ResMut<SkillTree>,
+    mut progress: ResMut<LevelProgress>,
     mut commands: Commands,
-    mut previous_next: Local<Option<u32>>,
 ) {
     let Ok((entity, xp)) = players.single() else {
         return;
     };
-    let Some(previous) = *previous_next else {
-        *previous_next = Some(xp.next);
+    let Some(previous) = progress.previous_next else {
+        progress.previous_next = Some(xp.next);
         return;
     };
     if xp.next > previous {
@@ -580,32 +924,7 @@ fn level_system(
         }
         tree.points += gained;
     }
-    *previous_next = Some(xp.next);
-}
-
-/// Texto das barras de cooldown.
-fn ability_bars_system(
-    cds: Res<AbilityCooldowns>,
-    mut bars: Query<&mut Text, With<AbilityBarText>>,
-) {
-    let texts = [
-        format!("[C] Dash {}", cooldown_text(cds.dash)),
-        format!("[E] Cura {}", cooldown_text(cds.heal)),
-        format!("[R] Golpe forte {}", cooldown_text(cds.strike)),
-    ];
-    for (i, mut text) in bars.iter_mut().enumerate() {
-        if text.0 != texts[i] {
-            text.0 = texts[i].clone();
-        }
-    }
-}
-
-fn cooldown_text(remaining: f32) -> String {
-    if remaining <= 0.0 {
-        "pronto".into()
-    } else {
-        format!("{:.1}s", remaining)
-    }
+    progress.previous_next = Some(xp.next);
 }
 
 #[cfg(test)]
@@ -628,7 +947,10 @@ mod tests {
 
     #[test]
     fn test_learn_requires_and_points() {
-        let mut tree = SkillTree { learned: vec![], points: 3 };
+        let mut tree = SkillTree {
+            learned: vec![],
+            points: 3,
+        };
         // precisa de pontos
         assert!(tree.can_learn("vitality1"));
         assert!(!tree.can_learn("vitality2"), "requisito em falta");

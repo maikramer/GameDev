@@ -1,9 +1,9 @@
 //! Mundo vivo (loop 9 do port simple-rpg) — o análogo nativo dos sistemas
 //! de ambiente do VibeGame:
 //!
-//! - **BiomeRegion**: [F]og por bioma — quando o herói entra no polígono de
-//!   uma `<BiomeRegion>`, a câmara recebe [`DistanceFog`] (densidade do XML)
-//!   e a luz ambiente ganha o tint do bioma.
+//! - **Perspetiva aérea**: a câmara tem SEMPRE [`DistanceFog`], com a cor da
+//!   hora ([`crate::worldsys::AtmosphereState`]) e inscattering do sol; a
+//!   `<BiomeRegion>` só modula densidade e tinta.
 //! - **Orçamento de PointLights**: só as 12 luzes mais próximas da câmara
 //!   ficam acesas (o mundo tem 69 tochas/lanternas).
 //! - **Gestos idle de NPC**: os NPCs de quest (sem script) tocam um clip de
@@ -32,21 +32,168 @@ pub const GESTURE_MIN_INTERVAL: f32 = 7.0;
 // ── SFX ─────────────────────────────────────────────────────────────────
 
 /// Clip de SFX curto.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SfxClip {
     Hit,
     Whoosh,
     Harvest,
     Ui,
+    /// Golpe de machado em árvore (colheita nativa, `harvest.rs`).
+    ChopHit,
+    /// Árvore a cair (break `fall`).
+    ChopBreak,
+    /// Picareta na rocha.
+    MineHit,
+    /// Rocha a estilhaçar (break `shatter`/`burst`).
+    MineBreak,
+    // ── Passe de Juice (WS-A): clips partilhados com o WS-D ──────────────
+    /// Subida de nível (jingle).
+    LevelUp,
+    /// Missão concluída (jingle).
+    QuestDone,
+    /// Viagem rápida (whoosh longo).
+    Travel,
+    /// Passo do herói em terra/erva (seco, ~0.15 s).
+    Footstep,
+    /// Passo do herói em água rasa (salpico, ~0.2 s).
+    FootstepWater,
+    /// Loot apanhado / baú aberto.
+    Loot,
+    // ── Passe de som completo (pool partilhada) ──────────────────────────
+    /// Herói sofre dano (grunt de impacto).
+    Hurt,
+    /// Cura (brilho de recuperação).
+    Heal,
+    /// Herói morre (sting descendente).
+    GameOver,
+    /// Missão aceite (chime curto de confirmação).
+    QuestAccept,
+    /// Notificação suave (toast de sistema).
+    Notification,
+    /// Moedas a cair / ouro apanhado.
+    Coin,
+    /// Compra feita (transação do mercador).
+    Buy,
+    /// Acção recusada (sem ouro, inventário cheio…).
+    Error,
+    /// Jogo guardado.
+    Save,
+    /// Jogo carregado.
+    Load,
+    /// Loja aberta (sino acolhedor).
+    ShopOpen,
+    /// Criatura atingida (impacto de carne).
+    EnemyHurt,
+    /// Criatura morre (último suspiro).
+    EnemyDeath,
+    /// Lobo a agredir (growl).
+    WolfGrowl,
+    /// Slime (squish).
+    SlimeSquish,
+    /// Boss (roar).
+    BossRoar,
+    /// Guarda absorveu o golpe (metal na madeira).
+    ShieldBlock,
+    /// Porta a abrir.
+    DoorOpen,
+    /// Porta a fechar.
+    DoorClose,
+    /// Bomba lançada (fuso a arder).
+    BombDrop,
+    /// Herói salta.
+    Jump,
+    /// Dash do herói (rajada de ar).
+    Dash,
 }
+
+/// Todos os clips, pela ordem do enum — alimenta o preload dos handles, o
+/// audit (`analyze` valida a existência de cada ficheiro) e o test que
+/// garante o registry Lua completo.
+pub const SFX_CLIPS_ALL: &[SfxClip] = &[
+    SfxClip::Hit,
+    SfxClip::Whoosh,
+    SfxClip::Harvest,
+    SfxClip::Ui,
+    SfxClip::ChopHit,
+    SfxClip::ChopBreak,
+    SfxClip::MineHit,
+    SfxClip::MineBreak,
+    SfxClip::LevelUp,
+    SfxClip::QuestDone,
+    SfxClip::Travel,
+    SfxClip::Footstep,
+    SfxClip::FootstepWater,
+    SfxClip::Loot,
+    SfxClip::Hurt,
+    SfxClip::Heal,
+    SfxClip::GameOver,
+    SfxClip::QuestAccept,
+    SfxClip::Notification,
+    SfxClip::Coin,
+    SfxClip::Buy,
+    SfxClip::Error,
+    SfxClip::Save,
+    SfxClip::Load,
+    SfxClip::ShopOpen,
+    SfxClip::EnemyHurt,
+    SfxClip::EnemyDeath,
+    SfxClip::WolfGrowl,
+    SfxClip::SlimeSquish,
+    SfxClip::BossRoar,
+    SfxClip::ShieldBlock,
+    SfxClip::DoorOpen,
+    SfxClip::DoorClose,
+    SfxClip::BombDrop,
+    SfxClip::Jump,
+    SfxClip::Dash,
+];
+
+/// Loops ambientes carregados por path fixo (`setup_water_ambience`) — não
+/// são clips `SfxEvent`; o audit valida a existência deles a partir daqui.
+pub const AMBIENT_LOOP_FILES: &[&str] = &[
+    "assets/audio/sfx/world/water_lake.ogg",
+    "assets/audio/sfx/world/water_flow.ogg",
+];
 
 impl SfxClip {
     pub fn file(self) -> &'static str {
         match self {
-            SfxClip::Hit => "assets/audio/sfx/hit.wav",
-            SfxClip::Whoosh => "assets/audio/sfx/whoosh.wav",
-            SfxClip::Harvest => "assets/audio/sfx/harvest.wav",
-            SfxClip::Ui => "assets/audio/sfx/ui.wav",
+            SfxClip::Hit => "assets/audio/sfx/hit.ogg",
+            SfxClip::Whoosh => "assets/audio/sfx/whoosh.ogg",
+            SfxClip::Harvest => "assets/audio/sfx/harvest.ogg",
+            SfxClip::Ui => "assets/audio/sfx/ui.ogg",
+            SfxClip::ChopHit => "assets/audio/sfx/combat/chop_hit.ogg",
+            SfxClip::ChopBreak => "assets/audio/sfx/combat/chop_break.ogg",
+            SfxClip::MineHit => "assets/audio/sfx/combat/mine_hit.ogg",
+            SfxClip::MineBreak => "assets/audio/sfx/combat/mine_break.ogg",
+            SfxClip::LevelUp => "assets/audio/sfx/ui/levelup.ogg",
+            SfxClip::QuestDone => "assets/audio/sfx/ui/quest_complete.ogg",
+            SfxClip::Travel => "assets/audio/sfx/combat/swing.ogg",
+            SfxClip::Footstep => "assets/audio/sfx/ambient/footstep.ogg",
+            SfxClip::FootstepWater => "assets/audio/sfx/ambient/footstep_water.ogg",
+            SfxClip::Loot => "assets/audio/sfx/world/chest_open.ogg",
+            SfxClip::Hurt => "assets/audio/sfx/player/hurt.ogg",
+            SfxClip::Heal => "assets/audio/sfx/player/heal.ogg",
+            SfxClip::GameOver => "assets/audio/sfx/ui/game_over.ogg",
+            SfxClip::QuestAccept => "assets/audio/sfx/ui/quest_accept.ogg",
+            SfxClip::Notification => "assets/audio/sfx/ui/notification.ogg",
+            SfxClip::Coin => "assets/audio/sfx/ui/coin.ogg",
+            SfxClip::Buy => "assets/audio/sfx/ui/buy.ogg",
+            SfxClip::Error => "assets/audio/sfx/ui/error.ogg",
+            SfxClip::Save => "assets/audio/sfx/ui/save.ogg",
+            SfxClip::Load => "assets/audio/sfx/ui/load.ogg",
+            SfxClip::ShopOpen => "assets/audio/sfx/ui/shop_open.ogg",
+            SfxClip::EnemyHurt => "assets/audio/sfx/creatures/enemy_hurt.ogg",
+            SfxClip::EnemyDeath => "assets/audio/sfx/creatures/enemy_death.ogg",
+            SfxClip::WolfGrowl => "assets/audio/sfx/creatures/wolf_growl.ogg",
+            SfxClip::SlimeSquish => "assets/audio/sfx/creatures/slime_squish.ogg",
+            SfxClip::BossRoar => "assets/audio/sfx/creatures/boss_roar.ogg",
+            SfxClip::ShieldBlock => "assets/audio/sfx/combat/shield_block.ogg",
+            SfxClip::DoorOpen => "assets/audio/sfx/world/door_open.ogg",
+            SfxClip::DoorClose => "assets/audio/sfx/world/door_close.ogg",
+            SfxClip::BombDrop => "assets/audio/sfx/world/bomb_drop.ogg",
+            SfxClip::Jump => "assets/audio/sfx/player/jump.ogg",
+            SfxClip::Dash => "assets/audio/sfx/player/dash.ogg",
         }
     }
 }
@@ -87,21 +234,88 @@ pub struct AmbientPlugin;
 impl Plugin for AmbientPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CurrentBiome>()
+            // GLUE da atmosfera (peça céu): [`crate::worldsys::AtmosphereState`]
+            // é a paleta da hora partilhada por céu/fog/grading. Era escrita
+            // por `atmosphere_drive` e lida por três sistemas — mas NINGUÉM a
+            // inseria como recurso nem registava os sistemas, pelo que o fog,
+            // o grading e o storage buffer do domo falhavam a validação de
+            // params todos os frames (céu/fog congelados no default de dia).
+            .init_resource::<crate::worldsys::AtmosphereState>()
             .add_message::<SfxEvent>()
             .add_systems(PostStartup, load_sfx_assets)
             .add_systems(
                 Update,
                 (
-                    biome_fog_system,
+                    // A névoa lê a paleta publicada NO MESMO frame.
+                    biome_fog_system.after(crate::worldsys::atmosphere_drive),
                     light_budget_system,
                     npc_gesture_system,
                     sfx_player_system,
+                    setup_water_ambience,
+                    water_ambience_driver,
+                    // Chuva + lanterna (WS-A): a chuva lê a intensidade já
+                    // rodada pelo scheduler. O MOVER+compensação corre antes
+                    // do step dos emissores (main.rs) — as gotas compensam no
+                    // mesmo frame em que a âncora anda.
+                    rain_emitter_driver
+                        .after(crate::worldsys::weather_drive)
+                        .before(crate::particles::particle_emitter_update),
+                    rain_ripple_spawner,
+                    setup_rain_ambience,
+                    rain_ambience_driver,
+                    // A lanterna REESCREVE a Visibility por frame — tem de
+                    // ganhar ao orçamento de luzes (que corre 1×/s).
+                    lantern_driver.after(light_budget_system),
+                ),
+            )
+            .add_systems(
+                Update,
+                (
+                    // Scheduler do `<Weather cycle>` (WS-A): a intensidade
+                    // contínua de chuva entra na paleta NO MESMO frame.
+                    crate::worldsys::weather_drive.before(crate::worldsys::atmosphere_drive),
+                    // Publica a paleta a partir da posição do sol já
+                    // resolvida por `sun_drive` (main.rs)…
+                    crate::worldsys::atmosphere_drive.after(crate::worldsys::sun_drive),
+                    // …e empurra-a para o storage buffer do domo (`SkyUniform`)
+                    // — é esta escrita por frame que faz o céu mudar com o
+                    // `set_clock` (o relógio do mundo não é `globals.time`).
+                    crate::sky::sky_material_drive.after(crate::worldsys::atmosphere_drive),
+                    // Tint dia/noite do albedo do TERRENO (r5, bissecção da
+                    // banda branca noturna — o splat das layers ignorava a
+                    // hora e lia-se como dia iluminado atrás das serras).
+                    crate::terrain::layer_material::terrain_daynight_tint,
                 ),
             );
     }
 }
 
-// ── BiomeRegion: fog + tint ─────────────────────────────────────────────
+// ── Perspetiva aérea: névoa de distância sempre ligada ─────────────────
+//
+// A `DistanceFog` só existia DENTRO de uma `<BiomeRegion>` e usava o tint do
+// bioma como cor — ou seja: no vale (a vila, metade do jogo) não havia névoa
+// nenhuma, e na floresta a névoa era verde-escura, o que ESCURECE o longe em
+// vez de o afastar. Resultado: tudo lia à mesma distância, como maquete.
+//
+// Agora a névoa está sempre lá e a cor vem de [`AtmosphereState`] — a mesma
+// paleta do céu. O que está longe funde-se com o horizonte, exatamente o que
+// separa camadas de serra nas referências. O bioma deixa de ser a fonte da
+// cor e passa a ser um MODULADOR: densidade (o pântano fecha, o deserto abre)
+// e um empurrão leve de tinta (só 25% — mais do que isso e volta o
+// verde-escuro).
+//
+// `directional_light_color` liga o inscattering do sol: a metade do mundo
+// virada ao sol fica dourada ao pôr-do-sol, que é a razão pela qual as
+// paredes deixam de ser cinzentas às 19:00.
+
+/// Distância (m) a que a névoa atinge ~63% com densidade base. Abaixo disto
+/// a imagem fica intacta — a legibilidade de jogo não paga a atmosfera.
+pub const FOG_REFERENCE_M: f32 = 340.0;
+/// Densidade base (falloff quadrático): imperceptível a 100 m, véu claro a
+/// 200 m, camadas separadas a 400 m, horizonte fundido a 800 m.
+pub const FOG_BASE_DENSITY: f32 = 1.0 / FOG_REFERENCE_M;
+/// Peso do tint do bioma na cor da névoa.
+const BIOME_TINT_WEIGHT: f32 = 0.25;
 
 /// Bioma atual do herói (id da região, ou `None` = vale central).
 #[derive(Debug, Clone, Resource, Default)]
@@ -109,10 +323,36 @@ pub struct CurrentBiome {
     pub id: Option<String>,
 }
 
+/// Converte a `fog-density` exponencial do XML num multiplicador sobre a
+/// densidade base.
+///
+/// Os mundos autoraram 0.0014–0.0046 para `FogFalloff::Exponential`; o
+/// falloff quadrático usa outra escala, por isso o valor do XML entra como
+/// razão face à mediana autoral (0.0028) e é limitado — um bioma nunca pode
+/// cegar o jogador nem apagar a atmosfera por completo.
+pub fn fog_density_multiplier(xml_density: f32) -> f32 {
+    if !xml_density.is_finite() || xml_density <= 0.0 {
+        return 1.0;
+    }
+    (xml_density / 0.0028).clamp(0.55, 1.9)
+}
+
+/// Mistura linear entre duas cores RGB.
+fn mix_rgb(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
+    let t = t.clamp(0.0, 1.0);
+    [
+        a[0] + (b[0] - a[0]) * t,
+        a[1] + (b[1] - a[1]) * t,
+        a[2] + (b[2] - a[2]) * t,
+    ]
+}
+
 #[allow(clippy::too_many_arguments)]
 fn biome_fog_system(
     mut throttle: Local<f32>,
     time: Res<Time>,
+    atmosphere: Res<crate::worldsys::AtmosphereState>,
+    weather: Option<Res<crate::worldsys::WeatherState>>,
     players: Query<&GlobalTransform, With<Player>>,
     biomes: Option<Res<crate::worldsys::BiomeRegions>>,
     mut current: ResMut<CurrentBiome>,
@@ -120,54 +360,115 @@ fn biome_fog_system(
     mut commands: Commands,
     mut toasts: MessageWriter<ScriptToast>,
 ) {
+    // 4×/s: a paleta muda devagar (o dia inteiro dura 20 min reais) e a
+    // névoa é um componente inserido, não um uniform barato.
     *throttle -= time.delta_secs();
     if *throttle > 0.0 {
         return;
     }
-    *throttle = 0.5;
-    let Some(biomes) = biomes else { return };
-    let Some(player) = players.iter().next() else { return };
-    let pos = player.translation();
+    *throttle = 0.25;
 
-    let Some(region) = biomes
-        .list
-        .iter()
-        .find(|b| point_in_polygon(pos.x, pos.z, &b.polygon))
-    else {
-        if current.id.take().is_some() {
-            // saiu para o vale central: fog neutra fora
-            for camera in &mut cameras {
-                commands.entity(camera).remove::<DistanceFog>();
-            }
-            toasts.write(ScriptToast("De volta ao vale.".into()));
+    let region = match (biomes, players.iter().next()) {
+        (Some(biomes), Some(player)) => {
+            let pos = player.translation();
+            biomes
+                .list
+                .iter()
+                .find(|b| point_in_polygon(pos.x, pos.z, &b.polygon))
+                .cloned()
         }
-        return;
+        _ => None,
     };
 
-    if current.id.as_deref() == Some(region.id.as_str()) {
-        return;
+    // Toast só na TRANSIÇÃO (o sistema agora corre sempre, não só ao entrar).
+    let next_id = region.as_ref().map(|r| r.id.clone());
+    if next_id != current.id {
+        match &next_id {
+            Some(id) => {
+                toasts.write(ScriptToast(format!("Entraste em: {id}")));
+            }
+            None => {
+                if current.id.is_some() {
+                    toasts.write(ScriptToast("De volta ao vale.".into()));
+                }
+            }
+        }
+        current.id = next_id;
     }
-    current.id = Some(region.id.clone());
-    // fog exponencial com a densidade do XML; cor = tint do bioma
-    let tint = region
-        .tint
-        .map(|t| Color::srgb(t[0], t[1], t[2]))
-        .unwrap_or(Color::srgb(0.75, 0.78, 0.82));
+
+    let (density_mult, tint) = match &region {
+        Some(r) => (fog_density_multiplier(r.fog_density), r.tint),
+        None => (1.0, None),
+    };
+
+    // Cor: horizonte da hora + um toque do bioma, na MESMA escala do domo
+    // (paleta raw — o r7 multiplicava por SKY_RADIANCE 400 e o fog ficava
+    // branco estourado, r8 limitava a luminância). O cap 0.8×horizonte
+    // mantém-se: silhuetas de serra lêem-se contra um fundo mais claro.
+    let mut color = [atmosphere.fog[0], atmosphere.fog[1], atmosphere.fog[2]];
+    if let Some(tint) = tint {
+        color = mix_rgb(color, tint, BIOME_TINT_WEIGHT);
+    }
+    let horizon_sky = [
+        atmosphere.horizon[0],
+        atmosphere.horizon[1],
+        atmosphere.horizon[2],
+    ];
+    let lum = |c: [f32; 3]| 0.25 * c[0] + 0.5 * c[1] + 0.25 * c[2];
+    let cap = lum(horizon_sky) * 0.8;
+    let fog_lum = lum(color);
+    if fog_lum > cap && fog_lum > 0.0 {
+        let k = cap / fog_lum;
+        color = [color[0] * k, color[1] * k, color[2] * k];
+    }
+    // À noite a névoa não pode "acender" o mundo: é o azul profundo que
+    // engole o longe e deixa as fogueiras a valer ouro. E a CHUVA (WS-A)
+    // fecha o horizonte: +60 % de densidade com tempestade cheia — o mesmo
+    // sítio a 200 m lê-se véu a chover.
+    let rain = weather.map(|w| w.rain.clamp(0.0, 1.0)).unwrap_or(0.0);
+    let density = FOG_BASE_DENSITY * density_mult * (1.0 + 0.35 * atmosphere.night) * (1.0 + 0.6 * rain);
+
+    // Inscattering direcional — a escala NÃO é arbitrária, e errá-la lava o
+    // frame inteiro de branco (r1/r2).
+    //
+    // O `pbr_functions.wgsl` calcula
+    //   `scattering = pow(dot(view, sun), exponent) * light.color * view.exposure`
+    // e `light.color` de uma direcional é `cor × ILLUMINANCE` — 10 000 lux no
+    // default do Bevy. Com `view.exposure ≈ 1/(2^EV100 × 1.2)` (≈ 1e-3 a
+    // EV100 9.7) o pico de `scattering` anda por ~10 unidades. Depois
+    //   `fog_color = base_color + scattering × directional_light_color`
+    // — ou seja, um `directional_light_color` de 0.5 somava **5.0** a uma cor
+    // de névoa que vive em 0..1. Era isso que punha o mundo inteiro branco
+    // no meio-dia.
+    //
+    // Aqui pede-se o EFEITO (quanto o glow soma à cor da névoa) e converte-se
+    // para o valor do componente, compensando a exposição da hora.
+    const SCATTER_AT_PEAK: f32 = 10.0;
+    let inscatter = atmosphere.sun_tint;
+    let target_add = (0.10 + 0.34 * atmosphere.golden) * atmosphere.day;
+    let inscatter_strength =
+        (target_add / (SCATTER_AT_PEAK * atmosphere.exposure_scale.max(0.1))).clamp(0.0, 0.08);
+
+    let fog = DistanceFog {
+        color: Color::LinearRgba(bevy::color::LinearRgba::rgb(color[0], color[1], color[2])),
+        directional_light_color: Color::LinearRgba(bevy::color::LinearRgba::rgb(
+            inscatter[0] * inscatter_strength,
+            inscatter[1] * inscatter_strength,
+            inscatter[2] * inscatter_strength,
+        )),
+        // Lobe de ~45°: largo o bastante para a metade do mundo virada ao
+        // sol aquecer na hora dourada, estreito o bastante para não ser um
+        // véu global (que é indistinguível de "subir a exposição").
+        directional_light_exponent: 14.0,
+        // Quadrático: a imagem perto fica intacta e o longe funde-se rápido —
+        // é o perfil que dá "camadas" em vez de um véu uniforme.
+        falloff: FogFalloff::ExponentialSquared { density },
+    };
     for camera in &mut cameras {
-        commands.entity(camera).insert(DistanceFog {
-            color: tint,
-            directional_light_color: Color::NONE,
-            directional_light_exponent: 1.0,
-            falloff: FogFalloff::Exponential {
-                density: region.fog_density.max(0.0001),
-            },
-        });
+        commands.entity(camera).insert(fog.clone());
     }
-    toasts.write(ScriptToast(format!("Entraste em: {}", region.id)));
 }
 
-use bevy::animation::AnimationPlayer;
-use bevy::animation::transition::AnimationTransitions;
 use bevy::camera::Camera3d;
 use bevy::pbr::{DistanceFog, FogFalloff};
 
@@ -213,15 +514,20 @@ fn light_budget_system(
 // ── gestos idle de NPC ──────────────────────────────────────────────────
 
 /// NPCs (sem script, sem player) tocam um clip de gesto periodicamente.
+///
+/// O gesto é uma ACÇÃO one-shot: toca uma vez, tranca o driver de locomoção
+/// enquanto dura e devolve o rig no fim. Antes chamava `transitions.play` sem
+/// `repeat` e sem qualquer regresso ao idle — o NPC congelava na última pose do
+/// aceno para sempre.
 #[allow(clippy::type_complexity)]
 fn npc_gesture_system(
     mut throttle: Local<f32>,
     time: Res<Time>,
-    npcs: Query<
-        (Entity, &CharacterAnimator),
+    mut npcs: Query<
+        (Entity, &mut CharacterAnimator),
         (With<Name>, Without<Player>, Without<LuaScriptRef>),
     >,
-    mut animation_players: Query<(&mut AnimationPlayer, &mut AnimationTransitions)>,
+    mut animation_players: crate::animation::PlayerQuery,
     mut timers: Local<HashMap<Entity, f32>>,
 ) {
     *throttle -= time.delta_secs();
@@ -229,7 +535,7 @@ fn npc_gesture_system(
         return;
     }
     *throttle = 1.0;
-    for (entity, animator) in &npcs {
+    for (entity, mut animator) in &mut npcs {
         let entry = timers.entry(entity).or_insert_with(|| {
             // primeiro gesto entre 5 e 12 s (pseudo-aleatório por entidade)
             5.0 + (entity.to_bits() % 7000) as f32 / 1000.0
@@ -239,63 +545,98 @@ fn npc_gesture_system(
             continue;
         }
         *entry = GESTURE_MIN_INTERVAL + (entity.to_bits() % 5000) as f32 / 1000.0;
+        // Um NPC a andar (ou a meio de outra acção) não é interrompido — o
+        // gesto é decoração de quem está parado.
+        if animator.is_busy() || animator.state != Some(crate::animation::AnimState::Idle) {
+            continue;
+        }
         let Some(node) = animator
-            .clip_names
-            .iter()
-            .position(|n| {
-                let lower = n.to_ascii_lowercase();
-                lower.contains("talk") || lower.contains("wave") || lower.contains("call")
-            })
-            .and_then(|i| animator.nodes.get(i).copied())
+            .node_matching(|n| n.contains("talk") || n.contains("wave") || n.contains("call"))
         else {
             continue;
         };
-        if let Ok((mut player, mut transitions)) =
-            animation_players.get_mut(animator.player)
-        {
-            transitions.play(&mut player, node, std::time::Duration::from_millis(250));
-        }
+        crate::animation::play_action(
+            &mut animator,
+            &mut animation_players,
+            node,
+            std::time::Duration::from_millis(250),
+            false,
+        );
     }
 }
 
 // ── SFX ─────────────────────────────────────────────────────────────────
 
+/// Handles pré-carregados dos clips — um map `SfxClip → handle` construído
+/// de [`SFX_CLIPS_ALL`]; um clip novo no enum entra no preload sozinho.
 #[derive(Debug, Clone, Resource, Default)]
 pub struct SfxHandles {
-    pub hit: Option<Handle<AudioSource>>,
-    pub whoosh: Option<Handle<AudioSource>>,
-    pub harvest: Option<Handle<AudioSource>>,
-    pub ui: Option<Handle<AudioSource>>,
+    clips: HashMap<SfxClip, Handle<AudioSource>>,
+}
+
+impl SfxHandles {
+    /// Pré-carrega TODOS os clips (PostStartup) — o `.ogg` falhado só
+    /// produz warn de load e o play é no-op silencioso.
+    pub fn load(server: &AssetServer) -> Self {
+        Self {
+            clips: SFX_CLIPS_ALL
+                .iter()
+                .map(|clip| (*clip, server.load(clip.file())))
+                .collect(),
+        }
+    }
+
+    pub fn get(&self, clip: SfxClip) -> Option<Handle<AudioSource>> {
+        self.clips.get(&clip).cloned()
+    }
 }
 
 fn load_sfx_assets(mut commands: Commands, server: Res<AssetServer>) {
-    commands.insert_resource(SfxHandles {
-        hit: Some(server.load("assets/audio/sfx/hit.wav")),
-        whoosh: Some(server.load("assets/audio/sfx/whoosh.wav")),
-        harvest: Some(server.load("assets/audio/sfx/harvest.wav")),
-        ui: Some(server.load("assets/audio/sfx/ui.wav")),
-    });
+    commands.insert_resource(SfxHandles::load(&server));
 }
 
 /// Toca o clip com volume por distância (Ativos de áudio são globais; a
-/// atenuação é calculada no momento do evento).
+/// atenuação é calculada no momento do evento). Os buses `sfx` e `master`
+/// do `AudioMixer` multiplicam o resultado — sem eles os sliders eram
+/// no-op audível para os efeitos.
+/// Clips tocados em rajada (cada golpe/step) levam um jitter de pitch
+/// ±8 % — mata a monotonia da repetição sem samples extra. LCG local
+/// (numerical recipes): barato, sem depender de crate de RNG.
+fn pitch_jitter(clip: SfxClip, rng: &mut u32) -> f32 {
+    const JITTERED: &[SfxClip] = &[
+        SfxClip::Hit,
+        SfxClip::Whoosh,
+        SfxClip::EnemyHurt,
+        SfxClip::Footstep,
+        SfxClip::FootstepWater,
+        SfxClip::Coin,
+    ];
+    if !JITTERED.contains(&clip) {
+        return 1.0;
+    }
+    *rng = rng.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+    0.92 + ((*rng >> 16) as f32 / u16::MAX as f32) * 0.16
+}
+
 fn sfx_player_system(
     mut events: MessageReader<SfxEvent>,
     handles: Option<Res<SfxHandles>>,
     listeners: Query<&GlobalTransform, With<Camera3d>>,
+    mixer: Option<Res<crate::music::AudioMixerSettings>>,
+    mut rng: Local<u32>,
     mut commands: Commands,
 ) {
     let Some(handles) = handles else {
         return;
     };
+    let bus = mixer
+        .map(|m| (m.sfx * m.master).clamp(0.0, 1.0))
+        .unwrap_or(1.0);
+    if bus <= 0.0 {
+        return;
+    }
     for event in events.read() {
-        let handle = match event.clip {
-            SfxClip::Hit => handles.hit.clone(),
-            SfxClip::Whoosh => handles.whoosh.clone(),
-            SfxClip::Harvest => handles.harvest.clone(),
-            SfxClip::Ui => handles.ui.clone(),
-        };
-        let Some(handle) = handle else {
+        let Some(handle) = handles.get(event.clip) else {
             continue;
         };
         let volume = match event.position {
@@ -309,10 +650,383 @@ fn sfx_player_system(
             }
             None => 0.6,
         };
+        let mut playback =
+            PlaybackSettings::REMOVE.with_volume(bevy::audio::Volume::Linear(volume * bus));
+        playback.speed = pitch_jitter(event.clip, &mut rng);
+        commands.spawn((AudioPlayer(handle), playback));
+    }
+}
+
+// ── Água ambiente ───────────────────────────────────────────────────────
+//
+// Os clips `water_lake.ogg` / `water_flow.ogg` existiam no pool e não tinham
+// consumidor: a margem era cega e surda. Dois loops permanentes (um por tipo
+// de corpo) nascem quando o terreno publica `TerrainRuntime`; o driver move
+// o volume deles para a distância À LINHA DE ÁGUA (a mesma métrica do
+// splatter/spawner) — fade out a `WATER_AUDIBLE_RADIUS` m.
+
+/// Loop de água ativo (lago OU rio).
+#[derive(Debug, Component)]
+pub struct WaterAmbienceLoop {
+    /// `true` = o loop de rio (water_flow); `false` = lago (water_lake).
+    pub river: bool,
+}
+
+/// Distância (m) além da qual o loop está em silêncio.
+const WATER_AUDIBLE_RADIUS: f32 = 26.0;
+/// Ganho máximo junto à água (antes dos buses do mixer).
+const WATER_MAX_GAIN: f32 = 0.5;
+
+/// Spawna UMA vez os dois loops quando o runtime do terreno existe.
+fn setup_water_ambience(
+    mut commands: Commands,
+    server: Res<AssetServer>,
+    runtime: Option<Res<crate::terrain::runtime::TerrainRuntime>>,
+    spawned: Query<(), With<WaterAmbienceLoop>>,
+) {
+    if runtime.is_none() || !spawned.is_empty() {
+        return;
+    }
+    for (river, file) in [
+        (false, "assets/audio/sfx/world/water_lake.ogg"),
+        (true, "assets/audio/sfx/world/water_flow.ogg"),
+    ] {
         commands.spawn((
-            AudioPlayer(handle),
-            PlaybackSettings::REMOVE.with_volume(bevy::audio::Volume::Linear(volume)),
+            WaterAmbienceLoop { river },
+            AudioPlayer::<bevy::audio::AudioSource>(server.load(file)),
+            // Volume 0 até o driver o levantar (junto da água).
+            PlaybackSettings::LOOP.with_volume(bevy::audio::Volume::Linear(0.0)),
         ));
+    }
+}
+
+/// Move o volume dos loops para o alvo da distância à linha de água.
+fn water_ambience_driver(
+    time: Res<Time>,
+    runtime: Option<Res<crate::terrain::runtime::TerrainRuntime>>,
+    players: Query<&GlobalTransform, With<crate::player::Player>>,
+    mixer: Option<Res<crate::music::AudioMixerSettings>>,
+    mut loops: Query<(&WaterAmbienceLoop, &mut PlaybackSettings)>,
+) {
+    let (Some(runtime), Ok(player)) = (runtime, players.single()) else {
+        return;
+    };
+    let pos = player.translation();
+    let mut best = [f32::MAX; 2]; // [lake, river]
+    for body in &runtime.water {
+        let d = body
+            .distance_to_waterline(bevy::math::Vec2::new(pos.x, pos.z))
+            .max(0.0);
+        let slot = match body.kind {
+            crate::terrain::WaterKind::Lake => 0,
+            crate::terrain::WaterKind::River => 1,
+        };
+        best[slot] = best[slot].min(d);
+    }
+    let bus = mixer
+        .map(|m| (m.sfx * m.master).clamp(0.0, 1.0))
+        .unwrap_or(1.0);
+    let dt = time.delta_secs().clamp(0.0, 0.2);
+    for (tag, mut settings) in &mut loops {
+        let d = if tag.river { best[1] } else { best[0] };
+        let falloff = (1.0 - d / WATER_AUDIBLE_RADIUS).clamp(0.0, 1.0);
+        // Curva quadrática — perto da água o som cresce depressa.
+        let target = bus * WATER_MAX_GAIN * falloff * falloff;
+        let current = settings.volume.to_linear();
+        let next = crate::music::fade_step(current, target, dt, 0.5);
+        if next != current {
+            settings.volume = bevy::audio::Volume::Linear(next);
+        }
+    }
+}
+
+// ── Chuva viva (WS-A) ───────────────────────────────────────────────────
+//
+// Três peças que partilham a intensidade CONTÍNUA do `<Weather>`:
+//
+// 1. **Emissor âncora** — UM emissor do preset `rain` (+12 m acima do herói)
+//    que o segue frame a frame; cobre sempre o sítio certo num mundo de
+//    4 km sem encher o ECS de emissores. As gotas vivem em espaço LOCAL do
+//    emissor, pelo que cada movimento do herói é COMPENSADO (as gotas ficam
+//    fixas ao mundo enquanto ele anda). Rate ∝ intensidade; 0 = escondido.
+// 2. **Ondinhas** — bursts `rain_ripple` no chão à volta do herói, rate ∝
+//    intensidade (o chão molhado lê-se).
+// 3. **Loop SFX** — `ambient/rain_loop.ogg` (8 s costura-sem-clique, gerado
+//    por `scripts/synth_rain.py`) com volume ∝ intensidade.
+
+/// Altura do emissor de chuva acima da cabeça do herói (m).
+pub const RAIN_EMITTER_HEIGHT: f32 = 12.0;
+/// Rate do emissor de chuva com intensidade 1 (partículas/s).
+pub const RAIN_MAX_RATE: f32 = 500.0;
+/// Ondinhas por segundo no chão com intensidade 1.
+const RAIN_RIPPLES_PER_SEC: f32 = 14.0;
+/// Raio (m) dentro do qual as ondinhas nascem.
+const RAIN_RIPPLE_RADIUS: f32 = 8.0;
+/// Ganho máximo do loop de chuva (antes dos buses do mixer).
+const RAIN_MAX_GAIN: f32 = 0.4;
+
+/// Marker do emissor de chuva âncora do herói (uma instância por mundo).
+/// A posição âncora vive no próprio `Transform` (a compensação do espaço
+/// local das gotas compara com ela a cada frame).
+#[derive(Debug, Component)]
+pub struct RainEmitter;
+
+/// Marker do loop de áudio da chuva.
+#[derive(Debug, Component)]
+pub struct RainAmbienceLoop;
+
+fn rain_spec() -> crate::recipes::ParticleSpec {
+    crate::recipes::ParticleSpec {
+        preset: "rain".into(),
+        emission_rate: None,
+        life: None,
+        speed: None,
+        size: None,
+        color: None,
+        shape_radius: None,
+        looping: true,
+        world_space: false,
+    }
+}
+
+fn ripple_spec() -> crate::recipes::ParticleSpec {
+    crate::recipes::ParticleSpec {
+        preset: "rain_ripple".into(),
+        emission_rate: None,
+        life: None,
+        speed: None,
+        size: None,
+        color: None,
+        shape_radius: None,
+        looping: false,
+        world_space: false,
+    }
+}
+
+/// Spawna (uma vez) e conduz o emissor de chuva âncora do herói.
+#[allow(clippy::type_complexity)]
+fn rain_emitter_driver(
+    mut commands: Commands,
+    weather: Option<Res<crate::worldsys::WeatherState>>,
+    players: Query<&GlobalTransform, With<Player>>,
+    mut emitters: Query<
+        (
+            &mut Transform,
+            &mut crate::particles::ParticleEmitter,
+            &mut Visibility,
+        ),
+        With<RainEmitter>,
+    >,
+) {
+    let Some(weather) = weather else {
+        return;
+    };
+    let Ok(player) = players.single() else {
+        return;
+    };
+    let anchor = player.translation() + Vec3::Y * RAIN_EMITTER_HEIGHT;
+    let intensity = weather.rain.clamp(0.0, 1.0);
+    let Ok((mut transform, mut emitter, mut visibility)) = emitters.single_mut() else {
+        // Ainda não existe: spawna UM. O `Commands::queue` só dá `&mut World`
+        // — daí o `spawn_looping_in_world`.
+        commands.queue(move |world: &mut World| {
+            let entity =
+                crate::particles::spawn_looping_in_world(world, &rain_spec(), anchor);
+            world.entity_mut(entity).insert(RainEmitter);
+        });
+        return;
+    };
+    // Compensa o espaço LOCAL: gotas já a meio da queda ficam fixas ao mundo.
+    let delta = anchor - transform.translation;
+    if delta != Vec3::ZERO {
+        for particle in &mut emitter.sim.particles {
+            particle.pos -= delta;
+        }
+    }
+    transform.translation = anchor;
+    // Rate ∝ intensidade; sem chuva o emissor desliga E esconde-se.
+    emitter.sim.resolved.emission_rate = RAIN_MAX_RATE * intensity;
+    let wanted = if intensity <= 0.01 {
+        Visibility::Hidden
+    } else {
+        Visibility::Inherited
+    };
+    if *visibility != wanted {
+        *visibility = wanted;
+    }
+}
+
+/// Estado acumulado do spawner de ondinhas (rng próprio = sem lockstep com
+/// os emissores).
+struct RainRippleState {
+    accumulator: f32,
+    rng: crate::spawner::Rng,
+}
+
+impl Default for RainRippleState {
+    fn default() -> Self {
+        Self {
+            accumulator: 0.0,
+            rng: crate::spawner::Rng::new(0x51A1_BEEF),
+        }
+    }
+}
+
+/// Ondinhas `rain_ripple` no chão à volta do herói enquanto chove.
+#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
+fn rain_ripple_spawner(
+    time: Res<Time>,
+    mut state: Local<RainRippleState>,
+    weather: Option<Res<crate::worldsys::WeatherState>>,
+    players: Query<&GlobalTransform, With<Player>>,
+    runtime: Option<Res<crate::terrain::runtime::TerrainRuntime>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut commands: Commands,
+) {
+    let Some(weather) = weather else {
+        return;
+    };
+    let intensity = weather.rain.clamp(0.0, 1.0);
+    if intensity <= 0.05 {
+        return;
+    }
+    let Ok(player) = players.single() else {
+        return;
+    };
+    let origin = player.translation();
+    state.accumulator += RAIN_RIPPLES_PER_SEC * intensity * time.delta_secs();
+    if state.accumulator < 1.0 {
+        return;
+    }
+    state.accumulator -= state.accumulator.floor();
+    for _ in 0..2 {
+        let disc = state.rng.unit_disc() * RAIN_RIPPLE_RADIUS;
+        let x = origin.x + disc.x;
+        let z = origin.z + disc.y;
+        let y = runtime
+            .as_ref()
+            .map(|r| r.sample(x, z))
+            .unwrap_or(origin.y - RAIN_EMITTER_HEIGHT);
+        crate::particles::spawn_burst(
+            &mut commands,
+            &mut meshes,
+            &mut materials,
+            &ripple_spec(),
+            Vec3::new(x, y + 0.03, z),
+            2,
+        );
+    }
+}
+
+/// Spawna UMA vez o loop de áudio da chuva (volume 0 até o driver o levantar).
+fn setup_rain_ambience(
+    mut commands: Commands,
+    server: Res<AssetServer>,
+    weather: Option<Res<crate::worldsys::WeatherState>>,
+    spawned: Query<(), With<RainAmbienceLoop>>,
+) {
+    if weather.is_none() || !spawned.is_empty() {
+        return;
+    }
+    commands.spawn((
+        RainAmbienceLoop,
+        AudioPlayer::<bevy::audio::AudioSource>(server.load("assets/audio/sfx/ambient/rain_loop.ogg")),
+        PlaybackSettings::LOOP.with_volume(bevy::audio::Volume::Linear(0.0)),
+    ));
+}
+
+/// Volume do loop de chuva ∝ intensidade (fade lento — a chuva não liga/desliga).
+fn rain_ambience_driver(
+    time: Res<Time>,
+    weather: Option<Res<crate::worldsys::WeatherState>>,
+    mixer: Option<Res<crate::music::AudioMixerSettings>>,
+    mut loops: Query<&mut PlaybackSettings, With<RainAmbienceLoop>>,
+) {
+    let Some(weather) = weather else {
+        return;
+    };
+    let intensity = weather.rain.clamp(0.0, 1.0);
+    let bus = mixer
+        .map(|m| (m.sfx * m.master).clamp(0.0, 1.0))
+        .unwrap_or(1.0);
+    let target = bus * RAIN_MAX_GAIN * intensity;
+    let dt = time.delta_secs().clamp(0.0, 0.2);
+    for mut settings in &mut loops {
+        let current = settings.volume.to_linear();
+        let next = crate::music::fade_step(current, target, dt, 0.35);
+        if next != current {
+            settings.volume = bevy::audio::Volume::Linear(next);
+        }
+    }
+}
+
+// ── Lanterna do viajante (WS-A) ─────────────────────────────────────────
+//
+// Uma PointLight QUENTE presa ao herói que só existe à noite: é o que mantém
+// o caminho de casa legível quando o sol desce. SEM sombras — o orçamento de
+// luzes com sombras não é tocado; como está sempre a <2 m do herói, ocupa um
+// único lugar no orçamento das 12 mais próximas.
+
+/// Intensidade da lanterna à noite (lm — ~uma tocha do mundo).
+pub const LANTERN_MAX_INTENSITY: f32 = 1200.0;
+/// Alcance da lanterna (m).
+pub const LANTERN_RANGE: f32 = 9.0;
+/// Altura da chama acima do chão do herói (m).
+const LANTERN_HEIGHT: f32 = 2.2;
+
+/// Marker da lanterna do viajante (uma instância por mundo).
+#[derive(Debug, Component)]
+pub struct TravellerLantern;
+
+/// Spawna (uma vez) e conduz a lanterna: segue o herói, intensidade ∝ noite
+/// com fade exponencial suave (~0.4 s de constante — sem piscar).
+#[allow(clippy::type_complexity)]
+fn lantern_driver(
+    time: Res<Time>,
+    atmosphere: Option<Res<crate::worldsys::AtmosphereState>>,
+    players: Query<&GlobalTransform, With<Player>>,
+    mut lanterns: Query<
+        (&mut Transform, &mut PointLight, &mut Visibility),
+        With<TravellerLantern>,
+    >,
+    mut commands: Commands,
+) {
+    let Ok(player) = players.single() else {
+        return;
+    };
+    let anchor = player.translation() + Vec3::Y * LANTERN_HEIGHT;
+    let night = atmosphere
+        .map(|a| a.night.clamp(0.0, 1.0))
+        .unwrap_or(0.0);
+    let target = LANTERN_MAX_INTENSITY * night;
+    let Ok((mut transform, mut light, mut visibility)) = lanterns.single_mut() else {
+        commands.spawn((
+            TravellerLantern,
+            PointLight {
+                color: Color::srgb(1.0, 0.69, 0.40), // #ffb066 quente
+                intensity: 0.0,
+                range: LANTERN_RANGE,
+                ..Default::default()
+            },
+            Transform::from_translation(anchor),
+            Visibility::Inherited,
+            Name::new("fx:lanterna-viajante"),
+        ));
+        return;
+    };
+    transform.translation = anchor;
+    // Fade exponencial: constante de tempo ~0.4 s em ambos os sentidos.
+    let dt = time.delta_secs().clamp(0.0, 0.2);
+    let blend = 1.0 - (-dt * 2.5).exp();
+    light.intensity += (target - light.intensity) * blend;
+    let wanted = if light.intensity < LANTERN_MAX_INTENSITY * 0.02 {
+        Visibility::Hidden
+    } else {
+        Visibility::Inherited
+    };
+    if *visibility != wanted {
+        *visibility = wanted;
     }
 }
 
@@ -344,7 +1058,119 @@ mod tests {
     #[test]
     fn test_sfx_clip_files() {
         assert!(SfxClip::Hit.file().starts_with("assets/audio/sfx/"));
-        assert!(SfxClip::Ui.file().ends_with("ui.wav"));
+        // core 4: os stubs .wav sintéticos foram substituídos por clips
+        // Text2Sound (.ogg) — nada na engine pode apontar a .wav.
+        assert!(SfxClip::Ui.file().ends_with("ui.ogg"));
+        for clip in SFX_CLIPS_ALL {
+            assert!(
+                clip.file().ends_with(".ogg"),
+                "{} não é .ogg",
+                clip.file()
+            );
+        }
+        // colheita nativa: 4 clips .ogg partilhados com a referência
+        for clip in [
+            SfxClip::ChopHit,
+            SfxClip::ChopBreak,
+            SfxClip::MineHit,
+            SfxClip::MineBreak,
+        ] {
+            assert!(clip.file().contains("combat/"), "{}", clip.file());
+        }
+        // passe de juice (WS-A): os clips novos têm de ser .ogg e apontar a
+        // pastas reais da árvore de assets (ui/, combat/, world/, ambient/).
+        let juice = [
+            (SfxClip::LevelUp, "ui/levelup.ogg"),
+            (SfxClip::QuestDone, "ui/quest_complete.ogg"),
+            (SfxClip::Travel, "combat/swing.ogg"),
+            (SfxClip::Footstep, "ambient/footstep.ogg"),
+            (SfxClip::FootstepWater, "ambient/footstep_water.ogg"),
+            (SfxClip::Loot, "world/chest_open.ogg"),
+        ];
+        for (clip, suffix) in juice {
+            assert!(clip.file().ends_with(suffix), "{}", clip.file());
+        }
+    }
+
+    /// O registry Lua tem de cobrir TODAS as variantes — um clip sem nome
+    /// seria inalcançável por script e invisível para o audit.
+    #[test]
+    fn test_lua_registry_covers_all_clips() {
+        for clip in SFX_CLIPS_ALL {
+            assert!(
+                crate::luau::SFX_NAME_REGISTRY.iter().any(|(_, c)| c == clip),
+                "clip {:?} sem nome no SFX_NAME_REGISTRY",
+                clip
+            );
+        }
+        // e o mapeamento inverso resolve (case-insensitive).
+        for (name, clip) in crate::luau::SFX_NAME_REGISTRY {
+            assert_eq!(crate::luau::sfx_clip_from_str(name), Some(*clip));
+        }
+    }
+
+    /// Os OGGs do passe de juice existem no pool E no espelho de assets do
+    /// mundo flagship (a raiz que a engine realmente carrega no simple-rpg).
+    #[test]
+    fn test_juice_audio_assets_exist() {
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        for rel in [
+            "examples/shared-assets/public/assets/audio/sfx/ambient/rain_loop.ogg",
+            "examples/shared-assets/public/assets/audio/sfx/ambient/footstep.ogg",
+            "examples/shared-assets/public/assets/audio/sfx/ambient/footstep_water.ogg",
+            "examples/simple-rpg/assets/audio/sfx/ambient/rain_loop.ogg",
+            "examples/simple-rpg/assets/audio/sfx/ambient/footstep.ogg",
+            "examples/simple-rpg/assets/audio/sfx/ambient/footstep_water.ogg",
+            "examples/simple-rpg/assets/audio/sfx/ui/levelup.ogg",
+            "examples/simple-rpg/assets/audio/sfx/ui/quest_complete.ogg",
+            "examples/simple-rpg/assets/audio/sfx/combat/swing.ogg",
+            "examples/simple-rpg/assets/audio/sfx/world/chest_open.ogg",
+        ] {
+            let path = manifest.join(rel);
+            assert!(path.is_file(), "falta {}", path.display());
+        }
+    }
+
+    /// A chuva fecha o horizonte: densidade ×(1+0.6·rain) na névoa da câmara.
+    #[test]
+    fn test_biome_fog_thickens_with_rain() {
+        fn fog_density(rain: f32) -> f32 {
+            let mut app = bevy::app::App::new();
+            app.add_plugins(bevy::MinimalPlugins);
+            app.add_message::<ScriptToast>();
+            app.insert_resource(CurrentBiome::default());
+            app.insert_resource(crate::worldsys::AtmosphereState::default());
+            app.insert_resource(crate::worldsys::WeatherState {
+                wind: [0.0, 0.0],
+                wind_strength: 0.0,
+                clouds: 0.0,
+                rain,
+                cycle: false,
+            });
+            app.add_systems(bevy::app::Update, biome_fog_system);
+            app.world_mut().spawn((
+                Player::default(),
+                GlobalTransform::from_xyz(0.0, 0.0, 0.0),
+            ));
+            app.world_mut().spawn((Camera3d::default(),));
+            app.update();
+            let camera = app
+                .world_mut()
+                .query_filtered::<&DistanceFog, With<Camera3d>>()
+                .single(app.world())
+                .expect("a névoa foi inserida na câmara")
+                .clone();
+            match camera.falloff {
+                FogFalloff::ExponentialSquared { density } => density,
+                other => panic!("falloff inesperado: {other:?}"),
+            }
+        }
+        let dry = fog_density(0.0);
+        let wet = fog_density(0.5);
+        assert!(
+            (wet / dry - 1.3).abs() < 1e-4,
+            "chuva 0.5 engrossa a névoa ×1.3: {wet} vs {dry}"
+        );
     }
 
     #[test]
