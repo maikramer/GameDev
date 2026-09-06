@@ -1366,10 +1366,12 @@ mod tests {
             radius: 10.0,
             carve_radius: 12.5,
             water_y: 40.0,
+            mirror_reach: 1.0,
             stations: Vec::new(),
             surface_y: Vec::new(),
             water_width: 0.0,
             half_width: Vec::new(),
+            depths: Vec::new(),
             cascades: Vec::new(),
         };
         let boxes_w: Vec<(Bounds, &WaterBody)> = vec![(water_bounds(&body, 4.0), &body)];

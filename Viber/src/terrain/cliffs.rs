@@ -2090,10 +2090,12 @@ mod tests {
             radius: 300.0,
             carve_radius: 300.0,
             water_y: 30.0,
+            mirror_reach: 1.0,
             stations: Vec::new(),
             surface_y: Vec::new(),
             water_width: 0.0,
             half_width: Vec::new(),
+            depths: Vec::new(),
             cascades: Vec::new(),
         }];
         let mut spec = crate::terrain::TerrainSpec::default();
