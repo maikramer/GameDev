@@ -1504,7 +1504,7 @@ struct FireballFx<'w> {
 /// a paridade do melee: hit-stop + shake + solavanco + punch de pós-processo
 /// globais, flash + recoil por inimigo (o projétil é um golpe, não um número).
 #[allow(clippy::type_complexity)]
-pub fn fireball_step(
+fn fireball_step(
     mut commands: Commands,
     time: Res<Time>,
     mut meshes: ResMut<Assets<Mesh>>,

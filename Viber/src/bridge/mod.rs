@@ -202,10 +202,10 @@ struct PendingMouseClick {
 /// e o script vê `viber.ui.clicked(id)`.
 fn deferred_mouse_release(
     mut pending: ResMut<PendingMouseClick>,
-    mut input: Option<ResMut<ButtonInput<MouseButton>>>,
+    input: Option<ResMut<ButtonInput<MouseButton>>>,
     mut windows: Query<(Entity, &mut Window), With<PrimaryWindow>>,
-    mut messages: Option<MessageWriter<MouseButtonInput>>,
-    mut cursor_moved: Option<MessageWriter<CursorMoved>>,
+    messages: Option<MessageWriter<MouseButtonInput>>,
+    cursor_moved: Option<MessageWriter<CursorMoved>>,
 ) {
     // 1) PRESS injectado AQUI: corre antes do ui_focus_system (PreUpdate) e
     //    depois dos sistemas de input — o focus vê o just_pressed NESTE frame.

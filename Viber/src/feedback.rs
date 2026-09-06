@@ -622,7 +622,7 @@ fn respawn_system(
                     health.current = health.max;
                     // Morte limpa status: renascer envenenado punha o herói a
                     // perder o HP cheio no ponto de respawn sem inimigo algum.
-                    if let Some(mut effects) = status.as_deref_mut() {
+                    if let Some(effects) = status.as_deref_mut() {
                         effects.venom = 0.0;
                         effects.venom_tick = 0.0;
                     }
