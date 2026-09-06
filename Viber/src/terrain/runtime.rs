@@ -1359,6 +1359,10 @@ pub struct LoadedHeightmap {
     pub biomes: crate::terrain::splat::BiomeField,
 }
 
+/// Teto de dimensão para heightmaps PNG — 16 k² por eixo cobre qualquer
+/// mundo declarável e o `to_luma16` duplica a memória do decode.
+const MAX_HM_IMAGE_EDGE: usize = 16384;
+
 fn load_heightmap(base_dir: Option<&Path>, path: &str) -> anyhow::Result<LoadedHeightmap> {
     // `/assets/…`-style paths are site-root relative: resolve against the
     // world dir (the folder that contains `assets/`).
@@ -1389,6 +1393,12 @@ fn load_heightmap(base_dir: Option<&Path>, path: &str) -> anyhow::Result<LoadedH
     let img = image::load_from_memory(&bytes)
         .map_err(|e| anyhow::anyhow!("{}: {e}", resolved.display()))?;
     let (width, depth) = (img.width() as usize, img.height() as usize);
+    if width > MAX_HM_IMAGE_EDGE || depth > MAX_HM_IMAGE_EDGE {
+        anyhow::bail!(
+            "{}: {width}x{depth} above the {MAX_HM_IMAGE_EDGE}px heightmap cap",
+            resolved.display()
+        );
+    }
     let data = img.to_luma16().into_raw();
     Ok(LoadedHeightmap {
         map: HeightMapU16 { width, depth, data },
