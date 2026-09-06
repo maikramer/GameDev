@@ -276,6 +276,7 @@ export function installGuardModifier(state: State): void {
   uninstallModifier?.();
   uninstallModifier = registerDamageModifier((eid, amount, source) => {
     if (!blocking || eid !== playerEidOf(state)) return amount;
+    if (source <= 0) return amount;
     // Facing (XZ) vs the direction the blow comes from — a guard doesn't
     // cover your back.
     const px = Transform.posX[eid];
