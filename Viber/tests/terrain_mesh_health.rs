@@ -70,8 +70,10 @@ fn build_all_chunks(spec: &TerrainSpec, grid: &BrushGrid) -> Vec<((u32, u32), Ch
                 texture_tile_size: spec.texture_tile_size,
                 levels: spec.levels,
                 world_size: spec.world_size,
+                tint: (&spec.tint).into(),
+                cliff_angle: spec.cliff_angle,
             };
-            if let Ok(Some(data)) = build_chunk_mesh(grid, &params) {
+            if let Ok(Some(data)) = build_chunk_mesh(grid, &params, None) {
                 out.push(((cx, cz), data));
             }
         }

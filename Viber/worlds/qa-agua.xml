@@ -32,5 +32,8 @@
          bank="gorge" rocks="1" pool-spacing="16"
          spring="1" />
 
-  <OrbitCamera target="plaza" distance="58" height="26" pitch="18" />
+  <!-- Âncora da câmara sobre o gorge (só transform, sem colisão). -->
+  <Group name="miradouro_gorge" translation="56 40 -14" />
+
+  <OrbitCamera target="miradouro_gorge" distance="34" height="10" pitch="16" />
 </world>

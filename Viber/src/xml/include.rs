@@ -23,15 +23,21 @@ pub struct LoadedWorld {
     pub nodes: Vec<XmlNode>,
 }
 
+/// Directório pai de um caminho já canónico. `/` canónico não tem pai — os
+/// `expect` antigos panicavam nesse caso (violava o contrato "analyze falha
+/// com exit 1, nunca panic").
+fn parent_dir(path: &Path) -> Result<PathBuf> {
+    path.parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| anyhow!("caminho inválido (sem directório pai): {}", path.display()))
+}
+
 /// Load a world file and expand every `<Include>`.
 pub fn load_world(path: &Path) -> Result<LoadedWorld> {
     let path = path
         .canonicalize()
         .with_context(|| format!("world file not found: {}", path.display()))?;
-    let root_dir = path
-        .parent()
-        .ok_or_else(|| anyhow!("caminho inválido (sem directório pai): {}", path.display()))?
-        .to_path_buf();
+    let root_dir = parent_dir(&path)?;
     let doc = super::parse_file(&path)?;
     if doc.root_tag != "world" && doc.root_tag != "scene" {
         bail!(
@@ -96,13 +102,7 @@ fn expand(
         }
         stack.push(resolved.clone());
         let doc = super::parse_file(&resolved)?;
-        let file_dir = resolved
-            .parent()
-            .ok_or_else(|| anyhow!(
-                "caminho inválido (sem directório pai): {}",
-                resolved.display()
-            ))?
-            .to_path_buf();
+        let file_dir = parent_dir(&resolved)?;
         // Unwrap: a <world>/<scene> root contributes its children; any other
         // single-root fragment is used as-is.
         let fragment: Vec<XmlNode> = if doc.root_tag == "world" || doc.root_tag == "scene" {
