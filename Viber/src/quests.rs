@@ -928,7 +928,10 @@ fn quest_visit_system(
             if !targets.contains(&name_norm) {
                 continue;
             }
-            if transform.translation().distance(player_pos) > *radius {
+            // 2D como o [F] da Nota (travel::nota_measure_system): a cota
+            // residual (marco num outeiro, herói na base) não devia bloquear
+            // o crédito da visita.
+            if transform.translation().xz().distance(player_pos.xz()) > *radius {
                 continue;
             }
             for became_ready in log.report_visit(name) {
