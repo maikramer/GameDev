@@ -292,6 +292,7 @@ pub struct PhysicsPlugin {
 impl bevy::app::Plugin for PhysicsPlugin {
     fn build(&self, app: &mut bevy::app::App) {
         app.init_resource::<ColliderCache>()
+            .init_resource::<TerrainCollisionStatus>()
             .add_plugins(RapierPhysicsPlugin::<NoUserData>::default())
             .add_systems(
                 bevy::app::Update,
@@ -646,24 +647,34 @@ pub fn collider_from_mesh(mesh: &Mesh, convex: bool) -> Option<Collider> {
 /// The ladder is deterministic — the first rung that yields a shape wins,
 /// always in the same order:
 ///
-/// 1. `MERGE_DUPLICATE_VERTICES | DELETE_DEGENERATE_TRIANGLES` — the healthy
-///    path, identical to what we always used;
-/// 2. default flags (no merge) — for meshes whose duplicate structure breaks
+/// 1. `FIX_INTERNAL_EDGES | DELETE_DEGENERATE_TRIANGLES` — the healthy path.
+///    Implica merge de vértices duplicados e povoa pseudo-normais: sem elas
+///    o parry devolve normal de contacto por triângulo e o character
+///    controller engancha em cada aresta interna do mesh (props, paredes,
+///    casas — e agora o terreno);
+/// 2. `MERGE_DUPLICATE_VERTICES | DELETE_DEGENERATE_TRIANGLES` — merge sem
+///    pseudo-normais, para geometria cuja estrutura rebenta o
+///    `FIX_INTERNAL_EDGES`;
+/// 3. default flags (no merge) — for meshes whose duplicate structure breaks
 ///    the merge preprocessing;
-/// 3. convex hull of the vertices — an approximate collider still blocks the
+/// 4. convex hull of the vertices — an approximate collider still blocks the
 ///    player, which is strictly better than an empty bake (the prop becomes a
 ///    ghost).
 ///
 /// `Err` lists what each rung reported, for the warn-once log only. Note: on
 /// parry 3d 0.30.2 `TriMesh::with_flags` swallows topology errors internally
 /// (`let _ = set_flags`) and only ever fails with `EmptyIndices` — so on this
-/// parry the ladder normally resolves on rung 1 and rungs 2–3 are defense in
-/// depth against geometry edge cases and future parry upgrades.
+/// parry the ladder normally resolves on rung 1 and the later rungs are
+/// defense in depth against geometry edge cases and future parry upgrades.
 pub fn bake_trimesh_escalating(
     vertices: Vec<Vec3>,
     indices: Vec<[u32; 3]>,
 ) -> Result<Collider, String> {
     let ladder = [
+        (
+            "FIX_INTERNAL_EDGES|DELETE_DEGENERATE_TRIANGLES",
+            TriMeshFlags::FIX_INTERNAL_EDGES | TriMeshFlags::DELETE_DEGENERATE_TRIANGLES,
+        ),
         (
             "MERGE_DUPLICATE_VERTICES|DELETE_DEGENERATE_TRIANGLES",
             TriMeshFlags::MERGE_DUPLICATE_VERTICES | TriMeshFlags::DELETE_DEGENERATE_TRIANGLES,
@@ -966,74 +977,184 @@ mod tests {
 
 // ------------------------------------------------------- terrain collision
 
-/// Chunks within this many chunk edges of the camera keep a collider.
+/// Columns within this many chunk edges of the player keep a collider.
 ///
 /// The whole terrain cannot be collidable at once: `simple-rpg` is a 4000 m
 /// world of 64 m columns, and a collider each is tens of megabytes of solver
 /// data for ground the player cannot reach this frame. Colliders stream in
-/// and out with the camera instead.
+/// and out with the player instead (camera only as fallback for worlds
+/// without a hero).
 pub const PHYSICS_CHUNK_RADIUS: f32 = 3.0;
 
-/// Marks a voxel chunk that currently owns a `Voxels` collider.
+/// Marks a voxel COLUMN that currently owns a terrain trimesh collider.
+///
+/// O collider vive na entidade da coluna (um trimesh por coluna, triângulos
+/// dos caixas transvoxel), não nas caixas — uma aresta interna a cada 64 m
+/// em vez de a cada 32 m, e zero superfícies coincidentes na pilha vertical.
 #[derive(Debug, Component)]
 pub struct VoxelCollider;
 
-/// Adds and removes colliders on the voxel boxes around the **player**.
+/// Banda de colisão em metros para um spec.
 ///
-/// No caminho 100% volumétrico TODA a superfície é caixa `VoxelChunk` — este
-/// streaming é a única fonte de colisão de terreno. Sem ele as paredes
-/// seriam cenário atravessável. `try_insert`/`try_remove` porque o LOD
-/// despacha caixas no mesmo frame (swap de coluna e cull).
+/// `chunk_size × PHYSICS_CHUNK_RADIUS` limitado à banda LOD 0
+/// (`lod_distance`): dentro dela o ladder impõe piso de LOD 0 às colunas,
+/// por isso "collider == o que se vê" é exato em todo o lado onde o player
+/// consegue tocar — nunca há collider assado de geometria mais grosseira do
+/// que a desenhada.
+pub fn collision_keep_within(spec: &crate::terrain::spec::TerrainSpec) -> f32 {
+    (spec.chunk_size * PHYSICS_CHUNK_RADIUS).min(spec.lod_distance())
+}
+
+/// Distância XZ de um ponto ao AABB de uma coluna.
 ///
-/// Âncora: o herói, com a câmara só como recurso (mundos sem player, editor).
-/// A câmara não serve: o pull-in de oclusão (`camera.rs`) afasta-a do herói e
-/// o disco de colisão saía de baixo dos pés dele.
+/// Às coordenadas da grelha e não ao `Transform` da coluna: a entidade senta-se
+/// na origem do mundo e a pilha de caixas é alta — medir em 3D ao centro
+/// deixava cair o collider debaixo dos pés do herói quando ele está no topo.
+pub fn column_xz_distance(p: Vec3, coords: UVec2, half: f32, edge: f32) -> f32 {
+    let x0 = -half + coords.x as f32 * edge;
+    let z0 = -half + coords.y as f32 * edge;
+    let cx = p.x.clamp(x0, x0 + edge);
+    let cz = p.z.clamp(z0, z0 + edge);
+    ((p.x - cx) * (p.x - cx) + (p.z - cz) * (p.z - cz)).sqrt()
+}
+
+/// Há chão de terreno carregado sob o herói?
+///
+/// Publicado por [`stream_voxel_colliders`] a cada frame. O player só recorre
+/// ao chão analítico (`surface_below`) quando `ready == false` — arranque,
+/// teleporte para coluna ainda por assar. Com chão carregado, o collider é a
+/// autoridade e "não grounded" é airborne legítimo, não desculpa para snap.
+#[derive(Debug, Resource, Default)]
+pub struct TerrainCollisionStatus {
+    pub ready: bool,
+}
+
+/// Triângulos acumulados das caixas de UMA coluna voxel, prontos para assar.
+///
+/// Os buffers já existem — são exatamente os que o transvoxel devolve para
+/// render ([`crate::terrain::voxel::build_box_mesh`]) — acumulá-los não paga
+/// memória extra além do bake em curso. Posições são origin-relative nos
+/// três eixos (o contracto de [`crate::terrain::voxel::spawn_box_entity`]),
+/// por isso cada caixa entra com o próprio `origin` como offset.
+#[derive(Debug, Default)]
+pub struct ColumnColliderBake {
+    vertices: Vec<Vec3>,
+    indices: Vec<[u32; 3]>,
+}
+
+impl ColumnColliderBake {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Caminho quente: os buffers que o mesher acabou de produzir.
+    pub fn add_mesh_data(&mut self, origin: Vec3, data: &crate::terrain::mesh::ChunkMeshData) {
+        let base = self.vertices.len() as u32;
+        self.vertices
+            .extend(data.positions.iter().map(|p| origin + Vec3::from(*p)));
+        for tri in data.indices.chunks_exact(3) {
+            self.indices.push([tri[0] + base, tri[1] + base, tri[2] + base]);
+        }
+    }
+
+    /// Caminho de reparação: ler de volta um `Mesh` já residente no asset
+    /// store (CPU-resident por construção, `to_bevy_mesh`).
+    pub fn add_bevy_mesh(&mut self, origin: Vec3, mesh: &Mesh) {
+        let Some((vertices, indices)) = mesh_vertices_indices(mesh) else {
+            return;
+        };
+        let base = self.vertices.len() as u32;
+        self.vertices.extend(vertices.into_iter().map(|p| origin + p));
+        for tri in indices {
+            self.indices.push([tri[0] + base, tri[1] + base, tri[2] + base]);
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.indices.is_empty()
+    }
+
+    pub fn triangle_count(&self) -> usize {
+        self.indices.len()
+    }
+
+    /// Assa o trimesh da coluna.
+    ///
+    /// `FIX_INTERNAL_EDGES` (que implica merge de vértices duplicados) povoa
+    /// pseudo-normais: sem elas o parry devolve normal de contacto por
+    /// triângulo e o character controller engancha em cada aresta interna —
+    /// o clássico ghost collision de trimesh. Sem fallback convex-hull: um
+    /// hull de uma coluna de 64 m seria um bloco mentiroso; bake falhado é
+    /// warn + coluna sem collider, e a rede de segurança do player cobre.
+    pub fn bake(&self) -> Option<Collider> {
+        if self.is_empty() {
+            return None;
+        }
+        match Collider::trimesh_with_flags(
+            self.vertices.clone(),
+            self.indices.clone(),
+            TriMeshFlags::FIX_INTERNAL_EDGES | TriMeshFlags::DELETE_DEGENERATE_TRIANGLES,
+        ) {
+            Ok(collider) => Some(collider),
+            Err(err) => {
+                bevy::log::warn!(
+                    "terrain collider: bake do trimesh da coluna falhou ({err}) — sem collider"
+                );
+                None
+            }
+        }
+    }
+}
+
+/// Adds and removes the terrain collider on voxel COLUMNS around the player.
+///
+/// No caminho 100% volumétrico TODA a superfície é coluna voxel com trimesh —
+/// este streaming é a única fonte de colisão de terreno em runtime. O bake em
+/// si acontece no swap do LOD (`terrain::plugin`) e no spawn da coluna
+/// (`terrain::voxel::spawn_column`); aqui vive a manutenção: tirar o collider
+/// quando a coluna sai da banda e reparar colunas construídas sem collider
+/// (player chegou depois — teleporte/fast-travel), lendo de volta os meshes
+/// já residentes.
 #[allow(clippy::type_complexity)]
+#[allow(clippy::too_many_arguments)]
 pub fn stream_voxel_colliders(
     mut commands: Commands,
+    mut status: ResMut<TerrainCollisionStatus>,
     runtime: Option<Res<crate::terrain::runtime::TerrainRuntime>>,
     players: Query<&GlobalTransform, With<crate::player::Player>>,
     cameras: Query<&GlobalTransform, (With<Camera3d>, Without<crate::player::Player>)>,
-    chunks: Query<(
+    columns: Query<(
         Entity,
-        &crate::terrain::voxel::VoxelChunk,
+        &crate::terrain::plugin::TerrainChunk,
         Option<&VoxelCollider>,
+        Option<&Children>,
     )>,
+    boxes: Query<(&crate::terrain::voxel::VoxelChunk, &Mesh3d)>,
+    meshes: Res<Assets<Mesh>>,
+    mut repairs: Local<u32>,
 ) {
+    status.ready = false;
     let Some(runtime) = runtime else { return };
-    let Some(anchor) = players
-        .iter()
-        .next()
-        .or_else(|| cameras.iter().next())
-    else {
+    let Some(anchor) = players.iter().next().or_else(|| cameras.iter().next()) else {
         return;
     };
     if runtime.spec.collision_resolution == 0 {
         return;
     }
     let cam = anchor.translation();
-    let keep_within = runtime.spec.chunk_size * PHYSICS_CHUNK_RADIUS;
+    let keep_within = collision_keep_within(&runtime.spec);
     let drop_beyond = keep_within * 1.25;
+    let half = runtime.spec.world_size * 0.5;
+    let edge = crate::terrain::plugin::chunk_edge(&runtime.spec);
+    *repairs = 0;
 
-    for (entity, chunk, has_collider) in &chunks {
-        // Distance to the box, not to its corner: a chunk stack is tall and
-        // measuring from the origin would drop the collider under the player's
-        // feet while they stand on top of it.
-        let centre = chunk.origin + Vec3::splat(chunk.extent * 0.5);
-        let distance = centre.distance(cam);
+    for (entity, column, has_collider, children) in &columns {
+        let distance = column_xz_distance(cam, column.coords, half, edge);
         match (has_collider.is_some(), distance) {
-            (false, d) if d <= keep_within => {
-                if let Some(collider) = terrain_collider(&runtime, chunk) {
-                    // try_* e não insert/remove: no caminho 100% voxel as
-                    // caixas MORREM sob os pés deste sistema (o LOD troca
-                    // despacha as caixas velhas de uma coluna no mesmo
-                    // frame) — aplicar num despawnado era um panic de
-                    // engine, agora é um warn inofensivo.
-                    commands
-                        .entity(entity)
-                        .try_insert((collider, RigidBody::Fixed, VoxelCollider));
-                }
-            }
+            (true, d) if d <= keep_within => status.ready = true,
+            // try_* e não insert/remove: as colunas MORREM sob os pés deste
+            // sistema (o swap do LOD e o cull despawnam no mesmo frame) —
+            // aplicar num despawnado seria panic de engine.
             (true, d) if d > drop_beyond => {
                 commands
                     .entity(entity)
@@ -1041,223 +1162,104 @@ pub fn stream_voxel_colliders(
                     .try_remove::<RigidBody>()
                     .try_remove::<VoxelCollider>();
             }
+            // Coluna em banda sem collider: assar dos meshes já residentes
+            // (CPU-resident, zero cópia extra). 1 coluna por frame chega —
+            // o caso é teleporte, não streaming contínuo.
+            (false, d) if d <= keep_within && *repairs < 1 => {
+                let Some(children) = children else { continue };
+                let mut bake = ColumnColliderBake::new();
+                for kid in children.iter() {
+                    if let Ok((box_chunk, mesh3d)) = boxes.get(kid)
+                        && let Some(mesh) = meshes.get(&mesh3d.0)
+                    {
+                        bake.add_bevy_mesh(box_chunk.origin, mesh);
+                    }
+                }
+                if let Some(collider) = bake.bake() {
+                    commands
+                        .entity(entity)
+                        .try_insert((collider, RigidBody::Fixed, VoxelCollider));
+                    status.ready = true;
+                    *repairs += 1;
+                }
+            }
             _ => {}
         }
     }
 }
 
-/// Which collider a voxel box gets.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TerrainColliderKind {
-    /// Pure base term — smooth `Collider::heightfield` from the grid.
-    Smooth,
-    /// A 3D feature (cave / arch / cliff) reaches into this box —
-    /// `Collider::voxels`.
-    Voxel,
-}
-
-/// Decides the collider of one voxel box from whether a mod's 3D bounds
-/// actually reach into it.
-fn terrain_collider_kind(
-    field: &crate::terrain::voxel::VoxelField,
-    origin: Vec3,
-    extent: f32,
-) -> TerrainColliderKind {
-    let bounds = crate::terrain::voxel::Bounds3::from_corners(
-        origin,
-        origin + Vec3::splat(extent),
-    );
-    if field.has_mods_in(&bounds) {
-        TerrainColliderKind::Voxel
-    } else {
-        TerrainColliderKind::Smooth
-    }
-}
-
-/// The collider of one voxel box.
-///
-/// Caixa termo-base puro (95% do mundo): `Collider::heightfield` da grid —
-/// SUAVE, o mesmo collider que o heightfield usava antes da migração.
-/// Quantizar por centro de célula (`Collider::voxels` a 1 m) punha o topo
-/// ±0,5 m fora da superfície desenhada: subir morro viravam paredões de 1 m
-/// acima do autostep, descer virava escada, e o `last_resort_ground` do
-/// player perdia o contrato `y_de_repouso == sample` (na cidade o collider
-/// ficava 0,27 m ACIMA do solo visual e o herói nunca lia grounded). Caixas
-/// tocadas por features 3D mantêm `Collider::voxels` — dentro de
-/// grutas/arcos o degrau é o comportamento de sempre.
-fn terrain_collider(
-    runtime: &crate::terrain::runtime::TerrainRuntime,
-    chunk: &crate::terrain::voxel::VoxelChunk,
-) -> Option<Collider> {
-    match terrain_collider_kind(&runtime.voxel, chunk.origin, chunk.extent) {
-        TerrainColliderKind::Voxel => chunk_voxels(runtime, chunk),
-        TerrainColliderKind::Smooth => chunk_smooth_heightfield(runtime, chunk),
-    }
-}
-
-/// Smooth heightfield collider for a box that is pure base term, sized to the
-/// box and sampled from the SAME grid the gameplay queries read — o topo do
-/// collider coincide com `runtime.sample`, que é o contrato do
-/// `last_resort_ground`. Heights are entity-relative (a entidade senta-se no
-/// canto mínimo da caixa); o offset XZ ao centro vai no compound.
-fn chunk_smooth_heightfield(
-    runtime: &crate::terrain::runtime::TerrainRuntime,
-    chunk: &crate::terrain::voxel::VoxelChunk,
-) -> Option<Collider> {
-    let size = chunk.extent;
-    if !(size.is_finite() && size > 0.0) {
-        return None;
-    }
-    let resolution = runtime.spec.collision_resolution.max(1) as usize;
-    let n = resolution + 1;
-    let step = size / resolution as f32;
-    let mut heights = Vec::with_capacity(n * n);
-    // Row-major: row walks +X, column walks +Z — o layout que o collider de
-    // chunk pré-migração usava, agora por caixa de 32 m (mais fino).
-    for row in 0..n {
-        for col in 0..n {
-            let x = chunk.origin.x + row as f32 * step;
-            let z = chunk.origin.z + col as f32 * step;
-            heights.push(runtime.grid.sample(x, z) - chunk.origin.y);
-        }
-    }
-    Some(Collider::compound(vec![(
-        Vec3::new(size * 0.5, 0.0, size * 0.5),
-        Quat::IDENTITY,
-        Collider::heightfield(heights, n, n, Vec3::new(size, 1.0, size)),
-    )]))
-}
-
-/// Builds a Rapier `Voxels` collider for one volumetric chunk.
-///
-/// `parry` ships this shape natively and derives each voxel's type from its
-/// neighbours, which is what keeps a character controller from catching on the
-/// internal edges between adjacent boxes — the classic trimesh ghost-collision
-/// bug. A trimesh baked from the surface-nets mesh would have to fight it.
-///
-/// Voxel key `k` spans `[k·size, (k+1)·size]` in the collider's local frame,
-/// and the entity sits at the chunk's minimum corner, so local cell indices
-/// are the keys directly.
-fn chunk_voxels(
-    runtime: &crate::terrain::runtime::TerrainRuntime,
-    chunk: &crate::terrain::voxel::VoxelChunk,
-) -> Option<Collider> {
-    let size = chunk.voxel_size;
-    if !(size.is_finite() && size > 0.0) {
-        return None;
-    }
-    let cells = (chunk.extent / size).round().max(1.0) as i32;
-    let mut filled: Vec<IVect> = Vec::new();
-    for iz in 0..cells {
-        for iy in 0..cells {
-            for ix in 0..cells {
-                let centre = chunk.origin
-                    + Vec3::new(
-                        (ix as f32 + 0.5) * size,
-                        (iy as f32 + 0.5) * size,
-                        (iz as f32 + 0.5) * size,
-                    );
-                if runtime.is_solid(centre) {
-                    filled.push(IVect::new(ix, iy, iz));
-                }
-            }
-        }
-    }
-    // All air or all rock with no surface: nothing worth colliding against
-    // here, and an empty shape would panic the builder.
-    if filled.is_empty() {
-        return None;
-    }
-    Some(Collider::voxels(Vec3::splat(size), &filled))
-}
-
 #[cfg(test)]
 mod terrain_collider_tests {
     use super::*;
-    use crate::terrain::brush::BrushGrid;
-    use crate::terrain::heightmap::HeightMapU16;
-    use crate::terrain::voxel::VoxelField;
+    use crate::terrain::mesh::ChunkMeshData;
 
-    fn flat_field() -> VoxelField {
-        VoxelField::flat(256.0, 64.0)
-    }
-
-    #[test]
-    fn test_a_pure_base_term_box_gets_the_smooth_collider() {
-        let field = flat_field();
-        assert_eq!(
-            terrain_collider_kind(&field, Vec3::new(-32.0, 32.0, -32.0), 32.0),
-            TerrainColliderKind::Smooth,
-            "sem mods o collider tem de ser o heightfield suave"
-        );
-    }
-
-    #[test]
-    fn test_a_box_touching_a_mod_gets_voxels_and_a_distant_one_does_not() {
-        use crate::terrain::voxel::mods::{BoxMod, ModOp, VoxelMod};
-        let wall: Box<dyn VoxelMod> = Box::new(BoxMod::new(
-            "wall",
-            crate::terrain::voxel::Bounds3::from_corners(
-                Vec3::new(-8.0, 24.0, -8.0),
-                Vec3::new(8.0, 40.0, 8.0),
-            ),
-            ModOp::Union,
-        ));
-        let field = VoxelField::new(vec![wall], 256.0, 64.0);
-        assert_eq!(
-            terrain_collider_kind(&field, Vec3::new(-32.0, 32.0, -32.0), 32.0),
-            TerrainColliderKind::Voxel,
-            "a caixa que contém a parede fica voxels"
-        );
-        assert_eq!(
-            terrain_collider_kind(&field, Vec3::new(32.0, 32.0, 32.0), 32.0),
-            TerrainColliderKind::Smooth,
-            "caixa longe do mod continua suave"
-        );
-    }
-
-    #[test]
-    fn test_the_smooth_collider_top_matches_the_sampled_surface() {
-        // O contrato do last_resort_ground: o topo do collider coincide com
-        // runtime.sample. Amalga a layout do heightfield (row-major +X/+Z,
-        // alturas relativas à origem) e confere o canto.
-        let n = 33usize;
-        let raw: Vec<u16> = (0..n * n)
-            .map(|i| {
-                let x = (i % n) as f32 / (n - 1) as f32;
-                ((10.0 + 5.0 * x) / 50.0 * 65535.0).round() as u16
-            })
-            .collect();
-        let grid = BrushGrid::from_height_map(
-            &HeightMapU16 { width: n, depth: n, data: raw },
-            32.0,
-            50.0,
-            1.0,
-        )
-        .expect("grid");
-        let runtime_spec = crate::terrain::TerrainSpec {
-            world_size: 32.0,
-            ..crate::terrain::TerrainSpec::default()
-        };
-        let _ = runtime_spec;
-        let origin = Vec3::new(-16.0, 0.0, -16.0);
-        let extent = 32.0_f32;
-        let resolution = 32usize;
-        let step = extent / resolution as f32;
-        let mut heights = Vec::with_capacity((resolution + 1) * (resolution + 1));
-        for row in 0..=resolution {
-            for col in 0..=resolution {
-                let x = origin.x + row as f32 * step;
-                let z = origin.z + col as f32 * step;
-                heights.push(grid.sample(x, z) - origin.y);
-            }
+    /// Dois triângulos formando um quadrado unitário a y=5, origin-relative.
+    fn quad_mesh_data(y: f32) -> ChunkMeshData {
+        ChunkMeshData {
+            positions: vec![
+                [0.0, y, 0.0],
+                [1.0, y, 0.0],
+                [1.0, y, 1.0],
+                [0.0, y, 1.0],
+            ],
+            normals: vec![[0.0, 1.0, 0.0]; 4],
+            uvs: vec![[0.0, 0.0]; 4],
+            colors: Vec::new(),
+            indices: vec![0, 1, 2, 0, 2, 3],
         }
-        // O vértice (0,0) do heightfield é a amostra da grelha no canto
-        // mínimo da caixa, relativa à origem — exatamente o que o collider
-        // constrói.
-        let expected = grid.sample(origin.x, origin.z) - origin.y;
-        assert!((heights[0] - expected).abs() < 1e-4);
-        assert!(heights.iter().all(|h| h.is_finite()));
+    }
+
+    #[test]
+    fn test_the_bake_offsets_boxes_into_world_space() {
+        let mut bake = ColumnColliderBake::new();
+        bake.add_mesh_data(Vec3::new(10.0, 0.0, 20.0), &quad_mesh_data(5.0));
+        bake.add_mesh_data(Vec3::new(-10.0, 8.0, -20.0), &quad_mesh_data(5.0));
+        assert_eq!(bake.triangle_count(), 4, "2 caixas × 2 triângulos");
+        // Vértices da 2.ª caixa: base = 4, então o índice global 4 é o canto
+        // mínimo dela (origin + [0,5,0]).
+        assert_eq!(bake.indices[2], [4, 5, 6]);
+        assert_eq!(
+            bake.vertices[4],
+            Vec3::new(-10.0, 13.0, -20.0),
+            "origin da caixa soma às posições origin-relative"
+        );
+    }
+
+    #[test]
+    fn test_an_empty_bake_builds_nothing() {
+        let bake = ColumnColliderBake::new();
+        assert!(bake.is_empty());
+        assert!(bake.bake().is_none(), "coluna sem geometria não tem collider");
+    }
+
+    #[test]
+    fn test_the_baked_collider_is_a_trimesh_with_pseudo_normals() {
+        // FIX_INTERNAL_EDGES povoa pseudo-normais — é o que impede o
+        // character controller de enganchare nas arestas internas entre
+        // caixas. Se um parry futuro as retirar deste rung, o teste avisa.
+        let mut bake = ColumnColliderBake::new();
+        bake.add_mesh_data(Vec3::ZERO, &quad_mesh_data(5.0));
+        let collider = bake.bake().expect("quad bakes");
+        match collider.raw.as_typed_shape() {
+            bevy_rapier3d::parry::shape::TypedShape::TriMesh(trimesh) => {
+                assert!(
+                    trimesh.pseudo_normals().is_some(),
+                    "FIX_INTERNAL_EDGES tem de produzir pseudo-normais"
+                );
+            }
+            other => panic!("esperado trimesh, veio {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_column_distance_is_xz_to_the_aabb() {
+        let (half, edge) = (128.0_f32, 64.0_f32);
+        let coords = UVec2::new(2, 2); // XZ [0, 64]²
+        // Dentro do quadrado: 0.
+        assert_eq!(column_xz_distance(Vec3::new(10.0, 500.0, 30.0), coords, half, edge), 0.0);
+        // Fora: distância euclidiana ao rectângulo, Y ignorado.
+        let d = column_xz_distance(Vec3::new(80.0, 0.0, 30.0), coords, half, edge);
+        assert!((d - 16.0).abs() < 1e-4, "d={d}");
     }
 }
 

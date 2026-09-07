@@ -25,6 +25,7 @@
 use bevy::math::{Vec2, Vec3};
 use transvoxel::prelude::*;
 use transvoxel::structs::grid_point::GridPoint;
+use transvoxel::traits::data_field::DataField;
 use transvoxel::structs::vertex_index::VertexIndex;
 use transvoxel::traits::mesh_builder::MeshBuilder;
 
@@ -240,6 +241,78 @@ impl MeshBuilder<f32, f32> for ChunkMeshBuilder<'_> {
     }
 }
 
+/// Campo com o lattice regular do bloco pré-amostrado.
+///
+/// `CacheNothing` é obrigatório (ver [`build_voxel_mesh`]), mas sem cache
+/// nenhum o transvoxel reavalia cada canto de célula até oito vezes: uma
+/// caixa 32³ passa de ~39 k para ~260 k avaliações do SDF, e meshar uma caixa
+/// de LOD 0 subia de ~6 ms para ~28 ms — cinco vezes o orçamento de frame,
+/// com o `BrushGrid` (Catmull-Rom monótono) a pagar a conta.
+///
+/// Isto pré-calcula o lattice `(cells+1)³` — exatamente as amostras que o
+/// mesher anterior fazia — e serve tudo o que caia fora dele (as meias-células
+/// das faces de transição, uma fração da superfície) direto do campo. O cache
+/// é do bloco, não partilhado, portanto não tem o problema de indexação que
+/// obriga a evitar o `CacheCentralBlockOnly`.
+struct LatticeField<'a> {
+    density: &'a dyn Fn(Vec3) -> f32,
+    base: Vec3,
+    cell: f32,
+    cells: usize,
+    /// `-density` no lattice, em ordem x-rápido → y → z.
+    samples: Vec<f32>,
+}
+
+impl<'a> LatticeField<'a> {
+    fn new(density: &'a dyn Fn(Vec3) -> f32, base: Vec3, cell: f32, cells: usize) -> Self {
+        let pts = cells + 1;
+        let mut samples = Vec::with_capacity(pts * pts * pts);
+        for iz in 0..pts {
+            for iy in 0..pts {
+                for ix in 0..pts {
+                    let p = base
+                        + Vec3::new(ix as f32 * cell, iy as f32 * cell, iz as f32 * cell);
+                    samples.push(-(density)(p));
+                }
+            }
+        }
+        Self {
+            density,
+            base,
+            cell,
+            cells,
+            samples,
+        }
+    }
+
+    /// Índice do lattice para uma coordenada, ou `None` se cair entre pontos.
+    fn lattice_index(&self, v: f32, base: f32) -> Option<usize> {
+        let f = (v - base) / self.cell;
+        let i = f.round();
+        // Tolerância relativa à célula: as posições vêm de
+        // `base + size * (index/subdivisions)`, com o erro de vírgula
+        // flutuante dessa divisão.
+        if (f - i).abs() > 1e-3 || i < 0.0 || i > self.cells as f32 {
+            return None;
+        }
+        Some(i as usize)
+    }
+}
+
+impl DataField<f32, f32> for LatticeField<'_> {
+    fn get_data(&self, x: f32, y: f32, z: f32) -> f32 {
+        if let (Some(ix), Some(iy), Some(iz)) = (
+            self.lattice_index(x, self.base.x),
+            self.lattice_index(y, self.base.y),
+            self.lattice_index(z, self.base.z),
+        ) {
+            let pts = self.cells + 1;
+            return self.samples[(iz * pts + iy) * pts + ix];
+        }
+        -(self.density)(Vec3::new(x, y, z))
+    }
+}
+
 /// Piso de área² abaixo do qual um triângulo conta como sliver de marching
 /// cubes — a métrica dos testes de saúde, não um filtro (ver `add_triangle`).
 ///
@@ -269,10 +342,19 @@ pub fn build_voxel_mesh(
         params.cells,
     );
     // `-density`: o transvoxel considera dentro o que está ACIMA do threshold.
-    let field = |x: f32, y: f32, z: f32| -density(Vec3::new(x, y, z));
+    // O `LatticeField` faz a inversão e serve o lattice regular de cache.
+    let field = LatticeField::new(density, params.origin, params.voxel_size, params.cells);
     let builder = extract_from_field(
         &field,
-        FieldCaching::CacheCentralBlockOnly,
+        // NÃO trocar por `CacheCentralBlockOnly`. Esse cache é indexado à
+        // resolução do bloco central, e as células de transição amostram o
+        // campo a MEIA célula — leem a entrada errada e os vértices da face
+        // caem a metade da altura certa. Numa caixa de 64 m com o chão a 40 m
+        // o resultado era uma cortina de 20 m pendurada em cada face de
+        // transição: um paredão a cortar o horizonte em toda a banda de LOD, e
+        // o frame de 10 ms a passar a 25 ms de overdraw. Coberto por
+        // `test_a_transition_face_keeps_a_flat_plane_flat`.
+        FieldCaching::CacheNothing,
         block,
         transition_sides(params.transitions),
         0.0f32,
@@ -365,6 +447,45 @@ mod tests {
             b.positions.len(),
             "LowX ligado não mudou nada — as transições não estão a ser passadas"
         );
+    }
+
+    /// Um plano horizontal continua um plano horizontal com transições
+    /// ligadas — o teste que apanha o cache de campo errado.
+    ///
+    /// Com `FieldCaching::CacheCentralBlockOnly` as células de transição liam
+    /// densidades da entrada errada do cache e punham os vértices da face a
+    /// METADE da altura local certa: uma cortina vertical pendurada em cada
+    /// face de transição, visível em jogo como um paredão a cortar o horizonte
+    /// ao longo de toda a banda de LOD.
+    #[test]
+    fn test_a_transition_face_keeps_a_flat_plane_flat() {
+        // Inclui a geometria real do LOD 1 do simple-rpg (64 m, 32 células).
+        let cases = [
+            (Vec3::new(0.0, 8.0, 0.0), 16usize, 1.0f32, 16.0f32),
+            (Vec3::new(0.0, 8.0, 0.0), 8, 2.0, 16.0),
+            (Vec3::new(0.0, 8.0, 0.0), 16, 1.0, 20.0),
+            (Vec3::new(0.0, 0.0, 0.0), 32, 2.0, 40.0),
+        ];
+        for (origin, cells, voxel_size, plane) in cases {
+            for transitions in [
+                [false; 4],
+                [true, false, false, false],
+                [true, true, true, true],
+            ] {
+                let mut p = params(origin, cells, voxel_size);
+                p.transitions = transitions;
+                let d = build_voxel_mesh(&flat(plane), &p).expect("o plano atravessa a caixa");
+                let expected = plane - origin.y;
+                for pos in &d.positions {
+                    assert!(
+                        (pos[1] - expected).abs() < 0.05,
+                        "cells={cells} vs={voxel_size} tr={transitions:?}: vértice a y={} \
+                         em vez de {expected} — a face de transição está a cair",
+                        pos[1]
+                    );
+                }
+            }
+        }
     }
 
     #[test]

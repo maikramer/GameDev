@@ -202,6 +202,9 @@ struct ColumnBuild {
     neighbours: [u8; 4],
     staged: Vec<Entity>,
     remaining: Vec<super::voxel::VoxelBoxSpec>,
+    /// Triângulos das caixas já staged — no swap assa o trimesh da coluna,
+    /// para mesh e collider trocarem no MESMO frame.
+    bake: crate::physics::ColumnColliderBake,
 }
 
 /// Per-frame LOD pass over VOXEL columns: same select/hysteresis/budget/cull
@@ -213,6 +216,7 @@ fn update_voxel_columns(
     runtime: Option<Res<TerrainRuntime>>,
     published: Option<Res<TerrainChunkMaterials>>,
     cameras: Query<&GlobalTransform, With<Camera3d>>,
+    players: Query<&GlobalTransform, With<crate::player::Player>>,
     mut columns: Query<(Entity, &mut TerrainChunk, Option<&mut ColumnBuild>)>,
     boxes: Query<(), With<super::voxel::VoxelChunk>>,
     children_q: Query<&Children>,
@@ -229,6 +233,14 @@ fn update_voxel_columns(
         return;
     };
     let cam_xz = Vec2::new(cam.translation().x, cam.translation().z);
+    // O piso de LOD 0 da banda de colisão olha o HERÓI (a câmara pode estar
+    // dezenas de metros ao lado dele com o zoom puxado): a banda de colisão
+    // cobre ambos, e o chão sob os pés nunca troca de LOD.
+    let player_xz: Option<Vec2> = players
+        .iter()
+        .next()
+        .map(|t| Vec2::new(t.translation().x, t.translation().z));
+    let collision_keep = crate::physics::collision_keep_within(&runtime.spec);
 
     // Reselect gate — idêntico ao caminho heightfield.
     let moved = state
@@ -312,6 +324,19 @@ fn update_voxel_columns(
                 }
                 None => raw_lod(dist, spec.lod_distance(), max_lod),
             };
+            // Piso de LOD 0 na banda de colisão: o chão que o herói pode
+            // tocar é sempre a geometria fina, e o collider trimesh da coluna
+            // é sempre o que se vê. O clamp 2:1 propaga o degrau às vizinhas
+            // com as células de transição do transvoxel.
+            let nearest = match player_xz {
+                Some(p) => dist.min(center_of(coords).distance(p)),
+                None => dist,
+            };
+            let lod = if chunk_aabb_distance(nearest, edge) < collision_keep {
+                0
+            } else {
+                lod
+            };
             lod_field.set(coords, lod);
         }
     }
@@ -345,6 +370,7 @@ fn update_voxel_columns(
                 );
                 b.target = chunk.lod;
                 b.neighbours = neighbours;
+                b.bake = crate::physics::ColumnColliderBake::new();
                 state.pending = true;
             }
             Some(b) => {
@@ -368,6 +394,7 @@ fn update_voxel_columns(
                         // orçamento, segue para a próxima caixa.
                         continue;
                     };
+                    b.bake.add_mesh_data(box_spec.origin, &data);
                     b.staged.push(super::voxel::spawn_box_entity(
                         &mut commands,
                         &mut meshes,
@@ -392,6 +419,28 @@ fn update_voxel_columns(
                     for e in &b.staged {
                         commands.entity(*e).insert(Visibility::Inherited);
                     }
+                    // O collider da coluna troca com o mesh, no MESMO frame:
+                    // o trimesh novo substitui o velho. Sem geometria nova
+                    // (coluna provou-se vazia), o collider velho sai — nunca
+                    // fica chão invisível.
+                    if spec.collision_resolution > 0 {
+                        match b.bake.bake() {
+                            Some(collider) => {
+                                commands.entity(entity).try_insert((
+                                    collider,
+                                    bevy_rapier3d::prelude::RigidBody::Fixed,
+                                    crate::physics::VoxelCollider,
+                                ));
+                            }
+                            None => {
+                                commands
+                                    .entity(entity)
+                                    .try_remove::<bevy_rapier3d::prelude::Collider>()
+                                    .try_remove::<bevy_rapier3d::prelude::RigidBody>()
+                                    .try_remove::<crate::physics::VoxelCollider>();
+                            }
+                        }
+                    }
                     chunk.built_lod = b.target;
                     chunk.built_neighbours = b.neighbours;
                     commands.entity(entity).remove::<ColumnBuild>();
@@ -406,6 +455,7 @@ fn update_voxel_columns(
                     neighbours,
                     staged: Vec::new(),
                     remaining,
+                    bake: crate::physics::ColumnColliderBake::new(),
                 });
                 // O componente entra por commands (deferido) — sem isto o
                 // passe seguinte nem corria (gate de movimento de câmara).
@@ -474,6 +524,7 @@ fn update_voxel_columns(
                 voxel,
                 spec,
                 neighbours,
+                Some(cam_xz),
             );
             if built > 0 {
                 state.chunks.insert(coords, entity);
@@ -489,7 +540,7 @@ fn update_voxel_columns(
 /// fora, a folga até à borda mais próxima. Cull e respawn partilham a
 /// métrica para nenhum dos dois ignorar um chunk cujo corpo ainda cabe no
 /// raio de render.
-fn chunk_aabb_distance(dist_center: f32, edge: f32) -> f32 {
+pub(crate) fn chunk_aabb_distance(dist_center: f32, edge: f32) -> f32 {
     (dist_center - edge * 0.5).max(0.0)
 }
 
@@ -1112,11 +1163,11 @@ mod tests {
         app.update();
         app.update();
         assert_eq!(count(&mut app), 4, "chunks respawned near the camera");
-        // O respawn constrói já no LOD cru da distância ao centro (sem
-        // histerese — chunk novo não tem histórico): os três chunks a 11-25 m
-        // ficam em LOD 0; o canto oposto, a 33,9 m do centro da câmara
-        // (16, 16), passa a fronteira de 32 m e re-entra em LOD 1.
-        assert_eq!(lod(&mut app), vec![0, 0, 0, 1]);
+        // O respawn constrói já no LOD cru da distância ao centro, MAS o piso
+        // da banda de colisão (chunk 16 × 3 = 48, limitado a lod_distance 32
+        // — e este mundo de teste de 32 m cabe inteiro nela) força LOD 0 em
+        // todas: o chão que se pode tocar é sempre a geometria fina.
+        assert_eq!(lod(&mut app), vec![0, 0, 0, 0]);
     }
 
     /// Cull pela AABB do chunk: com a câmara a `render_distance < dist_centro

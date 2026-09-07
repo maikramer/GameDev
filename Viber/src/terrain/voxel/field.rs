@@ -92,18 +92,6 @@ impl VoxelField {
         self.index.is_empty()
     }
 
-    /// True when a mod's 3D bounds actually intersect `bounds` (not just the
-    /// XZ buckets of the index).
-    ///
-    /// Decide o collider de uma caixa: termo-base puro → heightfield SUAVE da
-    /// grid; caixa com feature 3D (gruta/arco/cliff) → `Collider::voxels`.
-    pub fn has_mods_in(&self, bounds: &Bounds3) -> bool {
-        self.index
-            .candidates_in(bounds)
-            .into_iter()
-            .any(|i| self.mods[i as usize].bounds().intersects(bounds))
-    }
-
     /// True when no mod covers this column, so the heightfield is the whole
     /// answer here.
     pub fn is_flat_at(&self, x: f32, z: f32) -> bool {

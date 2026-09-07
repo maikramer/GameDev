@@ -262,6 +262,12 @@ pub(crate) fn spawn_box_entity(
 /// Spawna uma COLUNA inteira: a entidade `TerrainChunk` (o nome `chunk
 /// cz-cx` é o contrato de adoção/profiler) mais as caixas de `boxes` já
 /// visíveis. Devolve `(entidade, caixas meshadas)`.
+///
+/// O collider da coluna nasce AQUI: um trimesh com os MESMOS triângulos que
+/// o render acabou de assar, na entidade da coluna — mesh e collider são
+/// inseparáveis desde o primeiro frame. `collision_anchor` (XZ do player ou
+/// câmara) limita o bake à banda de colisão; `None` (testes headless) assa
+/// tudo.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_column(
     commands: &mut Commands,
@@ -275,6 +281,7 @@ pub(crate) fn spawn_column(
     field: &VoxelField,
     spec: &TerrainSpec,
     neighbour_lods: [u8; 4],
+    collision_anchor: Option<Vec2>,
 ) -> (Entity, usize) {
     let column = commands
         .spawn((
@@ -291,13 +298,42 @@ pub(crate) fn spawn_column(
         ))
         .id();
     let mut meshed = 0;
+    let mut bake = crate::physics::ColumnColliderBake::new();
     for b in boxes {
         if let Some(data) = build_box_mesh(spec, grid, field, b) {
+            bake.add_mesh_data(b.origin, &data);
             spawn_box_entity(commands, meshes, column, b, data, material, true);
             meshed += 1;
         }
     }
+    if meshed > 0
+        && spec.collision_resolution > 0
+        && collision_anchor.is_none_or(|anchor| {
+            column_in_collision_band(anchor, coords, spec)
+        })
+        && let Some(collider) = bake.bake()
+    {
+        commands.entity(column).insert((
+            collider,
+            bevy_rapier3d::prelude::RigidBody::Fixed,
+            crate::physics::VoxelCollider,
+        ));
+    }
     (column, meshed)
+}
+
+/// A coluna está na banda de colisão de um ponto XZ do mundo?
+pub(crate) fn column_in_collision_band(
+    anchor: Vec2,
+    coords: UVec2,
+    spec: &TerrainSpec,
+) -> bool {
+    crate::physics::column_xz_distance(
+        Vec3::new(anchor.x, 0.0, anchor.y),
+        coords,
+        spec.world_size * 0.5,
+        super::super::plugin::chunk_edge(spec),
+    ) <= crate::physics::collision_keep_within(spec)
 }
 
 /// Bootstrap do caminho 100% voxel: spawna as colunas dentro do raio de
@@ -339,6 +375,7 @@ pub fn spawn_voxel_columns(
     // o transvoxel sabe fazer a ponte. Sem câmara (testes headless) tudo nasce
     // em LOD 0 e o campo é uniforme.
     let mut lod_field = super::super::plugin::LodField::new(rows);
+    let collision_keep = crate::physics::collision_keep_within(spec);
     for cz in 0..rows {
         for cx in 0..rows {
             let distance = camera_xz.map(|cam| cam.distance(center_of(cx, cz)));
@@ -348,7 +385,17 @@ pub fn spawn_voxel_columns(
                 continue;
             }
             let lod = distance
-                .map(|d| super::super::plugin::raw_lod(d, spec.lod_distance(), max_lod))
+                .map(|d| {
+                    let lod = super::super::plugin::raw_lod(d, spec.lod_distance(), max_lod);
+                    // Piso de LOD 0 na banda de colisão (só a câmara aqui —
+                    // no bootstrap o player ainda não se moveu): o chão que
+                    // se pode tocar nasce fino, collider incluído.
+                    if super::super::plugin::chunk_aabb_distance(d, edge) < collision_keep {
+                        0
+                    } else {
+                        lod
+                    }
+                })
                 .unwrap_or(0);
             lod_field.set(UVec2::new(cx, cz), lod);
         }
@@ -383,6 +430,7 @@ pub fn spawn_voxel_columns(
                 field,
                 spec,
                 neighbours,
+                camera_xz,
             );
             stats.meshed += built;
         }
