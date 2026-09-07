@@ -1986,13 +1986,24 @@ fn set_translation(
     warnings: &mut Vec<String>,
 ) -> bool {
     let applied = with_entity(world, entity, warnings, |e| {
-        match e.get_mut::<Transform>() {
+        let moved = match e.get_mut::<Transform>() {
             Some(mut transform) => {
                 transform.translation = pos;
                 true
             }
             None => false,
+        };
+        // Chegada limpa, tal como o fast-travel (`travel.rs`): sem isto o
+        // `vel_y` acumulado ATRAVESSA o teleport. Um debug `teleport` durante
+        // uma queda reentrava com dezenas de m/s, a caixa de motion do frame
+        // ultrapassava o shape-cast do controller e o herói atravessava o
+        // terreno — queda infinita reproduzida a `y = -123675`.
+        if moved && let Some(mut player) = e.get_mut::<crate::player::Player>() {
+            player.vel_x = 0.0;
+            player.vel_y = 0.0;
+            player.vel_z = 0.0;
         }
+        moved
     })
     .unwrap_or(false);
     if applied {

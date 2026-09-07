@@ -48,6 +48,36 @@ pub fn last_resort_ground(player_y: f32, top: f32) -> f32 {
     }
 }
 
+/// Terminal fall speed (m/s).
+///
+/// Gravity used to integrate `vel_y` without a bound. A long enough fall then
+/// asks the character controller to move tens of meters in one frame, which
+/// outruns its shape-cast: the hero passes THROUGH the terrain collider and
+/// keeps accelerating, and because the collider streaming follows the hero the
+/// ground never comes back. Reproduced live at `y = -123675` after a debug
+/// teleport. 55 m/s is well past any reachable jump/fall speed in the game and
+/// still lands inside one 1 m voxel at 60 fps.
+pub const TERMINAL_VELOCITY: f32 = 55.0;
+
+/// How far below the topmost surface counts as "fell out of the world" (m).
+///
+/// Deeper than any authored cave or the whole `max-height` of a world, so a
+/// legitimate underground hero is never teleported; only one that already
+/// tunnelled is rescued.
+pub const VOID_RESCUE_DEPTH: f32 = 250.0;
+
+/// Clamps the fall speed to [`TERMINAL_VELOCITY`]. Rising is never clamped —
+/// the jump apex is tuned against `GRAVITY` alone.
+pub fn clamp_fall_speed(vel_y: f32) -> f32 {
+    vel_y.max(-TERMINAL_VELOCITY)
+}
+
+/// True when the hero is so far under the topmost surface that no cave
+/// explains it — they tunnelled and are falling through the void.
+pub fn fell_out_of_world(player_y: f32, top: f32) -> bool {
+    player_y < top - VOID_RESCUE_DEPTH
+}
+
 pub const JUMP_BUFFER: f32 = 0.1;
 /// Coyote time: jumps still land within this window after leaving the ground
 /// (VibeGame `INPUT_CONFIG.gracePeriods.coyoteTime` = 100 ms).
@@ -384,6 +414,19 @@ pub fn player_movement(
         // top of the world is the WRONG floor and must not snap the hero up
         // through the roof — see [`last_resort_ground`].
         let top = runtime.sample(transform.translation.x, transform.translation.z);
+
+        // Void rescue: a hero this far under the surface tunnelled through the
+        // terrain collider (see [`fell_out_of_world`]). Put them back on the
+        // surface with no inertia instead of letting them fall forever.
+        if fell_out_of_world(transform.translation.y, top) {
+            warn!(
+                "player fell out of the world at y={:.1} (surface {:.1}) — rescued to the surface",
+                transform.translation.y, top
+            );
+            transform.translation.y = top;
+            player.vel_y = 0.0;
+            player.grounded = true;
+        }
         let ground = last_resort_ground(transform.translation.y, top);
 
         // Vertical integration. Falls faster than it rises feels right
@@ -392,6 +435,9 @@ pub fn player_movement(
         if gravity_applies(player.grounded, player.vel_y) {
             player.vel_y -= GRAVITY * dt;
         }
+        // Bounded fall: one frame of motion must stay small enough for the
+        // controller's shape-cast to see the ground — see [`clamp_fall_speed`].
+        player.vel_y = clamp_fall_speed(player.vel_y);
         motion.y += player.vel_y * dt;
 
         match controller.as_deref_mut() {
@@ -559,6 +605,32 @@ mod tests {
             last_resort_ground(30.0 - GROUND_FALLBACK_SLACK - 0.01, 30.0),
             f32::NEG_INFINITY
         );
+    }
+
+    #[test]
+    fn test_fall_speed_is_bounded_but_rising_is_not() {
+        // Uma queda longa integrava `vel_y` sem limite: a 60 fps um `vel_y` de
+        // -1000 pede 16 m num frame e o shape-cast do controller não vê o chão.
+        assert_eq!(clamp_fall_speed(-1000.0), -TERMINAL_VELOCITY);
+        assert_eq!(clamp_fall_speed(-TERMINAL_VELOCITY), -TERMINAL_VELOCITY);
+        // Um frame à velocidade terminal tem de caber num voxel de LOD 0 (1 m)
+        // a 60 fps, senão o clamp não resolve nada.
+        let frame_drop = TERMINAL_VELOCITY / 60.0;
+        assert!(frame_drop < 1.0, "queda de {frame_drop} m/frame salta o voxel");
+        // Subir (salto) nunca é cortado — o apex está afinado contra GRAVITY.
+        assert_eq!(clamp_fall_speed(0.0), 0.0);
+        assert_eq!(clamp_fall_speed(1000.0), 1000.0);
+    }
+
+    #[test]
+    fn test_void_rescue_only_fires_below_any_real_cave() {
+        // Na superfície, debaixo de um teto, ou numa gruta funda: não é void.
+        assert!(!fell_out_of_world(30.0, 30.0));
+        assert!(!fell_out_of_world(-40.0, 30.0));
+        assert!(!fell_out_of_world(30.0 - VOID_RESCUE_DEPTH, 30.0));
+        // Atravessou o terreno e continua a cair: resgate.
+        assert!(fell_out_of_world(30.0 - VOID_RESCUE_DEPTH - 0.01, 30.0));
+        assert!(fell_out_of_world(-123675.0, 38.75));
     }
 
     #[test]

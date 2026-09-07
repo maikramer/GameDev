@@ -82,6 +82,17 @@ impl ChunkLodState {
 #[derive(Default)]
 pub struct TerrainPlugin;
 
+/// Sets do terreno, para quem precisa de correr DEPOIS da grelha de colunas.
+///
+/// O `timed(...)` embrulha o sistema noutro tipo, por isso um
+/// `.after(update_voxel_columns)` de fora não casa — a ordenação passa por
+/// este set explícito.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SystemSet)]
+pub enum TerrainSet {
+    /// Spawn/refino/cull das colunas voxel (`update_voxel_columns`).
+    Columns,
+}
+
 impl bevy::app::Plugin for TerrainPlugin {
     fn build(&self, app: &mut bevy::app::App) {
         app.init_resource::<ChunkLodState>().add_systems(
@@ -89,7 +100,8 @@ impl bevy::app::Plugin for TerrainPlugin {
             (
                 timed(Group::Terrain, adopt_chunks),
                 timed(Group::Terrain, update_voxel_columns),
-            ),
+            )
+                .in_set(TerrainSet::Columns),
         );
     }
 }
@@ -519,8 +531,6 @@ pub(crate) fn lod0_step(spec: &TerrainSpec) -> usize {
         step
     }
 }
-
-/// Converts pure [`ChunkMeshData`] buffers into a Bevy mesh (CPU-resident) —
 
 #[cfg(test)]
 mod tests {

@@ -297,7 +297,12 @@ impl bevy::app::Plugin for PhysicsPlugin {
                 bevy::app::Update,
                 (
                     resolve_pending_colliders,
-                    stream_voxel_colliders,
+                    // Depois do LOD: o swap de coluna despacha caixas e spawna
+                    // as novas no mesmo frame, e sem esta ordem o streaming
+                    // via a grelha do frame anterior — um ou mais frames sem
+                    // chão debaixo do herói a cada troca de LOD.
+                    stream_voxel_colliders
+                        .after(crate::terrain::plugin::TerrainSet::Columns),
                 ),
             );
         if self.debug {
@@ -973,17 +978,22 @@ pub const PHYSICS_CHUNK_RADIUS: f32 = 3.0;
 #[derive(Debug, Component)]
 pub struct VoxelCollider;
 
-/// Adds and removes colliders on the voxel boxes around the camera.
+/// Adds and removes colliders on the voxel boxes around the **player**.
 ///
 /// No caminho 100% volumétrico TODA a superfície é caixa `VoxelChunk` — este
 /// streaming é a única fonte de colisão de terreno. Sem ele as paredes
 /// seriam cenário atravessável. `try_insert`/`try_remove` porque o LOD
 /// despacha caixas no mesmo frame (swap de coluna e cull).
+///
+/// Âncora: o herói, com a câmara só como recurso (mundos sem player, editor).
+/// A câmara não serve: o pull-in de oclusão (`camera.rs`) afasta-a do herói e
+/// o disco de colisão saía de baixo dos pés dele.
 #[allow(clippy::type_complexity)]
 pub fn stream_voxel_colliders(
     mut commands: Commands,
     runtime: Option<Res<crate::terrain::runtime::TerrainRuntime>>,
-    cameras: Query<&GlobalTransform, With<Camera3d>>,
+    players: Query<&GlobalTransform, With<crate::player::Player>>,
+    cameras: Query<&GlobalTransform, (With<Camera3d>, Without<crate::player::Player>)>,
     chunks: Query<(
         Entity,
         &crate::terrain::voxel::VoxelChunk,
@@ -991,11 +1001,17 @@ pub fn stream_voxel_colliders(
     )>,
 ) {
     let Some(runtime) = runtime else { return };
-    let Ok(camera) = cameras.single() else { return };
+    let Some(anchor) = players
+        .iter()
+        .next()
+        .or_else(|| cameras.iter().next())
+    else {
+        return;
+    };
     if runtime.spec.collision_resolution == 0 {
         return;
     }
-    let cam = camera.translation();
+    let cam = anchor.translation();
     let keep_within = runtime.spec.chunk_size * PHYSICS_CHUNK_RADIUS;
     let drop_beyond = keep_within * 1.25;
 
