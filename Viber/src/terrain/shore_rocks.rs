@@ -14,7 +14,7 @@
 
 use bevy::math::Vec2;
 
-use super::water::{CARVE_MARGIN, lake_shape_radius, shape_phases, waterline_reach};
+use super::water::{LakeShape, CARVE_MARGIN, waterline_reach};
 
 /// GLBs de pedra do pool, em ordem de "pretensão" (boulder > musgo > seixo).
 /// Um é escolhido por instância pelo RNG do grupo de spawner.
@@ -73,28 +73,9 @@ const MAX_PER_BODY: usize = 160;
 const DRY_SPREAD: f32 = 3.5;
 const WET_DEPTH: f32 = 1.2;
 
-/// SplitMix64 local (mesma família do lattice_hash do splatter) — RNG
-/// determinística barata sem depender da `Rng` privada do spawner.
-struct Rng(u64);
-
-impl Rng {
-    fn new(seed: u64) -> Self {
-        Self(seed ^ 0x5EED_5EED_5EED_5EED)
-    }
-    fn next_u64(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
-    }
-    fn unit(&mut self) -> f32 {
-        (self.next_u64() >> 40) as f32 / 16_777_216.0
-    }
-    fn range(&mut self, a: f32, b: f32) -> f32 {
-        a + (b - a) * self.unit()
-    }
-}
+/// SplitMix64 partilhado ([`crate::rng::Rng`]) semeado com XOR fixo — os
+/// outputs têm de continuar idênticos aos do `Rng` local que vivia aqui.
+use crate::rng::Rng;
 
 /// Seed derivada da posição do corpo (estável entre runs, distinta por
 /// corpo sobreposto).
@@ -103,6 +84,10 @@ fn body_seed(at: Vec2, index: usize) -> u64 {
         ^ ((at.y.to_bits() as u64).rotate_left(17))
         ^ (index as u64).wrapping_mul(0xBF58_476D_1CE4_E5B9)
 }
+
+/// Sal fixo que o `Rng` local antigo aplicava no `new` — preservado para o
+/// seq shuffler das pedras não mudar.
+const SHORE_SEED_SALT: u64 = 0x5EED_5EED_5EED_5EED;
 
 /// Candidatos ao longo do contorno orgânico de um lago (espaçamento angular
 /// uniforme + jitter em θ e raio — o contorno varia ±28%, o que já quebra
@@ -118,7 +103,7 @@ pub fn lake_candidates(
     if radius <= 0.0 {
         return Vec::new();
     }
-    let phases = shape_phases(at);
+    let shape = LakeShape::new(at);
     let reach = (waterline_reach(depth, water_offset) * CARVE_MARGIN).clamp(0.5, 1.6);
     // Perímetro do contorno amostrado — de onde vem a contagem.
     let samples = 96;
@@ -126,7 +111,7 @@ pub fn lake_candidates(
     let mut prev: Option<Vec2> = None;
     for i in 0..=samples {
         let theta = i as f32 / samples as f32 * std::f32::consts::TAU;
-        let r = lake_shape_radius(radius, theta, phases) * reach;
+        let r = shape.contour(radius, theta) * reach;
         let p = at + Vec2::new(theta.cos(), theta.sin()) * r;
         if let Some(q) = prev {
             perimeter += p.distance(q);
@@ -138,14 +123,14 @@ pub fn lake_candidates(
     if count == 0 {
         return Vec::new();
     }
-    let mut rng = Rng::new(body_seed(at, index));
+    let mut rng = Rng::new(body_seed(at, index) ^ SHORE_SEED_SALT);
     let mut out = Vec::with_capacity(count);
     for i in 0..count {
         let theta = i as f32 / count as f32 * std::f32::consts::TAU
             + rng.range(-0.5, 0.5) / count as f32 * std::f32::consts::TAU;
         // Jitter radial: do lado húmido (dentro do espelho, água rasa) até
         // DRY_SPREAD metros em seco, em torno da linha de água real.
-        let waterline = lake_shape_radius(radius, theta, phases) * reach;
+        let waterline = shape.contour(radius, theta) * reach;
         let radial = waterline + rng.range(-WET_DEPTH, DRY_SPREAD);
         out.push(at + Vec2::new(theta.cos(), theta.sin()) * radial);
     }
@@ -180,7 +165,7 @@ pub fn river_candidates(
         return Vec::new();
     }
     let walk_step = length / count as f32;
-    let mut rng = Rng::new(body_seed(stations[0], index));
+    let mut rng = Rng::new(body_seed(stations[0], index) ^ SHORE_SEED_SALT);
     let mut out = Vec::with_capacity(count);
     let mut target = walk_step * 0.5;
     let mut walked = 0.0;

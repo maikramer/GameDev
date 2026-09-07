@@ -9,8 +9,8 @@ use viber::terrain::brush::BrushGrid;
 use viber::terrain::features::apply_features;
 use viber::terrain::heightmap::HeightMapU16;
 use viber::terrain::mesh::ChunkMeshData;
-use viber::terrain::voxel::{build_box_mesh, column_boxes};
 use viber::terrain::spec::TerrainSpec;
+use viber::terrain::voxel::{build_box_mesh, column_boxes};
 use viber::{recipes, xml};
 
 /// Carves the demo world and returns its grid + spec.
@@ -44,11 +44,23 @@ fn build_all_boxes(
     grid: &BrushGrid,
     features: &viber::terrain::features::TerrainFeatures,
 ) -> Vec<((u32, u32), ChunkMeshData)> {
-    let edge = spec.chunk_size;
-    let rows = (spec.world_size / edge).ceil().max(1.0) as u32;
     // Sem features 3D o campo é o flat; o mundo demo tem água/carves que
     // vivem na grid — o campo só lê o termo-base.
-    let field = viber::terrain::voxel::VoxelField::new(Vec::new(), spec.world_size, edge);
+    let field =
+        viber::terrain::voxel::VoxelField::new(Vec::new(), spec.world_size, spec.chunk_size);
+    build_boxes_with_field(spec, grid, &field, features)
+}
+
+/// Same sweep against an arbitrary voxel field — what a world with `<Bridge>`,
+/// `<Arch>` and `<Cave>` mods actually meshes.
+fn build_boxes_with_field(
+    spec: &TerrainSpec,
+    grid: &BrushGrid,
+    field: &viber::terrain::voxel::VoxelField,
+    features: &viber::terrain::features::TerrainFeatures,
+) -> Vec<((u32, u32), ChunkMeshData)> {
+    let edge = spec.chunk_size;
+    let rows = (spec.world_size / edge).ceil().max(1.0) as u32;
     let lod0_cell = 1.0_f32; // 64 m / resolution 64
     let mut out = Vec::new();
     for cz in 0..rows {
@@ -56,7 +68,7 @@ fn build_all_boxes(
             let boxes = column_boxes(
                 spec,
                 grid,
-                &field,
+                field,
                 edge,
                 lod0_cell,
                 0,
@@ -64,7 +76,7 @@ fn build_all_boxes(
                 [viber::terrain::voxel::spawn::NO_NEIGHBOUR; 4],
             );
             for b in &boxes {
-                if let Some(data) = build_box_mesh(spec, grid, &field, b) {
+                if let Some(data) = build_box_mesh(spec, grid, field, b) {
                     out.push(((cx, cz), data));
                 }
             }
@@ -317,4 +329,110 @@ fn walk(dir: &Path) -> Vec<PathBuf> {
 fn gltf_json(bytes: &[u8]) -> Option<serde_json::Value> {
     let len = u32::from_le_bytes(bytes.get(12..16)?.try_into().ok()?) as usize;
     serde_json::from_slice(bytes.get(20..20 + len)?).ok()
+}
+
+/// Carves the crossings QA world and builds its real voxel field: two
+/// bridges, a cave with a chamber and a shaft, a natural arch, a viaduct and
+/// a seeded rock field.
+fn carved_crossings_world() -> (
+    TerrainSpec,
+    BrushGrid,
+    viber::terrain::voxel::VoxelField,
+    viber::terrain::features::TerrainFeatures,
+) {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("worlds/qa-pontes.xml");
+    let loaded = xml::include::load_world(&path).expect("crossings world loads");
+    let world = recipes::parse_world(&loaded.root_attrs, &loaded.nodes).expect("world parses");
+    let mut pending = viber::recipes::spawn::PendingTerrain::default();
+    viber::recipes::spawn::collect_terrain(&world.entities, &mut pending);
+    let spec = pending.terrain.clone().expect("world has a <Terrain>");
+    let map = HeightMapU16::procedural(&spec, spec.resolution.max(1) as usize);
+    let mut grid = BrushGrid::from_height_map(
+        &map,
+        spec.world_size,
+        spec.max_height,
+        spec.height_smoothing,
+    )
+    .expect("grid builds");
+    let result = apply_features(&mut grid, &pending.features);
+
+    let mut mods: Vec<Box<dyn viber::terrain::voxel::VoxelMod>> = Vec::new();
+    for cave in &pending.features.caves {
+        mods.extend(cave.build(&grid));
+    }
+    for arch in &pending.features.arches {
+        mods.extend(arch.build(&grid));
+    }
+    for bridge in &pending.features.bridges {
+        mods.extend(bridge.build(&grid));
+    }
+    let guards = viber::terrain::voxel::ScatterGuards {
+        water: &result.water,
+        roads: &result.roads,
+    };
+    for field in &pending.features.rock_fields {
+        let seeded = field.resolve(&grid, &guards);
+        for c in &seeded.caves {
+            mods.extend(c.build(&grid));
+        }
+        for a in &seeded.arches {
+            mods.extend(a.build(&grid));
+        }
+        for b in &seeded.bridges {
+            mods.extend(b.build(&grid));
+        }
+    }
+    let field = viber::terrain::voxel::VoxelField::new(mods, spec.world_size, spec.chunk_size);
+    (spec, grid, field, pending.features)
+}
+
+#[test]
+fn test_the_crossings_world_meshes_as_cleanly_as_the_bare_terrain() {
+    // Bridges, arches and caves multiply the CSG the mesher walks through.
+    // The failure they could introduce is the same one the demo world guards
+    // against — NaN buffers, zero-length normals, a flood of slivers — so
+    // hold them to the same bar rather than inventing a softer one.
+    let (spec, grid, field, features) = carved_crossings_world();
+    assert!(
+        field.mods().len() >= 40,
+        "the QA world must carry real mods (has {})",
+        field.mods().len()
+    );
+    let boxes = build_boxes_with_field(&spec, &grid, &field, &features);
+    assert!(!boxes.is_empty(), "the crossings world produced voxel boxes");
+
+    let mut degenerate = 0usize;
+    let mut total = 0usize;
+    for ((cx, cz), data) in &boxes {
+        for (i, p) in data.positions.iter().enumerate() {
+            assert!(
+                p.iter().all(|v| v.is_finite()),
+                "box of chunk ({cx},{cz}) vertex {i}: non-finite position {p:?}"
+            );
+        }
+        for (i, n) in data.normals.iter().enumerate() {
+            let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+            assert!(
+                n.iter().all(|v| v.is_finite()) && (len - 1.0).abs() < 1e-2,
+                "box of chunk ({cx},{cz}) vertex {i}: normal {n:?} is not unit (len {len})"
+            );
+        }
+        for tri in data.indices.chunks_exact(3) {
+            let (a, b, c) = (
+                bevy::math::Vec3::from(data.positions[tri[0] as usize]),
+                bevy::math::Vec3::from(data.positions[tri[1] as usize]),
+                bevy::math::Vec3::from(data.positions[tri[2] as usize]),
+            );
+            total += 1;
+            if (b - a).cross(c - a).length() < 1e-9 {
+                degenerate += 1;
+            }
+        }
+    }
+    assert!(total > 0, "voxel triangles were scanned");
+    let budget = (total / 200).max(8);
+    assert!(
+        degenerate <= budget,
+        "{degenerate}/{total} degenerate triangles with mods (budget {budget})"
+    );
 }

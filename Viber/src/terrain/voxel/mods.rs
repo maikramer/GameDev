@@ -290,10 +290,7 @@ impl ArchMod {
 
     /// Local frame point: yaw about the base centre, origin at the base.
     fn to_local(&self, p: Vec3) -> Vec3 {
-        let rel = p - self.base;
-        let (s, c) = self.yaw.sin_cos();
-        // R(-yaw) about Y.
-        Vec3::new(c * rel.x - s * rel.z, rel.y, s * rel.x + c * rel.z)
+        yaw_local(p, self.base, self.yaw)
     }
 
     /// Exact SDF of the solid block (axis-aligned in the local frame). The
@@ -303,8 +300,7 @@ impl ArchMod {
         let total = self.height + self.span_half + self.cap;
         let centre = Vec3::new(0.0, total * 0.5, 0.0);
         let half = Vec3::new(hx, total * 0.5, self.depth * 0.5);
-        let d = (q - centre).abs() - half;
-        d.max(Vec3::ZERO).length() + d.max_element().min(0.0)
+        box_distance(q - centre, half)
     }
 
     /// Union of the two void children (jamb box + crown capsule). Negative
@@ -314,8 +310,7 @@ impl ArchMod {
         // the opening cuts clean through the legs' foot.
         let jamb_centre = Vec3::new(0.0, self.height * 0.5 - 1.0, 0.0);
         let jamb_half = Vec3::new(self.span_half, self.height * 0.5 + 1.0, self.depth);
-        let dj = (q - jamb_centre).abs() - jamb_half;
-        let jamb = dj.max(Vec3::ZERO).length() + dj.max_element().min(0.0);
+        let jamb = box_distance(q - jamb_centre, jamb_half);
         // Crown: a capsule overlong along the arch axis, radius = half span,
         // centred at jamb height — the rounded top of the opening.
         let a = Vec3::new(0.0, self.height, -self.depth);
@@ -335,11 +330,219 @@ impl VoxelMod for ArchMod {
         // Conservative world AABB of the yawed block: the XZ half-diagonal.
         let hx = self.span_half + self.thickness;
         let hz = self.depth * 0.5;
-        let r = (hx * hx + hz * hz).sqrt();
         let total = self.height + self.span_half + self.cap;
-        let half = Vec3::new(r, total * 0.5, r);
+        let half = Vec3::new(hx, total * 0.5, hz);
         let centre = self.base + Vec3::new(0.0, half.y, 0.0);
-        Bounds3::from_corners(centre - half, centre + half).expanded(1.0)
+        yawed_bounds(centre, half, 1.0)
+    }
+
+    fn op(&self) -> ModOp {
+        self.op
+    }
+
+    fn label(&self) -> &str {
+        &self.label
+    }
+}
+
+// ------------------------------------------------- shared local-frame maths
+
+/// A world point expressed in a yawed local frame: origin at `base`, rotated
+/// by `-yaw` about Y.
+///
+/// Shared by every yawed primitive so that a `<Bridge>` deck box, an
+/// [`ArchMod`] and an [`EllipsoidMod`] agree on what "yaw" means down to the
+/// sign — a disagreement there is a solid that mirrors itself.
+pub(crate) fn yaw_local(p: Vec3, base: Vec3, yaw: f32) -> Vec3 {
+    let rel = p - base;
+    let (s, c) = yaw.sin_cos();
+    Vec3::new(c * rel.x - s * rel.z, rel.y, s * rel.x + c * rel.z)
+}
+
+/// Exact SDF of an origin-centred axis-aligned box with half-extents `half`.
+pub(crate) fn box_distance(local: Vec3, half: Vec3) -> f32 {
+    let d = local.abs() - half;
+    d.max(Vec3::ZERO).length() + d.max_element().min(0.0)
+}
+
+/// Conservative world AABB of a yawed box.
+///
+/// The XZ half-diagonal is the only horizontal radius that holds for *every*
+/// yaw, so it is the one that cannot clip the solid — and a bounds that clips
+/// is a silently truncated feature, per the [`VoxelMod::bounds`] contract.
+pub(crate) fn yawed_bounds(center: Vec3, half: Vec3, pad: f32) -> Bounds3 {
+    let r = (half.x * half.x + half.z * half.z).sqrt();
+    let h = Vec3::new(r, half.y, r);
+    Bounds3::from_corners(center - h, center + h).expanded(pad)
+}
+
+/// A box with a yaw about Y — the workhorse of anything that follows a path:
+/// a bridge deck segment, a parapet, a pier, the straight part of an opening.
+///
+/// [`BoxMod`] cannot do this: its bounds *are* its shape, so it is stuck
+/// axis-aligned.
+#[derive(Debug, Clone)]
+pub struct OrientedBoxMod {
+    pub center: Vec3,
+    pub half: Vec3,
+    pub yaw: f32,
+    pub op: ModOp,
+    pub label: String,
+}
+
+impl OrientedBoxMod {
+    pub fn new(label: impl Into<String>, center: Vec3, half: Vec3, yaw: f32, op: ModOp) -> Self {
+        Self {
+            center,
+            half: half.max(Vec3::splat(1e-3)),
+            yaw,
+            op,
+            label: label.into(),
+        }
+    }
+}
+
+impl VoxelMod for OrientedBoxMod {
+    fn distance(&self, p: Vec3) -> f32 {
+        box_distance(yaw_local(p, self.center, self.yaw), self.half)
+    }
+
+    fn bounds(&self) -> Bounds3 {
+        yawed_bounds(self.center, self.half, 1.0)
+    }
+
+    fn op(&self) -> ModOp {
+        self.op
+    }
+
+    fn label(&self) -> &str {
+        &self.label
+    }
+}
+
+/// A capsule whose radius changes from end to end — a cave that opens into a
+/// hall, an arch leg that thickens into the ground, the tapered span of a
+/// natural rock bridge.
+///
+/// Exact round-cone SDF (Inigo Quilez). With `ra == rb` it is a
+/// [`CapsuleMod`], bit for bit.
+#[derive(Debug, Clone)]
+pub struct RoundConeMod {
+    pub a: Vec3,
+    pub b: Vec3,
+    pub ra: f32,
+    pub rb: f32,
+    pub op: ModOp,
+    pub label: String,
+}
+
+impl RoundConeMod {
+    pub fn new(
+        label: impl Into<String>,
+        a: Vec3,
+        b: Vec3,
+        ra: f32,
+        rb: f32,
+        op: ModOp,
+    ) -> Self {
+        Self {
+            a,
+            b,
+            ra: ra.max(0.01),
+            rb: rb.max(0.01),
+            op,
+            label: label.into(),
+        }
+    }
+}
+
+impl VoxelMod for RoundConeMod {
+    fn distance(&self, p: Vec3) -> f32 {
+        let ba = self.b - self.a;
+        let l2 = ba.dot(ba);
+        let rr = self.ra - self.rb;
+        let a2 = l2 - rr * rr;
+        // Two degenerate cases collapse to spheres rather than dividing by ~0:
+        // a zero-length segment, and one end sphere swallowing the other
+        // (|Δr| >= length). The min of the two sphere distances is continuous
+        // and never lies about the sign, which is the whole contract.
+        if l2 <= 1e-12 || a2 <= 1e-9 {
+            let da = (p - self.a).length() - self.ra;
+            let db = (p - self.b).length() - self.rb;
+            return da.min(db);
+        }
+        let il2 = 1.0 / l2;
+        let pa = p - self.a;
+        let y = pa.dot(ba);
+        let z = y - l2;
+        let x2 = (pa * l2 - ba * y).length_squared();
+        let y2 = y * y * l2;
+        let z2 = z * z * l2;
+        let k = rr.signum() * rr * rr * x2;
+        if z.signum() * a2 * z2 > k {
+            return (x2 + z2).sqrt() * il2 - self.rb;
+        }
+        if y.signum() * a2 * y2 < k {
+            return (x2 + y2).sqrt() * il2 - self.ra;
+        }
+        ((x2 * a2 * il2).sqrt() + y * rr) * il2 - self.ra
+    }
+
+    fn bounds(&self) -> Bounds3 {
+        Bounds3::from_corners(self.a, self.b).expanded(self.ra.max(self.rb) + 1.0)
+    }
+
+    fn op(&self) -> ModOp {
+        self.op
+    }
+
+    fn label(&self) -> &str {
+        &self.label
+    }
+}
+
+/// A yawed ellipsoid — a cave chamber, or the rounded crown of an arch void.
+///
+/// The distance is the standard scaled-sphere estimate, which **under**estimates
+/// (it is never larger than the true distance). That keeps the zero crossing
+/// exact and the sign honest, which is all the mesher asks of a mod
+/// (`VoxelMod::distance`); it is not a metric distance and must not be used as
+/// one.
+#[derive(Debug, Clone)]
+pub struct EllipsoidMod {
+    pub center: Vec3,
+    pub radii: Vec3,
+    pub yaw: f32,
+    pub op: ModOp,
+    pub label: String,
+}
+
+impl EllipsoidMod {
+    pub fn new(
+        label: impl Into<String>,
+        center: Vec3,
+        radii: Vec3,
+        yaw: f32,
+        op: ModOp,
+    ) -> Self {
+        Self {
+            center,
+            radii: radii.max(Vec3::splat(0.01)),
+            yaw,
+            op,
+            label: label.into(),
+        }
+    }
+}
+
+impl VoxelMod for EllipsoidMod {
+    fn distance(&self, p: Vec3) -> f32 {
+        let q = yaw_local(p, self.center, self.yaw) / self.radii;
+        (q.length() - 1.0) * self.radii.min_element()
+    }
+
+    fn bounds(&self) -> Bounds3 {
+        yawed_bounds(self.center, self.radii, 1.0)
     }
 
     fn op(&self) -> ModOp {
@@ -374,6 +577,78 @@ mod tests {
             Bounds3::from_corners(Vec3::splat(-1.0), Vec3::splat(1.0)),
             ModOp::Union,
         )
+    }
+
+    // ------------------------------------------------------- new primitives
+
+    #[test]
+    fn test_oriented_box_yaws_its_solid_not_just_its_bounds() {
+        // A 4 x 2 x 1 slab yawed 90 degrees: what was long in X is now long
+        // in Z. A mod that only yawed its bounds would fail the second pair.
+        let b = OrientedBoxMod::new(
+            "deck",
+            Vec3::ZERO,
+            Vec3::new(2.0, 1.0, 0.5),
+            std::f32::consts::FRAC_PI_2,
+            ModOp::Union,
+        );
+        assert!(b.distance(Vec3::new(0.0, 0.0, 1.5)) < 0.0, "long axis is Z now");
+        assert!(b.distance(Vec3::new(1.5, 0.0, 0.0)) > 0.0, "short axis is X now");
+        // The conservative bounds must still contain every solid point.
+        assert!(b.bounds().contains(Vec3::new(0.0, 0.0, 1.9)));
+    }
+
+    #[test]
+    fn test_round_cone_with_equal_radii_is_a_capsule() {
+        let a = Vec3::new(-3.0, 1.0, 0.5);
+        let b = Vec3::new(4.0, -2.0, 1.5);
+        let cone = RoundConeMod::new("c", a, b, 1.25, 1.25, ModOp::Subtract);
+        let cap = CapsuleMod::new("c", a, b, 1.25, ModOp::Subtract);
+        for p in [
+            Vec3::ZERO,
+            Vec3::new(1.0, 1.0, 1.0),
+            Vec3::new(-6.0, 0.0, 0.0),
+            Vec3::new(0.5, -1.0, 2.0),
+        ] {
+            assert!(
+                (cone.distance(p) - cap.distance(p)).abs() < 1e-4,
+                "round cone diverged from the capsule at {p:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_round_cone_tapers_between_its_two_radii() {
+        // Fat at A, thin at B: a point 2 m off the axis is inside near A and
+        // outside near B. That is the whole reason the primitive exists.
+        let cone = RoundConeMod::new(
+            "taper",
+            Vec3::ZERO,
+            Vec3::new(20.0, 0.0, 0.0),
+            4.0,
+            1.0,
+            ModOp::Subtract,
+        );
+        assert!(cone.distance(Vec3::new(1.0, 0.0, 2.0)) < 0.0);
+        assert!(cone.distance(Vec3::new(19.0, 0.0, 2.0)) > 0.0);
+        // Degenerate: one sphere swallowing the other must not divide by zero.
+        let swallowed = RoundConeMod::new("s", Vec3::ZERO, Vec3::X, 9.0, 0.5, ModOp::Union);
+        assert!(swallowed.distance(Vec3::ZERO).is_finite());
+        assert!(swallowed.distance(Vec3::ZERO) < 0.0);
+    }
+
+    #[test]
+    fn test_ellipsoid_is_a_sphere_when_isotropic_and_never_overestimates() {
+        let e = EllipsoidMod::new("s", Vec3::ZERO, Vec3::splat(3.0), 0.0, ModOp::Subtract);
+        for p in [Vec3::new(5.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0)] {
+            assert!((e.distance(p) - (p.length() - 3.0)).abs() < 1e-4);
+        }
+        // Anisotropic: sign is exact on the axes, and the estimate stays at or
+        // under the true axis distance (never larger — that is the contract).
+        let a = EllipsoidMod::new("a", Vec3::ZERO, Vec3::new(8.0, 2.0, 8.0), 0.0, ModOp::Subtract);
+        assert!(a.distance(Vec3::new(7.9, 0.0, 0.0)) < 0.0);
+        assert!(a.distance(Vec3::new(8.1, 0.0, 0.0)) > 0.0);
+        assert!(a.distance(Vec3::new(0.0, 4.0, 0.0)) <= 2.0 + 1e-4);
     }
 
     #[test]

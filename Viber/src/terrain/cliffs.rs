@@ -42,9 +42,7 @@
 use bevy::math::Vec2;
 
 use super::brush::BrushGrid;
-use super::paths::{
-    nearest_on_path, station_lerp,
-};
+use super::paths::{nearest_on_path, station_lerp};
 
 /// Face profile of a carved cliff.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -75,10 +73,6 @@ pub enum CliffProfile {
     /// hold rock above, air and rock below at the same XZ.
     Arch,
 }
-
-
-
-
 
 impl CliffProfile {
     /// Parses the `profile` attribute
@@ -181,8 +175,6 @@ impl Default for CliffSpec {
     }
 }
 
-
-
 /// Terraced ledges aim for this tread RUN (meters of band per step), 2..=8
 /// steps — the flat benches that catch the grass splat (wargame reference).
 pub(crate) const TERRACE_TREAD: f32 = 2.5;
@@ -209,8 +201,6 @@ pub(crate) fn hash01(seed: u64, a: u64, b: u64) -> f32 {
     (x >> 40) as f32 / (1u64 << 24) as f32
 }
 
-
-
 /// Left normal of the segment starting at `i` (map view: looking along the
 /// path from the first to the last station).
 pub(crate) fn segment_left(stations: &[Vec2], i: usize) -> Vec2 {
@@ -219,7 +209,6 @@ pub(crate) fn segment_left(stations: &[Vec2], i: usize) -> Vec2 {
     let dir = (b - a).normalize_or_zero();
     Vec2::new(-dir.y, dir.x)
 }
-
 
 /// Band width at an arc position: three seeded harmonics, ±`noise` of the
 /// base width (0 noise = constant).
@@ -553,7 +542,6 @@ impl CliffMask {
         }
     }
 
-
     #[allow(clippy::too_many_arguments)]
     fn label_into_core(
         grid: &BrushGrid,
@@ -880,8 +868,6 @@ pub fn sharpen_terrain(
 mod tests {
     use super::*;
 
-
-
     #[test]
     fn test_cliff_mask_marks_steep_drops_only() {
         let mut grid =
@@ -1093,6 +1079,7 @@ mod tests {
             carve_radius: 300.0,
             water_y: 30.0,
             mirror_reach: 1.0,
+            shape: super::super::water::LakeShape::default(),
             stations: Vec::new(),
             surface_y: Vec::new(),
             water_width: 0.0,

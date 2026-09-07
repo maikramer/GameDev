@@ -77,6 +77,17 @@ pub fn parse_vec2_list(value: &str, ctx: &str) -> Result<Vec<[f32; 2]>> {
         .collect()
 }
 
+/// Parse `"a"` or `"a b c …"` into a list of finite numbers — a value that
+/// varies along a path (a cave that widens into a hall, say).
+///
+/// An empty value yields an empty list, which callers read as "unset".
+pub fn parse_f32_list(value: &str, ctx: &str) -> Result<Vec<f32>> {
+    value
+        .split_whitespace()
+        .map(|part| parse_f32(part, ctx))
+        .collect()
+}
+
 /// Parse an attribute value as a `u32` (non-negative, finite integers only).
 pub fn parse_u32(value: &str, ctx: &str) -> Result<u32> {
     // Caminho exato primeiro: f32 perde precisão acima de 2^24 e o limite

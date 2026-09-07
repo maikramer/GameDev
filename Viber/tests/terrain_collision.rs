@@ -40,11 +40,17 @@ fn grid_from(world_size: f32, max_height: f32, height: impl Fn(f32, f32) -> f32)
             let z = i / n;
             let fx = x as f32 / (n - 1) as f32;
             let fz = z as f32 / (n - 1) as f32;
-            ((height(fx, fz) / max_height) * 65535.0).round().clamp(0.0, 65535.0) as u16
+            ((height(fx, fz) / max_height) * 65535.0)
+                .round()
+                .clamp(0.0, 65535.0) as u16
         })
         .collect();
     BrushGrid::from_height_map(
-        &HeightMapU16 { width: n, depth: n, data: raw },
+        &HeightMapU16 {
+            width: n,
+            depth: n,
+            data: raw,
+        },
         world_size,
         max_height,
         0.0,
@@ -58,7 +64,16 @@ fn bake_column(
     grid: &BrushGrid,
     field: &VoxelField,
 ) -> Option<bevy_rapier3d::prelude::Collider> {
-    let boxes = column_boxes(spec, grid, field, EDGE, LOD0_CELL, 0, COORDS, [NO_NEIGHBOUR; 4]);
+    let boxes = column_boxes(
+        spec,
+        grid,
+        field,
+        EDGE,
+        LOD0_CELL,
+        0,
+        COORDS,
+        [NO_NEIGHBOUR; 4],
+    );
     let mut bake = ColumnColliderBake::new();
     let mut meshed = 0;
     for b in &boxes {
@@ -73,10 +88,7 @@ fn bake_column(
 
 /// Ray para baixo a partir de `from`: o y do primeiro hit contra o collider.
 fn drop_y(collider: &bevy_rapier3d::prelude::Collider, x: f32, z: f32, from: f32) -> f32 {
-    let ray = Ray::new(
-        Vector::new(x, from, z),
-        Vector::new(0.0, -1.0, 0.0),
-    );
+    let ray = Ray::new(Vector::new(x, from, z), Vector::new(0.0, -1.0, 0.0));
     let hit = collider
         .raw
         .cast_local_ray_and_get_normal(&ray, from + 500.0, true)
@@ -144,9 +156,10 @@ fn test_a_cave_collides_at_the_cave_floor_not_the_hill_top() {
     let cave = viber::terrain::voxel::cave::CaveSpec {
         name: Some("mina".into()),
         path: vec![Vec2::new(-60.0, 32.0), Vec2::new(60.0, 32.0)],
-        radius: 3.5,
+        radius: vec![3.5],
         depth: 12.0,
         open_ends: true,
+        ..viber::terrain::voxel::cave::CaveSpec::default()
     };
     let field = VoxelField::new(cave.build(&grid), world_size, 64.0);
     let collider = bake_column(&spec, &grid, &field).expect("cave column bakes");
@@ -181,10 +194,21 @@ fn test_a_cave_collides_at_the_cave_floor_not_the_hill_top() {
 fn test_the_bake_is_deterministic() {
     let (world_size, max_height) = (128.0_f32, 30.0_f32);
     let spec = spec(world_size, max_height);
-    let grid = grid_from(world_size, max_height, |fx, fz| (fx + fz) * 0.5 * max_height);
+    let grid = grid_from(world_size, max_height, |fx, fz| {
+        (fx + fz) * 0.5 * max_height
+    });
     let field = VoxelField::default();
 
-    let boxes = column_boxes(&spec, &grid, &field, EDGE, LOD0_CELL, 0, COORDS, [NO_NEIGHBOUR; 4]);
+    let boxes = column_boxes(
+        &spec,
+        &grid,
+        &field,
+        EDGE,
+        LOD0_CELL,
+        0,
+        COORDS,
+        [NO_NEIGHBOUR; 4],
+    );
     let bake = || {
         let mut b = ColumnColliderBake::new();
         for spec_box in &boxes {
@@ -211,4 +235,108 @@ fn test_the_collision_band_is_the_lod0_band() {
     let mut wide = spec.clone();
     wide.lod_distance_ratio = 10.0; // lod_distance 640 > 192
     assert!((collision_keep_within(&wide) - 192.0).abs() < 1e-4);
+}
+
+// ---------------------------------------------------------------- travessias
+
+/// Um vale com um desfiladeiro a meio da coluna (1,1): margens a 20 m,
+/// leito a 2 m, paredes suavizadas para o mesher não ver um degrau vertical.
+fn ravine_grid(world_size: f32, max_height: f32) -> BrushGrid {
+    grid_from(world_size, max_height, |fx, _fz| {
+        let world_x = -world_size * 0.5 + fx * world_size;
+        // 0 no fundo do desfiladeiro, 1 nas margens.
+        let t = ((world_x - 32.0).abs() / 10.0).clamp(0.0, 1.0);
+        let s = t * t * (3.0 - 2.0 * t);
+        2.0 + 18.0 * s
+    })
+}
+
+fn bridge_field(
+    grid: &BrushGrid,
+    spec: &TerrainSpec,
+    bridge: viber::terrain::voxel::BridgeSpec,
+) -> VoxelField {
+    VoxelField::new(bridge.build(grid), spec.world_size, spec.chunk_size)
+}
+
+#[test]
+fn test_you_land_on_the_bridge_deck_and_not_in_the_river() {
+    // A regressão que a ponte de estrada tem hoje: o ribbon de
+    // `<Road profile="bridge">` é desenhado e mais nada, por isso o herói
+    // atravessa-o e cai ao leito. Um `<Bridge>` vive no campo voxel, portanto
+    // o trimesh da coluna traz o tabuleiro — e é o collider que o prova.
+    let (world_size, max_height) = (128.0_f32, 100.0_f32);
+    let spec = spec(world_size, max_height);
+    let grid = ravine_grid(world_size, max_height);
+    let bridge = viber::terrain::voxel::BridgeSpec {
+        name: Some("ponte".to_string()),
+        path: vec![Vec2::new(8.0, 32.0), Vec2::new(56.0, 32.0)],
+        width: 8.0,
+        rise: 1.0,
+        thickness: 2.5,
+        spans: Some(1),
+        parapet: 0.0,
+        ..viber::terrain::voxel::BridgeSpec::default()
+    };
+    let field = bridge_field(&grid, &spec, bridge);
+    let collider = bake_column(&spec, &grid, &field).expect("a bridged column bakes");
+
+    let bed = grid.sample(32.0, 32.0);
+    assert!(bed < 6.0, "o leito tem de estar em baixo (got {bed:.2})");
+
+    // Cair de muito alto sobre o meio do vão: o primeiro sólido é o
+    // tabuleiro, ~18 m acima do leito.
+    let landed = drop_y(&collider, 32.0, 32.0, 60.0);
+    assert!(
+        landed > bed + 10.0,
+        "aterrou em {landed:.2} com o leito a {bed:.2} — caiu através do tabuleiro"
+    );
+
+    // E o collider concorda com o gameplay: o mesmo sítio, meio voxel.
+    let floor = gameplay_floor(&field, &grid, 32.0, 32.0, 60.0);
+    assert!(
+        (landed - floor).abs() <= 0.5,
+        "collider {landed:.2} vs gameplay {floor:.2}"
+    );
+
+    // Fora da largura do tabuleiro (8 m) não há ponte nenhuma: aterra no leito.
+    let beside = drop_y(&collider, 32.0, 44.0, 60.0);
+    assert!(
+        beside < bed + 2.0,
+        "ao lado da ponte devia cair ao leito, aterrou em {beside:.2}"
+    );
+}
+
+#[test]
+fn test_under_the_bridge_the_walker_gets_the_bed_not_the_deck() {
+    // O outro lado do contrato: quem está DEBAIXO do arco tem chão próprio.
+    // `surface_below` é a query certa (o topo do mundo ali é tecto).
+    let (world_size, max_height) = (128.0_f32, 100.0_f32);
+    let spec = spec(world_size, max_height);
+    let grid = ravine_grid(world_size, max_height);
+    let bridge = viber::terrain::voxel::BridgeSpec {
+        name: Some("ponte".to_string()),
+        path: vec![Vec2::new(8.0, 32.0), Vec2::new(56.0, 32.0)],
+        width: 8.0,
+        rise: 1.0,
+        thickness: 2.5,
+        spans: Some(1),
+        parapet: 0.0,
+        ..viber::terrain::voxel::BridgeSpec::default()
+    };
+    let field = bridge_field(&grid, &spec, bridge);
+    let collider = bake_column(&spec, &grid, &field).expect("a bridged column bakes");
+
+    let bed = grid.sample(32.0, 32.0);
+    // Um metro acima do leito, já debaixo do arco.
+    let under = gameplay_floor(&field, &grid, 32.0, 32.0, bed + 1.0);
+    assert!(
+        (under - bed).abs() <= 0.5,
+        "debaixo do arco o chão é o leito ({bed:.2}), got {under:.2}"
+    );
+    let landed = drop_y(&collider, 32.0, 32.0, bed + 1.0);
+    assert!(
+        (landed - under).abs() <= 0.5,
+        "collider {landed:.2} vs gameplay {under:.2} debaixo do arco"
+    );
 }

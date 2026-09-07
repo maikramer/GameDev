@@ -29,12 +29,13 @@ use super::brush::BrushGrid;
 use super::features::{FeatureResult, apply_features};
 use super::heightmap::HeightMapU16;
 
-use super::layer_material::{TerrainChunkMaterial, TerrainChunkParams};
+use super::layer_material::{TerrainChunkConfig, TerrainChunkMaterial, TerrainChunkParams};
 use super::roads::RoadPath;
 use super::sampler::ResolvedPad;
 use super::spec::TerrainSpec;
 use super::splat::{
-    SLOT_GRAVEL, SLOT_RIVERBED, SplatParams, chunk_splat_image, generate_chunk_splats, pool_albedo,
+    SLOT_GRAVEL, SLOT_RIVERBED, SplatParams, chunk_splat2_image, chunk_splat_image,
+    generate_chunk_splats, pool_albedo,
     solid_white_image,
 };
 use super::voxel::{Span, VoxelField};
@@ -200,6 +201,9 @@ impl ChunkLayerMap {
 pub struct TerrainChunkMaterials {
     pub layer: Option<ChunkLayerMap>,
     pub standard: Option<Handle<StandardMaterial>>,
+    /// Pele das paredes no arranque (o mesmo spec do XML) — o rebake ao vivo
+    /// ([`rebake_chunk_splats`]) reutiliza-a para reconstruir os params.
+    pub config: Option<super::layer_material::TerrainChunkConfig>,
 }
 
 impl TerrainChunkMaterials {
@@ -428,7 +432,7 @@ pub fn bootstrap(world: &mut World) {
     };
 
     // 2. Features (pads → water → roads). Cliffs no longer carve.
-    let result = apply_features(&mut grid, &pending.features);
+    let mut result = apply_features(&mut grid, &pending.features);
 
     // 2.1 Cliff bands. Resolved against the CARVED grid, so a wall beside a
     // road or a lake adapts to the ground as built, and resolved BEFORE the
@@ -534,6 +538,37 @@ pub fn bootstrap(world: &mut World) {
         }
     }
 
+    // 2.7 Cachoeiras de parede — as quedas dos rios que cruzam uma banda
+    // autoral passam a despencar do brow ao toe (a face lê a banda, não o
+    // perfil) e ganham a fenda de spill no brow. A máscara já cobre as
+    // bandas (pedra no splat + exclusões de relva/spawner); os mods vão
+    // para o campo com os restantes sólidos. No fim, UMA linha por rio
+    // com quedas — o diário da deteção, ao estilo do log dos spawners.
+    let spill_mods = super::voxel::riverbank::wall_waterfalls(
+        &pending.features.rivers,
+        &mut result.water,
+        &result.water_specs,
+        &cliff_bands,
+    );
+    for (body, &(is_lake, i)) in result.water.iter().zip(&result.water_specs) {
+        if is_lake {
+            continue;
+        }
+        let falls = body.cascades.iter().filter(|c| c.waterfall).count();
+        if falls > 0 {
+            let max_drop = body
+                .cascades
+                .iter()
+                .map(|c| c.drop)
+                .fold(0.0f32, f32::max);
+            info!(
+                "água 'rio:{i}': {} cascatas / {} cachoeiras (queda até {max_drop:.1} m)",
+                body.cascades.len(),
+                falls
+            );
+        }
+    }
+
     // 3. Entities. Assets are removed/reinserted to avoid aliasing `&mut World`
     //    (same pattern as `spawn::startup`).
     let mut meshes = world
@@ -560,6 +595,13 @@ pub fn bootstrap(world: &mut World) {
     // textures + 1 splat plane each). Without the render plugins (headless
     // tests) the asset slot doesn't exist and the world degrades to the
     // legacy single-texture path.
+    // Config da pele das paredes (spec do XML) — usada no bake E guardada
+    // para o rebake ao vivo (`viber.debug.ground{...}`).
+    let chunk_config = if spec.layers.is_empty() {
+        None
+    } else {
+        Some(TerrainChunkConfig::from_terrain_spec(&spec))
+    };
     let layer_map = if spec.layers.is_empty() {
         None
     } else if asset_server.is_none() {
@@ -575,6 +617,9 @@ pub fn bootstrap(world: &mut World) {
         None
     } else {
         let (edge, rows) = chunk_grid(&spec);
+        let config = chunk_config
+            .as_ref()
+            .expect("layers present → config present");
         Some(spawn_chunk_materials(
             &spec,
             &grid,
@@ -585,6 +630,7 @@ pub fn bootstrap(world: &mut World) {
             &mut images,
             &mut chunk_materials,
             &mut watched,
+            &config,
             edge,
             rows,
         ))
@@ -612,26 +658,84 @@ pub fn bootstrap(world: &mut World) {
     // A world that authors no 3D feature gets the mod-less field, every chunk
     // classifies `Flat`, and the heightfield path below runs exactly as it did
     // before any of this existed. `<Cliff>` joins in Phase B.
+    //
+    // `<RockFeatures>` resolves HERE, and not in `apply_features`: seeding
+    // reads the finished ground (so a rock span never lands in a river that
+    // the carve had not cut yet) and produces plain arch/cave/bridge specs.
+    // From the next line on, a seeded feature and an authored one are the
+    // same thing.
+    let seeded = if pending.features.rock_fields.is_empty() {
+        super::voxel::ScatterResult::default()
+    } else {
+        let guards = super::voxel::ScatterGuards {
+            water: &result.water,
+            roads: &result.roads,
+        };
+        let mut acc = super::voxel::ScatterResult::default();
+        for field in &pending.features.rock_fields {
+            let got = field.resolve(&grid, &guards);
+            if got.len() < field.requested() as usize {
+                warn!(
+                    "terrain: rock field `{}` seeded {} of {} features — the region has few \
+                     sites that pass min-slope/min-drop",
+                    field.name.as_deref().unwrap_or("rocks"),
+                    got.len(),
+                    field.requested()
+                );
+            }
+            acc.arches.extend(got.arches);
+            acc.caves.extend(got.caves);
+            acc.bridges.extend(got.bridges);
+        }
+        info!(
+            "terrain: {} rock field(s) seeded {} arch(es) + {} cave(s) + {} span(s)",
+            pending.features.rock_fields.len(),
+            acc.arches.len(),
+            acc.caves.len(),
+            acc.bridges.len()
+        );
+        acc
+    };
+
     let mut voxel_mods: Vec<Box<dyn super::voxel::VoxelMod>> = Vec::new();
     for (i, band) in cliff_bands.iter().enumerate() {
         voxel_mods.extend(band.clone().into_mods(&format!("cliff:{i}")));
     }
-    for cave in &pending.features.caves {
+    for cave in pending.features.caves.iter().chain(&seeded.caves) {
         voxel_mods.extend(cave.build(&grid));
     }
-    for arch in &pending.features.arches {
+    for arch in pending.features.arches.iter().chain(&seeded.arches) {
         voxel_mods.extend(arch.build(&grid));
+    }
+    for bridge in pending.features.bridges.iter().chain(&seeded.bridges) {
+        // The clearance is reported, never enforced: a deck that grazes the
+        // ground is a legal causeway, it is just rarely what was authored.
+        if let Some(clear) = bridge.clearance(&grid) {
+            if clear < bridge.clearance {
+                warn!(
+                    "terrain: bridge `{}` never gets more than {clear:.1} m of air under its deck \
+                     (asked for {:.1} m) — is it spanning anything?",
+                    bridge.name.as_deref().unwrap_or("bridge"),
+                    bridge.clearance
+                );
+            }
+        }
+        voxel_mods.extend(bridge.build(&grid));
     }
     // Margens de água voxel (gorge/overhang) — as mesmas bandas da máscara.
     for (i, band) in bank_bands.iter().enumerate() {
         voxel_mods.extend(band.clone().into_mods(&format!("riverbank:{i}")));
     }
+    // Fendas de spill das cachoeiras de parede (rio × cliff).
+    voxel_mods.extend(spill_mods);
     if !voxel_mods.is_empty() {
         info!(
-            "terrain: {} cliff(s) + {} cave(s) + {} arch(es) + {} bank wall(s) -> {} voxel mods",
+            "terrain: {} cliff(s) + {} cave(s) + {} arch(es) + {} bridge(s) + {} bank wall(s) -> \
+             {} voxel mods",
             cliff_bands.len(),
-            pending.features.caves.len(),
-            pending.features.arches.len(),
+            pending.features.caves.len() + seeded.caves.len(),
+            pending.features.arches.len() + seeded.arches.len(),
+            pending.features.bridges.len() + seeded.bridges.len(),
             bank_bands.len(),
             voxel_mods.len()
         );
@@ -700,6 +804,7 @@ pub fn bootstrap(world: &mut World) {
     world.insert_resource(TerrainChunkMaterials {
         layer: layer_map,
         standard: Some(voxel_standard),
+        config: chunk_config,
     });
     world.insert_resource(TerrainRuntime {
         spec,
@@ -722,7 +827,6 @@ fn lod0_step(spec: &TerrainSpec) -> usize {
         step
     }
 }
-
 
 /// Chunk grid geometry shared by the chunk materials and the mesh spawner:
 /// `(edge meters, rows per world side)`.
@@ -774,12 +878,10 @@ fn terrain_standard_material(
 /// ([`SLOT_RIVERBED`]): o splat pinta o leito em qualquer mundo com água,
 /// por isso ele carrega sempre a textura `pebbles`.
 ///
-/// Per chunk ([`generate_chunk_splats`]): the four pool textures with the
-/// highest aggregate weight + the chunk's own RGBA splat plane. Chunks of a
+/// Per chunk ([`generate_chunk_splats`]): the eight pool textures with the
+/// highest aggregate weight + the chunk's own splat planes. Chunks of a
 /// mountain carry snow/stone, chunks of a swamp carry mud — different areas
-/// render different layer sets, and the material stays at 5 textures + 1
-/// uniform (the retired single 13-layer material bound 34 and crashed the
-/// NVIDIA driver's pipeline-layout path).
+/// render different layer sets.
 #[allow(clippy::too_many_arguments)]
 fn spawn_chunk_materials(
     spec: &TerrainSpec,
@@ -791,6 +893,7 @@ fn spawn_chunk_materials(
     images: &mut Assets<Image>,
     chunk_materials: &mut Assets<TerrainChunkMaterial>,
     watched: &mut Vec<WatchedTexture>,
+    config: &TerrainChunkConfig,
     edge: f32,
     rows: u32,
 ) -> ChunkLayerMap {
@@ -834,6 +937,7 @@ fn spawn_chunk_materials(
         seed: spec.seed,
         texel: spec.splat_texel,
         biomes: spec.biomes.clone(),
+        tuning: super::splat::SplatTuning::default(),
     };
     let splats = generate_chunk_splats(
         grid,
@@ -845,7 +949,7 @@ fn spawn_chunk_materials(
         Some(cliff),
     );
     info!(
-        "terrain chunk materials: {} chunks × 4 layers ({}² texel splats)",
+        "terrain chunk materials: {} chunks × 8 layers (2× {}² texel splats)",
         splats.len(),
         super::splat::CHUNK_SPLAT_TEXELS
     );
@@ -858,13 +962,19 @@ fn spawn_chunk_materials(
         let origin = [-half + cx as f32 * edge, -half + cz as f32 * edge];
         let slots = chunk_splat.slots;
         let splat_handle = images.add(chunk_splat_image(chunk_splat));
-        let params = TerrainChunkParams::from_slots(slots, origin, edge);
+        let splat2_handle = images.add(chunk_splat2_image(chunk_splat));
+        let params = TerrainChunkParams::from_slots(slots, origin, edge, config);
         let material = chunk_materials.add(TerrainChunkMaterial {
             layer0: layer_textures[slots[0]].clone(),
             layer1: layer_textures[slots[1]].clone(),
             layer2: layer_textures[slots[2]].clone(),
             layer3: layer_textures[slots[3]].clone(),
+            layer4: layer_textures[slots[4]].clone(),
+            layer5: layer_textures[slots[5]].clone(),
+            layer6: layer_textures[slots[6]].clone(),
+            layer7: layer_textures[slots[7]].clone(),
             splat: splat_handle,
+            splat2: splat2_handle,
             params,
         });
         // Watch EVERY layer of the material: a texture that never lands is
@@ -902,6 +1012,93 @@ fn spawn_chunk_materials(
         edge,
         materials,
     }
+}
+
+/// Re-bake dos splats de chunk com NOVO [`SplatTuning`] — o motor do
+/// `viber.debug.ground{patchiness=…, gravel=…, dirt=…, forest=…,
+/// shore_width=…}`: re-corre [`generate_chunk_splats`] sobre a grid retida
+/// (a mesma água/estradas/máscara do bootstrap) e troca os DOIS planos de
+/// cada material (mesmos handles → re-upload) e os slots nos params,
+/// preservando o `day_tint`/`sun_dir` já publicados. Devolve o nº de
+/// chunks re-cozidos (0 = nada a fazer: sem `layers`, sem runtime, sem
+/// config).
+pub fn rebake_chunk_splats(world: &mut World, tuning: super::splat::SplatTuning) -> usize {
+    let Some((spec, grid, water, roads, cliff, layer_map, config)) = world
+        .get_resource::<TerrainRuntime>()
+        .zip(world.get_resource::<TerrainChunkMaterials>())
+        .and_then(|(rt, chunks)| {
+            let map = chunks.layer.as_ref()?;
+            let config = chunks.config.clone()?;
+            Some((
+                rt.spec.clone(),
+                rt.grid.clone(),
+                rt.water.clone(),
+                rt.roads.clone(),
+                world.get_resource::<crate::terrain::cliffs::CliffMask>()?,
+                map.clone(),
+                config,
+            ))
+        })
+    else {
+        return 0;
+    };
+    let (edge, rows) = chunk_grid(&spec);
+    let params = super::splat::SplatParams {
+        shore_width: spec.shore_width,
+        snow_height: spec.tint.snow_height,
+        seed: spec.seed,
+        texel: spec.splat_texel,
+        biomes: spec.biomes.clone(),
+        tuning,
+    };
+    let splats = super::splat::generate_chunk_splats(
+        &grid,
+        &water,
+        &roads,
+        &params,
+        edge,
+        rows,
+        Some(cliff),
+    );
+    let half = spec.world_size * 0.5;
+    let mut rebaked = 0;
+    for (index, chunk_splat) in splats.iter().enumerate() {
+        let cx = index as u32 % rows;
+        let cz = index as u32 / rows;
+        let Some(handle) = layer_map.get(cx, cz) else {
+            continue;
+        };
+        // Bloco próprio: o `Mut<TerrainChunkMaterial>` toma a Assets
+        // emprestada — os planos de splat trocam DEPOIS, no fim do escopo.
+        let mut assets = world.get_resource_mut::<Assets<TerrainChunkMaterial>>();
+        let (splat, splat2) = {
+            let Some(mut material) = assets.as_mut().and_then(|a| a.get_mut(handle)) else {
+                continue;
+            };
+            let origin = [-half + cx as f32 * edge, -half + cz as f32 * edge];
+            let day_tint = material.params.day_tint;
+            let sun_dir = material.params.sun_dir;
+            let mut params =
+                TerrainChunkParams::from_slots(chunk_splat.slots, origin, edge, &config);
+            params.day_tint = day_tint;
+            params.sun_dir = sun_dir;
+            material.params = params;
+            (material.splat.clone(), material.splat2.clone())
+        };
+        // Mesmos handles → trocar por AssetId substitui in-place e re-uploads.
+        if let Some(mut images) = world.get_resource_mut::<Assets<Image>>() {
+            images.insert(
+                splat.id(),
+                super::splat::chunk_splat_plane_image(chunk_splat, 0),
+            );
+            images.insert(
+                splat2.id(),
+                super::splat::chunk_splat_plane_image(chunk_splat, 1),
+            );
+        }
+        rebaked += 1;
+    }
+    rebaked
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -981,7 +1178,7 @@ fn spawn_water(
         // ── Espuma da margem ─────────────────────────────────────────
         let foam_positions: Vec<(Vec2, f32)> = if is_lake {
             let lake = &features.lakes[spec_i];
-            let phases = super::water::shape_phases(lake.at);
+            let shape = super::water::LakeShape::new(lake.at);
             let reach = (super::water::waterline_reach(lake.depth, lake.water_offset)
                 * super::water::CARVE_MARGIN)
                 .clamp(0.5, 1.6);
@@ -990,7 +1187,7 @@ fn spawn_water(
             (0..n)
                 .map(|i| {
                     let theta = i as f32 / n as f32 * std::f32::consts::TAU;
-                    let r = super::water::lake_shape_radius(lake.radius, theta, phases) * reach;
+                    let r = shape.contour(lake.radius, theta) * reach;
                     let p = lake.at + Vec2::new(theta.cos(), theta.sin()) * r;
                     (p, body.water_y)
                 })
@@ -1022,7 +1219,10 @@ fn spawn_water(
             );
         }
 
-        // Névoa de cascata (na lâmina do caldeirão) e boca da nascente.
+        // Névoa de queda (na lâmina da base) e boca da nascente. A névoa
+        // de CACHOEIRA escala com a queda; cada cachoeira ganha ainda
+        // spray a despenca no topo da cortina e um anel de espuma no
+        // caldeirão.
         if !is_lake {
             let river = &features.rivers[spec_i];
             let mist_spec = crate::recipes::ParticleSpec {
@@ -1032,12 +1232,64 @@ fn spawn_water(
                 ..foam_spec.clone()
             };
             let mut mist_at = Vec::new();
-            for &lip in &body.cascades {
-                if let (Some(st), Some(&y)) =
-                    (body.stations.get(lip + 1), body.surface_y.get(lip + 1))
-                {
-                    mist_at.push((*st, y));
+            for c in &body.cascades {
+                let Some(st) = body.stations.get(c.base) else {
+                    continue;
+                };
+                if !c.waterfall {
+                    mist_at.push((*st, c.bot_y));
+                    continue;
                 }
+                // Névoa à escala da queda, ancorada ao caldeirão.
+                let big = crate::recipes::ParticleSpec {
+                    emission_rate: Some((9.0 + 3.0 * c.drop).min(24.0)),
+                    shape_radius: Some(0.9 + 0.15 * c.drop),
+                    ..mist_spec.clone()
+                };
+                if voxel.density(grid, Vec3::new(st.x, c.bot_y + 0.2, st.y)) >= 0.0 {
+                    crate::particles::spawn_looping(
+                        world,
+                        meshes,
+                        standard_materials,
+                        &big,
+                        Vec3::new(st.x, c.bot_y + 0.05, st.y),
+                    );
+                }
+                // Spray: streaks a despenca do lip (a cortina em si é o
+                // mesh; o spray é o que se perde na descida).
+                if let (Some(lip), true) = (body.stations.get(c.lip), c.drop > 1.0) {
+                    let spray = crate::recipes::ParticleSpec {
+                        preset: "spray".into(),
+                        shape_radius: Some(
+                            body.half_width_at(c.lip)
+                                * super::water::WATERFALL_CURTAIN
+                                * 0.8,
+                        ),
+                        ..foam_spec.clone()
+                    };
+                    if voxel.density(grid, Vec3::new(lip.x, c.top_y + 0.2, lip.y)) >= 0.0 {
+                        crate::particles::spawn_looping(
+                            world,
+                            meshes,
+                            standard_materials,
+                            &spray,
+                            Vec3::new(lip.x, c.top_y, lip.y),
+                        );
+                    }
+                }
+                // Anel de espuma no caldeirão (a queda bate e ferve).
+                let ring = crate::recipes::ParticleSpec {
+                    emission_rate: Some(10.0),
+                    shape_radius: Some(body.half_width_at(c.base) * 1.3),
+                    ..foam_spec.clone()
+                };
+                crate::particles::spawn_looping(
+                    world,
+                    meshes,
+                    standard_materials,
+                    &ring,
+                    Vec3::new(st.x, c.bot_y + 0.04, st.y),
+                );
             }
             if river.spring
                 && let Some(st) = body.stations.first()
@@ -1354,6 +1606,8 @@ mod tests {
             decals: Vec::new(),
             caves: Vec::new(),
             arches: Vec::new(),
+            bridges: Vec::new(),
+            rock_fields: Vec::new(),
             pads: vec![crate::terrain::TerrainPadSpec {
                 at: Vec2::ZERO,
                 size: Vec2::splat(24.0),

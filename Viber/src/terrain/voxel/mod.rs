@@ -20,21 +20,28 @@
 //!   com células de transição, que é o que fecha a costura entre LODs.
 
 pub mod arch;
+pub mod bridge;
 pub mod cave;
 pub mod cliff;
 pub mod field;
 pub mod index;
 pub mod mods;
 pub mod riverbank;
+pub mod scatter;
 pub mod spawn;
 pub mod transvoxel_mesh;
 
 pub use arch::ArchSpec;
+pub use bridge::{BridgeSpec, BridgeStyle};
 pub use cave::CaveSpec;
 pub use cliff::{CliffBand, build_cliff_mods, profile_offset};
 pub use field::{Span, VoxelField};
 pub use index::{ChunkClass, ModIndex};
-pub use mods::{ArchMod, Bounds3, BoxMod, CapsuleMod, ModOp, VoxelMod};
+pub use mods::{
+    ArchMod, Bounds3, BoxMod, CapsuleMod, EllipsoidMod, ModOp, OrientedBoxMod, RoundConeMod,
+    VoxelMod,
+};
+pub use scatter::{RockFeaturesSpec, ScatterGuards, ScatterResult};
 pub use spawn::{
     VoxelBoxSpec, VoxelChunk, VoxelLodShape, VoxelSpawnStats, build_box_mesh, column_boxes,
     lod_shape, spawn_voxel_columns,

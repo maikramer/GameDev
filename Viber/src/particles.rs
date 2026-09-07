@@ -262,6 +262,22 @@ pub fn preset(name: &str) -> ResolvedEmitter {
                 false,
                 1.0,
             ),
+            // Spray de cachoeira (`spawn_water`): streaks brancos a
+            // despenca do lip — chuva esticada mais curta e densa,
+            // ancorada ao topo da cortina. O mesh da cortina é a água;
+            // o spray é o que se perde na descida.
+            "spray" => (
+                90.0,
+                (0.5, 0.9),
+                (-16.0, -10.0),
+                (0.025, 0.05),
+                [0.88, 0.95, 1.0],
+                [0.72, 0.85, 0.94],
+                Vec3::new(0.0, -9.0, 0.0),
+                1.0,
+                false,
+                1.2,
+            ),
             // Ondinha no chão onde a gota aterra (WS-A): mini-burst estilo
             // ground-dust — anel BAIXO e largo que cresce e morre em ~0.3 s.
             "rain_ripple" => (
@@ -290,9 +306,13 @@ pub fn preset(name: &str) -> ResolvedEmitter {
                 0.1,
             ),
         };
-    // Proporção vertical: só os presets elongados (chuva) a sobrepõem; todo o
-    // resto mantém quads quadrados como antes.
-    let size_y = if name == "rain" { (0.38, 0.55) } else { size };
+    // Proporção vertical: só os presets elongados (chuva, spray de
+    // cachoeira) a sobrepõem; todo o resto mantém quads quadrados como antes.
+    let size_y = if matches!(name, "rain" | "spray") {
+        (0.38, 0.55)
+    } else {
+        size
+    };
     ResolvedEmitter {
         emission_rate: rate,
         life,

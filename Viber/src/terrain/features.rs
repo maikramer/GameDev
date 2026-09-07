@@ -22,7 +22,10 @@ use super::decal::GroundDecalSpec;
 use super::roads::{RoadGuards, RoadNetworkSpec, RoadPath, RoadProfile, RoadSpec, carve_road};
 use super::sampler::ResolvedPad;
 use super::spec::TerrainPadSpec;
-use super::water::{LakeSpec, RiverSpec, WaterBody, WaterKind, carve_lake, carve_river};
+use super::water::{
+    LakeSpec, RiverSpec, WaterBody, WaterKind, carve_lake, carve_river_with_falls,
+    river_cliff_crossings,
+};
 
 /// All declarative ground features of a world.
 #[derive(Debug, Clone, Default)]
@@ -39,6 +42,14 @@ pub struct TerrainFeatures {
     /// Free-standing rock portals (`<Arch>`) — union solids in the voxel
     /// field, never a carve.
     pub arches: Vec<crate::terrain::voxel::ArchSpec>,
+    /// Crossings (`<Bridge>`) — union solids in the voxel field. Unlike a
+    /// `<Road profile="bridge">` ribbon, the deck exists in the field, so the
+    /// column trimesh carries it and the hero can stand on it.
+    pub bridges: Vec<crate::terrain::voxel::BridgeSpec>,
+    /// Seeding fields (`<RockFeatures>`). Resolved at bootstrap against the
+    /// carved grid into plain arch/cave/bridge specs — the feature pass never
+    /// sees them, because there is nothing to carve.
+    pub rock_fields: Vec<crate::terrain::voxel::RockFeaturesSpec>,
     pub roads: Vec<RoadSpec>,
     pub networks: Vec<RoadNetworkSpec>,
     /// Draped ground patches (`<GroundDecal>`) — plaza floors, market
@@ -55,6 +66,8 @@ impl TerrainFeatures {
             && self.cliffs.is_empty()
             && self.caves.is_empty()
             && self.arches.is_empty()
+            && self.bridges.is_empty()
+            && self.rock_fields.is_empty()
             && self.roads.is_empty()
             && self.networks.is_empty()
             && self.decals.is_empty()
@@ -134,7 +147,11 @@ pub fn apply_features(grid: &mut BrushGrid, features: &TerrainFeatures) -> Featu
             .filter(|b| b.kind == WaterKind::Lake)
             .cloned()
             .collect();
-        if let Some(body) = carve_river(grid, river, i, &lake_bodies) {
+        // Pre-pass cachoeiras de parede: cruza o path do rio com os cliffs
+        // autorados (2D, specs) — as bandas de cliff só existem DEPOIS do
+        // carve, portanto as travessias têm de vir daqui como hints.
+        let falls = river_cliff_crossings(river, &features.cliffs);
+        if let Some(body) = carve_river_with_falls(grid, river, i, &lake_bodies, &falls) {
             result.water.push(body);
             result.water_specs.push((false, i));
         }
@@ -225,6 +242,8 @@ mod tests {
             decals: Vec::new(),
             caves: Vec::new(),
             arches: Vec::new(),
+            bridges: Vec::new(),
+            rock_fields: Vec::new(),
             cliffs: Vec::new(),
             pads: vec![TerrainPadSpec {
                 at: Vec2::ZERO,

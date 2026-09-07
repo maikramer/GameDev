@@ -174,7 +174,11 @@ pub fn column_boxes(
                     continue;
                 }
                 boxes.push(VoxelBoxSpec {
-                    pos: IVec3::new(coords.x as i32 * shape.per_edge + ix, iy, coords.y as i32 * shape.per_edge + iz),
+                    pos: IVec3::new(
+                        coords.x as i32 * shape.per_edge + ix,
+                        iy,
+                        coords.y as i32 * shape.per_edge + iz,
+                    ),
                     origin,
                     extent,
                     cells: shape.cells,
@@ -228,10 +232,7 @@ pub(crate) fn spawn_box_entity(
 ) -> Entity {
     let handle = meshes.add(to_bevy_mesh(&data));
     let mut entity = commands.spawn((
-        Name::new(format!(
-            "voxel chunk {}-{}-{}",
-            b.pos.x, b.pos.y, b.pos.z
-        )),
+        Name::new(format!("voxel chunk {}-{}-{}", b.pos.x, b.pos.y, b.pos.z)),
         VoxelChunk {
             coords: b.pos,
             origin: b.origin,
@@ -308,9 +309,7 @@ pub(crate) fn spawn_column(
     }
     if meshed > 0
         && spec.collision_resolution > 0
-        && collision_anchor.is_none_or(|anchor| {
-            column_in_collision_band(anchor, coords, spec)
-        })
+        && collision_anchor.is_none_or(|anchor| column_in_collision_band(anchor, coords, spec))
         && let Some(collider) = bake.bake()
     {
         commands.entity(column).insert((
@@ -323,11 +322,7 @@ pub(crate) fn spawn_column(
 }
 
 /// A coluna está na banda de colisão de um ponto XZ do mundo?
-pub(crate) fn column_in_collision_band(
-    anchor: Vec2,
-    coords: UVec2,
-    spec: &TerrainSpec,
-) -> bool {
+pub(crate) fn column_in_collision_band(anchor: Vec2, coords: UVec2, spec: &TerrainSpec) -> bool {
     crate::physics::column_xz_distance(
         Vec3::new(anchor.x, 0.0, anchor.y),
         coords,
@@ -410,9 +405,7 @@ pub fn spawn_voxel_columns(
                 continue;
             };
             let neighbours = lod_field.neighbours(coords);
-            let boxes = column_boxes(
-                spec, grid, field, edge, lod0_cell, lod, coords, neighbours,
-            );
+            let boxes = column_boxes(spec, grid, field, edge, lod0_cell, lod, coords, neighbours);
             stats.chunks += 1;
             let material = layer_map
                 .and_then(|m| m.get(cx, cz).cloned())
@@ -489,12 +482,42 @@ mod tests {
         // Chunk 64 m, célula LOD-0 de 1 m: LOD0 = 2×2 caixas de 32³ @1 m,
         // LOD1 = 1 caixa @2 m, LOD2 = 16³ @4 m (32 células a 4 m não
         // ladrilham 64 m — a 16 sim).
-        assert_eq!(lod_shape(1.0, 64.0, 0), VoxelLodShape { cells: 32, per_edge: 2 });
-        assert_eq!(lod_shape(1.0, 64.0, 1), VoxelLodShape { cells: 32, per_edge: 1 });
-        assert_eq!(lod_shape(1.0, 64.0, 2), VoxelLodShape { cells: 16, per_edge: 1 });
+        assert_eq!(
+            lod_shape(1.0, 64.0, 0),
+            VoxelLodShape {
+                cells: 32,
+                per_edge: 2
+            }
+        );
+        assert_eq!(
+            lod_shape(1.0, 64.0, 1),
+            VoxelLodShape {
+                cells: 32,
+                per_edge: 1
+            }
+        );
+        assert_eq!(
+            lod_shape(1.0, 64.0, 2),
+            VoxelLodShape {
+                cells: 16,
+                per_edge: 1
+            }
+        );
         // Edge 16 (spec pequena dos testes): tudo numa caixa por coluna.
-        assert_eq!(lod_shape(1.0, 16.0, 0), VoxelLodShape { cells: 16, per_edge: 1 });
-        assert_eq!(lod_shape(1.0, 16.0, 2), VoxelLodShape { cells: 4, per_edge: 1 });
+        assert_eq!(
+            lod_shape(1.0, 16.0, 0),
+            VoxelLodShape {
+                cells: 16,
+                per_edge: 1
+            }
+        );
+        assert_eq!(
+            lod_shape(1.0, 16.0, 2),
+            VoxelLodShape {
+                cells: 4,
+                per_edge: 1
+            }
+        );
     }
 
     /// O invariante que evitava o moiré: as caixas ladrilham a COLUNA
@@ -512,7 +535,16 @@ mod tests {
             let field = shelf_field(world_size);
             let edge = 64.0_f32;
             let coords = UVec2::new(2, 1);
-            let boxes = column_boxes(&spec, &grid, &field, edge, 1.0, 0, coords, [NO_NEIGHBOUR; 4]);
+            let boxes = column_boxes(
+                &spec,
+                &grid,
+                &field,
+                edge,
+                1.0,
+                0,
+                coords,
+                [NO_NEIGHBOUR; 4],
+            );
             assert!(!boxes.is_empty(), "world {world_size}: nothing planned");
 
             let half = world_size * 0.5;
@@ -541,7 +573,16 @@ mod tests {
         let grid = flat_grid(256.0, 10.0, 100.0);
         let spec = TerrainSpec::default();
         let field = VoxelField::flat(256.0, 64.0);
-        let boxes = column_boxes(&spec, &grid, &field, 64.0, 1.0, 0, UVec2::new(1, 1), [NO_NEIGHBOUR; 4]);
+        let boxes = column_boxes(
+            &spec,
+            &grid,
+            &field,
+            64.0,
+            1.0,
+            0,
+            UVec2::new(1, 1),
+            [NO_NEIGHBOUR; 4],
+        );
         assert!(!boxes.is_empty(), "flat ground must still be meshed");
         let mut meshed = 0;
         for b in &boxes {
@@ -579,7 +620,16 @@ mod tests {
             ModOp::Union,
         ));
         let field = VoxelField::new(vec![wall], 256.0, 64.0);
-        let boxes = column_boxes(&spec, &grid, &field, 64.0, 1.0, 0, UVec2::new(1, 1), [NO_NEIGHBOUR; 4]);
+        let boxes = column_boxes(
+            &spec,
+            &grid,
+            &field,
+            64.0,
+            1.0,
+            0,
+            UVec2::new(1, 1),
+            [NO_NEIGHBOUR; 4],
+        );
         assert!(!boxes.is_empty(), "the wall column must plan boxes");
         // Sem a prova seriam 2×2×(200/32) ≈ 26 caixas por coluna.
         assert!(
@@ -600,20 +650,26 @@ mod tests {
         let cave = CaveSpec {
             name: Some("mina".into()),
             path: vec![Vec2::new(-60.0, 0.0), Vec2::new(60.0, 0.0)],
-            radius: 3.5,
+            radius: vec![3.5],
             depth: 12.0,
             open_ends: true,
+            ..CaveSpec::default()
         };
         let field = VoxelField::new(cave.build(&grid), 256.0, 64.0);
-        let boxes = column_boxes(&spec, &grid, &field, 64.0, 1.0, 0, UVec2::new(1, 1), [NO_NEIGHBOUR; 4]);
+        let boxes = column_boxes(
+            &spec,
+            &grid,
+            &field,
+            64.0,
+            1.0,
+            0,
+            UVec2::new(1, 1),
+            [NO_NEIGHBOUR; 4],
+        );
         let mut downward = 0usize;
         for b in &boxes {
             if let Some(data) = build_box_mesh(&spec, &grid, &field, b) {
-                downward += data
-                    .normals
-                    .iter()
-                    .filter(|n| n[1] < -0.5)
-                    .count();
+                downward += data.normals.iter().filter(|n| n[1] < -0.5).count();
             }
         }
         assert!(
@@ -631,7 +687,14 @@ mod tests {
         let field = shelf_field(256.0);
         for neighbours in [[NO_NEIGHBOUR; 4], [1u8; 4]] {
             let boxes = column_boxes(
-                &spec, &grid, &field, 64.0, 1.0, 1, UVec2::new(1, 1), neighbours,
+                &spec,
+                &grid,
+                &field,
+                64.0,
+                1.0,
+                1,
+                UVec2::new(1, 1),
+                neighbours,
             );
             assert!(!boxes.is_empty());
             for b in &boxes {

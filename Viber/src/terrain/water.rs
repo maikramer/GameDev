@@ -7,10 +7,10 @@
 //! * **Lower-only carve** — water never raises terrain, so overlapping bodies
 //!   and pre-existing valleys are always safe (brush [`BrushMode::Lower`];
 //!   banks are the one intentional raise, applied first and capped).
-//! * **Lakes** — an organic contour (`lake_shape_radius`: ±28% of the radius
-//!   across three sine harmonics with position-seeded phase) is sampled on a
-//!   32-ray ring to find the `rim`; the bowl floor is
-//!   `rim − depth · (1 − t²)^1.5` (C1 at the rim), carved out to
+//! * **Lakes** — an organic contour ([`LakeShape`]: stretch + sine harmonics
+//!   k = 1, 3, 5, 7 with position-seeded amplitude and phase, up to ±45% of
+//!   the radius) is sampled on a 64-ray ring to find the `rim`; the bowl
+//!   floor is `rim − depth · (1 − t²)^1.5` (C1 at the rim), carved out to
 //!   `carveR = radius · 1.25`. The water mirror sits at `rim − water_offset`.
 //! * **Rivers** — the path is Chaikin-smoothed ×2 and resampled to 3 m
 //!   stations; axis heights are sampled from the **post-pad, pre-water** grid
@@ -33,16 +33,36 @@ use super::paths::{
 };
 use super::roads::ADAPTIVE_FALLOFF_FACTOR;
 
-/// Lake contour: number of rim rays sampled (VibeGame `rimY` ring).
-const RIM_RAYS: usize = 32;
-/// Lake contour: harmonic amplitudes of `shapeRadius` (±28% total).
-const SHAPE_AMPLITUDES: [f32; 3] = [0.12, 0.10, 0.06];
+/// Lake contour: number of rim rays sampled (VibeGame `rimY` ring). 64
+/// porque o 7.º harmónico do contorno oscila 8× por volta — 32 raios
+/// perdiam o mínimo do rim (e o nível de água subia um fiapo).
+const RIM_RAYS: usize = 64;
+/// Amplitude MÍNIMA do alongamento — até o lago mais redondo do mundo tem
+/// um oval subtil (o utilizador viu "círculos" nos lagos antigos).
+const LAKE_STRETCH_MIN: f32 = 0.10;
+/// Amplitude MÁXIMA do alongamento — o harmónico 2 dirigido
+/// (`stretch·cos(2(θ−axis))`) que dá os lagos ovais/alongados.
+pub(crate) const LAKE_STRETCH_MAX: f32 = 0.20;
+/// Amplitudes MÍNIMAS dos harmónicos lineares (k = 1, 3, 5, 7): k=1
+/// desloca a bacia (baía assimétrica), 3/5 dão lóbulos e baías, 7 dá o
+/// recorte fino da linha de água. Os mínimos mantêm TODOS os lagos fora do
+/// círculo perfeito — o sorteio por lago vive em `[min, max]`.
+const LAKE_HARMONIC_MIN: [f32; 4] = [0.03, 0.05, 0.03, 0.02];
+/// Amplitudes MÁXIMAS dos harmónicos lineares (k = 1, 3, 5, 7).
+const LAKE_HARMONIC_MAX: [f32; 4] = [0.06, 0.10, 0.05, 0.04];
 /// Peak of the organic contour relative to the design radius
-/// (`1 + Σ SHAPE_AMPLITUDES = 1.28`). The carve AABB must cover
-/// `radius · CONTOUR_PEAK · CARVE_MARGIN` — capping it at plain
-/// `radius · CARVE_MARGIN` clipped the bowl of large lakes and left the water
-/// mirror over dry land on the harmonic lobes.
-const CONTOUR_PEAK: f32 = 1.28;
+/// (`1 + LAKE_STRETCH_MAX + Σ LAKE_HARMONIC_MAX = 1.45`; validado pelo
+/// teste `test_contour_peak_covers_the_harmonics`). The carve AABB must
+/// cover `radius · CONTOUR_PEAK · CARVE_MARGIN` — capping it at plain
+/// `radius · CARVE_MARGIN` clipped the bowl of large lakes and left the
+/// water mirror over dry land on the harmonic lobes. Público para o audit
+/// (`src/audit.rs`) testar pontas/traçados de estradas contra o worst-case.
+pub const CONTOUR_PEAK: f32 = 1.0
+    + LAKE_STRETCH_MAX
+    + LAKE_HARMONIC_MAX[0]
+    + LAKE_HARMONIC_MAX[1]
+    + LAKE_HARMONIC_MAX[2]
+    + LAKE_HARMONIC_MAX[3];
 /// Lake carve margin over the design radius (VibeGame `carveMargin`).
 pub const CARVE_MARGIN: f32 = 1.25;
 /// River station spacing (meters, VibeGame `STATION_SPACING`).
@@ -64,8 +84,17 @@ const LAKE_FAN_SEGMENTS: usize = 72;
 /// a ribbon lê-se como corredeira; acima, o [`river_water_mesh`] constrói
 /// face vertical e o canal ganha caldeirão.
 pub const CASCADE_DROP: f32 = 1.2;
+/// Queda acumulada (m) a partir da qual uma queda é CACHOEIRA — o tier
+/// acima da cascata: cortina mais larga que o canal, caldeirão à escala
+/// da queda, spray e som próprios. É também a queda mínima que um cruz
+/// rio×cliff (`height` auto) garante.
+pub const WATERFALL_DROP: f32 = 3.0;
+/// Alargamento da cortina de uma cachoeira (×meia-largura do canal) — a
+/// água ao despencar abre e lava as paredes; a cascata fica à largura do
+/// canal como sempre.
+pub const WATERFALL_CURTAIN: f32 = 1.4;
 /// Fase dos poços/rápidos: hash determinístico do primeiro ponto do path
-/// (mesma família de [`shape_phases`]) — mesmos pontos, mesmos poços.
+/// (mesma família de [`LakeShape::new`]) — mesmos pontos, mesmos poços.
 fn river_phase(path: &[Vec2]) -> f32 {
     let s = path
         .first()
@@ -296,8 +325,21 @@ pub struct RiverSpec {
     pub pool_spacing: f32,
     /// Deteção automática de cascatas (`cascades="0"` desliga): queda maior
     /// que [`CASCADE_DROP`] entre estações marca uma cascata, com caldeirão
-    /// esculpido a jusante e face de água vertical ([`cascade_ranges`]).
+    /// esculpido a jusante e face de água vertical (o scan em
+    /// [`close_fall`]).
     pub cascades: bool,
+    /// Tier CACHOEIRA (`waterfalls="0"` rebaixa grandes quedas a cascata
+    /// simples): queda acumulada ≥ [`Self::waterfall_min_drop`] alarga a
+    /// cortina ([`WATERFALL_CURTAIN`]), escala o caldeirão pela queda e
+    /// liga spray/som próprios.
+    pub waterfalls: bool,
+    /// Queda acumulada (m) que classifica uma cachoeira
+    /// (`waterfall-min-drop`; clampado a ≥ [`CASCADE_DROP`]).
+    pub waterfall_min_drop: f32,
+    /// No cruzamento com um cliff, abrir a FENDA de spill no brow
+    /// (`waterfall-notch="0"` mantém a crista inteira — a água despenca
+    /// por cima, sem fenda).
+    pub waterfall_notch: bool,
     /// Nascente esculpida na estação 0 (`spring="1"`): anfiteatro + arco de
     /// rocha voxel voltado a jusante, a água "sai" da rocha.
     pub spring: bool,
@@ -319,9 +361,54 @@ impl Default for RiverSpec {
             rocks_spec: super::shore_rocks::ShoreRocksSpec::default(),
             pool_spacing: 0.0,
             cascades: true,
+            waterfalls: true,
+            waterfall_min_drop: WATERFALL_DROP,
+            waterfall_notch: true,
             spring: false,
         }
     }
+}
+
+/// Travessia rio × cliff resolvida no pre-pass de specs (2D, antes do
+/// carve — as bandas de cliff só existem depois, sobre a grid carvada).
+/// O carve usa-a para CONDUZIR o perfil: hold da superfície a montante da
+/// crista (a água chega ao brow à mesma cota) + queda garantida a jusante
+/// (lower-only — uma descida natural maior ganha sempre).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FallHint {
+    /// Ponto do cruzamento (world XZ).
+    pub at: Vec2,
+    /// Queda mínima a impor no perfil (m) — o `height` autoral do cliff;
+    /// height auto → [`WATERFALL_DROP`].
+    pub min_drop: f32,
+}
+
+/// Uma queda contígua do perfil de um rio — cascata ou cachoeira.
+///
+/// É o registro partilhado por todos os consumidores: o mesh (face
+/// vertical dos segmentos `lip..base`, cortina alargada se cachoeira), a
+/// névoa/spray (na base, escalados por [`Self::drop`]), o áudio
+/// (posição/força) e a anotação de parede (rio × cliff, feita no bootstrap
+/// quando a banda correspondente existe).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CascadeInfo {
+    /// Estação LIP — onde a queda começa (borda de montante).
+    pub lip: usize,
+    /// Primeira estação DEPOIS da queda (fim da face; caldeirão aqui).
+    pub base: usize,
+    /// Queda acumulada da face (m) — `top_y − bot_y`.
+    pub drop: f32,
+    /// Tier: cachoeira (queda ≥ `waterfall_min_drop`) vs cascata simples.
+    pub waterfall: bool,
+    /// A queda despenca numa PAREDE voxel (rio × cliff): `bot_y` vem do
+    /// pé da banda (não do perfil do rio) e o mesh desenha UM quadro do
+    /// brow ao toe em vez de faces por segmento.
+    pub wall: bool,
+    /// Topo da face — a lâmina no lip (no brow, se parede).
+    pub top_y: f32,
+    /// Fundo da face — a lâmina na base (o pé da banda, se parede; submerso
+    /// no caldeirão quando o pool desce abaixo do pé).
+    pub bot_y: f32,
 }
 
 /// Kind of a registered [`WaterBody`].
@@ -350,6 +437,10 @@ pub struct WaterBody {
     /// nominal — a banda de areia/lama do splat fica ancorada ao bordo da
     /// água). Rio / corpo à mão: `1.0` (contrato antigo).
     pub mirror_reach: f32,
+    /// Lake: a forma orgânica do contorno (cache do `LakeShape::new(at)` —
+    /// as queries não voltam a fazer hash da posição). Rio / corpo à mão:
+    /// [`LakeShape::default`] (círculo, nunca consultado).
+    pub shape: LakeShape,
     /// River stations in world XZ (empty for lakes).
     pub stations: Vec<Vec2>,
     /// River surface height per station (empty for lakes).
@@ -370,9 +461,10 @@ pub struct WaterBody {
     /// (contrato antigo: o consumidor usa a nominal da spec — ver
     /// [`WaterBody::depth_at`]).
     pub depths: Vec<f32>,
-    /// Índices das estações LIP de cada cascata (queda
-    /// `surface[i] − surface[i+1] > CASCADE_DROP`). Vazio = rio sem quedas.
-    pub cascades: Vec<usize>,
+    /// Quedas do perfil (queda `surface[i] − surface[i+1] > CASCADE_DROP`
+    /// contígua = UMA entrada). Vazio = rio sem quedas. Ver
+    /// [`CascadeInfo`] para o contrato por consumidor.
+    pub cascades: Vec<CascadeInfo>,
 }
 
 impl WaterBody {
@@ -399,6 +491,12 @@ impl WaterBody {
             station_lerp(&self.half_width, hit)
         }
     }
+    /// Contorno orgânico do lago na direção `delta` (a partir do centro) —
+    /// a métrica radial partilhada pelas queries de espelho.
+    fn contour_at_delta(&self, delta: Vec2) -> f32 {
+        self.shape.contour(self.radius, delta.y.atan2(delta.x))
+    }
+
     /// Point is inside the carve zone (spawner `avoid-water`).
     pub fn contains(&self, p: Vec2) -> bool {
         match self.kind {
@@ -427,8 +525,13 @@ impl WaterBody {
     pub fn surface_y_at(&self, p: Vec2) -> Option<f32> {
         match self.kind {
             WaterKind::Lake => {
-                let d = p.distance(self.at);
-                (d <= self.radius.max(self.carve_radius)).then_some(self.water_y)
+                // Linha de água REAL (contorno × reach): um lóbulo de água
+                // no contorno orgânico tem de responder "água" mesmo fora
+                // do raio nominal — e um recorte tem de responder "seco"
+                // mesmo dentro dele (assentamento `in-water` à lâmina).
+                let delta = p - self.at;
+                let contour = self.contour_at_delta(delta) * self.mirror_reach;
+                (delta.length() <= contour).then_some(self.water_y)
             }
             WaterKind::River => {
                 let hit = nearest_on_path(&self.stations, p)?;
@@ -460,8 +563,7 @@ impl WaterBody {
             WaterKind::Lake => {
                 let delta = p - self.at;
                 let theta = delta.y.atan2(delta.x);
-                let contour = lake_shape_radius(self.radius, theta, shape_phases(self.at))
-                    * self.mirror_reach;
+                let contour = self.shape.contour(self.radius, theta) * self.mirror_reach;
                 delta.length() - contour
             }
             WaterKind::River => match nearest_on_path(&self.stations, p) {
@@ -478,8 +580,10 @@ impl WaterBody {
     pub fn blend_surface_y(&self, p: Vec2, margin: f32) -> Option<f32> {
         match self.kind {
             WaterKind::Lake => {
-                let d = p.distance(self.at);
-                (d <= self.radius.max(self.carve_radius) + margin).then_some(self.water_y)
+                // Mesma métrica de [`WaterBody::surface_y_at`] + margem.
+                let delta = p - self.at;
+                let contour = self.contour_at_delta(delta) * self.mirror_reach;
+                (delta.length() <= contour + margin).then_some(self.water_y)
             }
             WaterKind::River => {
                 let hit = nearest_on_path(&self.stations, p)?;
@@ -498,31 +602,84 @@ impl WaterBody {
     }
 }
 
-/// Deterministic harmonic phases for a lake contour, seeded by position.
-pub(crate) fn shape_phases(at: Vec2) -> [f32; 3] {
-    // Classic deterministic hash — precision beyond f32 is meaningless here.
-    let s = at.x * 12.989_8_f32 + at.y * 78.233_f32;
-    let base = (s.sin() * 43_758.55_f32).fract() * std::f32::consts::TAU;
-    [base, base * 1.7 + 2.1, base * 0.6 + 4.4]
+/// Personalidade orgânica de um lago: alongamento dirigido + harmónicos
+/// lineares (k = 1, 3, 5, 7) com amplitude e fase sorteadas por hash da
+/// posição — a mesma posição devolve sempre a MESMA forma ("mesma seed,
+/// mesmo mundo"), mas lagos diferentes ficam diferentes: uns quase redondos,
+/// outros ovais com baías e lóbulos. O contorno é RADIAL (star-shaped) de
+/// propósito: rim, mesh do espelho, pedras de margem, parede gorge, espuma e
+/// o audit amostram todos `r(θ)` — um contorno não-estrela partia-os.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LakeShape {
+    /// Direção do alongamento (radianos).
+    axis: f32,
+    /// Amplitude do alongamento — `stretch·cos(2(θ − axis))`.
+    stretch: f32,
+    /// Harmónicos lineares: `(k, amplitude, fase)`.
+    harmonics: [(f32, f32, f32); 4],
 }
 
-/// Organic lake contour: `radius · (1 + Σ aₖ·sin(kθ + φₖ))` (±28%).
-pub fn lake_shape_radius(radius: f32, theta: f32, phases: [f32; 3]) -> f32 {
-    let mut r = 1.0;
-    for (k, a) in SHAPE_AMPLITUDES.iter().enumerate() {
-        let harmonic = [2.0_f32, 3.0, 5.0][k]; // sin(2θ), sin(3θ), sin(5θ)
-        r += a * (harmonic * theta + phases[k]).sin();
+impl LakeShape {
+    /// Contorno de um lago ancorado em `at` — determinístico por posição.
+    /// Hash da família `sin·43758` do repo, um salt POR parâmetro: as fases
+    /// antigas derivavam todas de UM `base` e as silhuetas repetiam-se
+    /// entre lagos.
+    pub(crate) fn new(at: Vec2) -> Self {
+        let s = at.x * 12.989_8_f32 + at.y * 78.233_f32;
+        let h = |salt: f32| ((s * salt + salt * 91.7).sin() * 43_758.55_f32).fract().abs();
+        let harmonics = std::array::from_fn(|i| {
+            let amp = LAKE_HARMONIC_MIN[i]
+                + (LAKE_HARMONIC_MAX[i] - LAKE_HARMONIC_MIN[i]) * h(2.3 + i as f32 * 1.37);
+            let phase = h(3.7 + i as f32 * 1.73) * std::f32::consts::TAU;
+            ([1.0_f32, 3.0, 5.0, 7.0][i], amp, phase)
+        });
+        Self {
+            axis: h(0.77) * std::f32::consts::TAU,
+            stretch: LAKE_STRETCH_MIN + (LAKE_STRETCH_MAX - LAKE_STRETCH_MIN) * h(1.31),
+            harmonics,
+        }
     }
-    radius * r
+
+    /// Fração do raio nominal em `theta` — o contorno orgânico em si,
+    /// dentro de `[1 − pico, CONTOUR_PEAK]` (ver
+    /// `test_contour_peak_covers_the_harmonics`).
+    pub fn radius_frac(&self, theta: f32) -> f32 {
+        let mut r = 1.0 + self.stretch * (2.0 * (theta - self.axis)).cos();
+        for &(k, a, p) in &self.harmonics {
+            r += a * (k * theta + p).sin();
+        }
+        r
+    }
+
+    /// Raio do contorno em `theta` para um lago de raio nominal `radius`.
+    pub fn contour(&self, radius: f32, theta: f32) -> f32 {
+        radius * self.radius_frac(theta)
+    }
 }
 
-/// Lake mirror height: the 32-ray rim minimum minus `water_offset`.
+impl Default for LakeShape {
+    /// Corpo circular — rios e corpos construídos à mão não usam a forma.
+    fn default() -> Self {
+        Self {
+            axis: 0.0,
+            stretch: 0.0,
+            harmonics: [
+                (1.0, 0.0, 0.0),
+                (3.0, 0.0, 0.0),
+                (5.0, 0.0, 0.0),
+                (7.0, 0.0, 0.0),
+            ],
+        }
+    }
+}
+
+/// Lake mirror height: the 64-ray rim minimum minus `water_offset`.
 pub fn lake_water_height(grid: &BrushGrid, spec: &LakeSpec) -> f32 {
-    let phases = shape_phases(spec.at);
+    let shape = LakeShape::new(spec.at);
     let mut rim = f32::INFINITY;
     for i in 0..RIM_RAYS {
         let theta = i as f32 / RIM_RAYS as f32 * std::f32::consts::TAU;
-        let r = lake_shape_radius(spec.radius, theta, phases);
+        let r = shape.contour(spec.radius, theta);
         let p = spec.at + Vec2::new(theta.cos(), theta.sin()) * r;
         rim = rim.min(grid.sample(p.x, p.y));
     }
@@ -536,19 +693,24 @@ pub fn carve_lake(grid: &mut BrushGrid, spec: &LakeSpec, index: usize) -> Option
         return None;
     }
     let texel = grid.texel();
-    let phases = shape_phases(spec.at);
+    let shape = LakeShape::new(spec.at);
     let water_y = lake_water_height(grid, spec);
-    let carve_r = spec.radius * CARVE_MARGIN;
     // Reach do espelho sobre o contorno — o MESMO fator que o mesh aplica
     // (ver `lake_water_mesh`); o registry guarda-o para que
     // `distance_to_waterline` meça até à linha de água real.
     let mirror_reach = lake_mirror_reach(spec.depth, spec.water_offset);
+    // Zona de avoid: o carve (contorno·CARVE_MARGIN) OU o pior lóbulo de
+    // ÁGUA (contorno·mirror_reach, que em lagos fundos passa o carve) — o
+    // círculo tem de cobrir os dois, senão o spawner ignora que um lóbulo
+    // de água existe. Antes disto o `contains` já ficava curto nos lagos
+    // fundos (1.28·1.16 > 1.25).
+    let carve_r = spec.radius * CARVE_MARGIN.max(CONTOUR_PEAK * mirror_reach);
 
     // Bowl floor: C1 at the contour rim (`(1 − t²)^1.5` has zero derivative).
     let bowl = |p: Vec2| -> f32 {
         let d = p.distance(spec.at);
         let theta = (p.y - spec.at.y).atan2(p.x - spec.at.x);
-        let r = lake_shape_radius(spec.radius, theta, phases) * CARVE_MARGIN;
+        let r = shape.contour(spec.radius, theta) * CARVE_MARGIN;
         if d >= r {
             return water_y + spec.water_offset;
         }
@@ -585,7 +747,7 @@ pub fn carve_lake(grid: &mut BrushGrid, spec: &LakeSpec, index: usize) -> Option
         (0..RIM_RAYS)
             .map(|i| {
                 let theta = i as f32 / RIM_RAYS as f32 * std::f32::consts::TAU;
-                let r = lake_shape_radius(spec.radius, theta, phases) * CARVE_MARGIN;
+                let r = shape.contour(spec.radius, theta) * CARVE_MARGIN;
                 let p = spec.at + Vec2::new(theta.cos(), theta.sin()) * r;
                 let cut = (grid.sample(p.x, p.y) - surface).max(0.0);
                 style.band(feather_base, cut)
@@ -612,7 +774,7 @@ pub fn carve_lake(grid: &mut BrushGrid, spec: &LakeSpec, index: usize) -> Option
     let mut weight = |p: Vec2| {
         let d = p.distance(spec.at);
         let theta = (p.y - spec.at.y).atan2(p.x - spec.at.x);
-        let contour = lake_shape_radius(spec.radius, theta, phases);
+        let contour = shape.contour(spec.radius, theta);
         if let Some(reach) = voxel_waterline {
             // Parede voxel: peso 1 até à linha de água, 0 para lá — sem
             // rampa (o mod voxel trata da margem).
@@ -658,7 +820,7 @@ pub fn carve_lake(grid: &mut BrushGrid, spec: &LakeSpec, index: usize) -> Option
             continue;
         }
         let theta = (island.at.y - spec.at.y).atan2(island.at.x - spec.at.x);
-        let contour = lake_shape_radius(spec.radius, theta, phases) * CARVE_MARGIN;
+        let contour = shape.contour(spec.radius, theta) * CARVE_MARGIN;
         if island.at.distance(spec.at) + island.radius > contour * 0.9 {
             continue;
         }
@@ -699,6 +861,7 @@ pub fn carve_lake(grid: &mut BrushGrid, spec: &LakeSpec, index: usize) -> Option
         carve_radius: carve_r,
         water_y,
         mirror_reach,
+        shape,
         stations: Vec::new(),
         surface_y: Vec::new(),
         water_width: 0.0,
@@ -706,6 +869,49 @@ pub fn carve_lake(grid: &mut BrushGrid, spec: &LakeSpec, index: usize) -> Option
         depths: Vec::new(),
         cascades: Vec::new(),
     })
+}
+
+/// Fecha uma queda contígua no scan de cascatas: classifica cachoeira vs
+/// cascata pela queda acumulada, escala o caldeirão ao tier (as quedas
+/// grandes escavam mais fundo e mais largo a jusante) e empurra o
+/// [`CascadeInfo`] do registry.
+fn close_fall(
+    spec: &RiverSpec,
+    cascades: &mut Vec<CascadeInfo>,
+    plunge: &mut [f32],
+    surface: &[f32],
+    lip: usize,
+    last_drop: usize,
+    acc: f32,
+) {
+    let base = (last_drop + 1).min(surface.len() - 1);
+    let waterfall = spec.waterfalls && acc >= spec.waterfall_min_drop.max(CASCADE_DROP);
+    // Cachoeira: o multiplicador de profundidade cresce com a queda —
+    // uma queda de 6 m escava um caldeirão ~2.3× o canal; a cascata
+    // mantém os ×1.6/×1.25 de sempre.
+    let (f1, f2) = if waterfall {
+        ((1.6 + 0.12 * acc).min(2.4), (1.25 + 0.05 * acc).min(1.7))
+    } else {
+        (1.6, 1.25)
+    };
+    let n = plunge.len();
+    if let Some(p) = plunge.get_mut((last_drop + 1).min(n - 1)) {
+        *p = (*p).max(f1);
+    }
+    if let Some(p) = plunge.get_mut((last_drop + 2).min(n - 1)) {
+        *p = (*p).max(f2);
+    }
+    let top = surface.get(lip).copied().unwrap_or(0.0);
+    let bot = surface.get(base).copied().unwrap_or(top);
+    cascades.push(CascadeInfo {
+        lip,
+        base,
+        drop: (top - bot).max(0.0),
+        waterfall,
+        wall: false,
+        top_y: top,
+        bot_y: bot,
+    });
 }
 
 /// Carves a river (banks then channel) and returns its registry body.
@@ -719,6 +925,19 @@ pub fn carve_river(
     spec: &RiverSpec,
     index: usize,
     lakes: &[WaterBody],
+) -> Option<WaterBody> {
+    carve_river_with_falls(grid, spec, index, lakes, &[])
+}
+
+/// O mesmo que [`carve_river`] com hints de travessia rio × cliff
+/// ([`river_cliff_crossings`]): dentro da gama de cada travessia a
+/// superfície deixa de descer e a queda da parede é garantida a jusante.
+pub fn carve_river_with_falls(
+    grid: &mut BrushGrid,
+    spec: &RiverSpec,
+    index: usize,
+    lakes: &[WaterBody],
+    falls: &[FallHint],
 ) -> Option<WaterBody> {
     if spec.path.len() < 2 || spec.width <= 0.0 {
         return None;
@@ -754,10 +973,9 @@ pub fn carve_river(
         if lake.kind != WaterKind::Lake || lake.radius <= 0.0 {
             continue;
         }
-        let phases = shape_phases(lake.at);
         for (i, st) in stations.iter().enumerate() {
             let theta = (st.y - lake.at.y).atan2(st.x - lake.at.x);
-            let contour = lake_shape_radius(lake.radius, theta, phases);
+            let contour = lake.shape.contour(lake.radius, theta);
             if st.distance(lake.at) <= contour {
                 surface[i] = surface[i].max(lake.water_y);
             }
@@ -772,6 +990,46 @@ pub fn carve_river(
     for i in (1..surface.len()).rev() {
         if surface[i] > surface[i - 1] {
             surface[i - 1] = surface[i];
+        }
+    }
+
+    // Travessias de cliff (pre-pass de specs): a superfície DEIXA DE DESCER
+    // a montante da crista — a água chega ao brow à mesma cota — e logo a
+    // seguir DESPENCA (queda mínima da parede, lower-only: uma descida
+    // natural maior ganha sempre). Sem o hold, o canal escavava a rampa da
+    // encosta e a face de água ficava escondida ATRÁS da parede voxel.
+    if !falls.is_empty() {
+        let back = (((half + 2.0) / RIVER_STATION_SPACING).ceil() as usize).max(1);
+        for fall in falls {
+            let Some(hit) = nearest_on_path(&stations, fall.at) else {
+                continue;
+            };
+            // A crista é a estação EM/ANTES do cruzamento; o hold cobre as
+            // ~half+2 m de montante (aproximação ao nível) e a queda
+            // acontece na estação seguinte à crista.
+            let k = (hit.station(stations.len()).floor() as usize).min(surface.len() - 2);
+            let start = k.saturating_sub(back);
+            if k == 0 || start >= k {
+                continue;
+            }
+            let hold = surface[start];
+            for s in &mut surface[start..=k] {
+                *s = hold;
+            }
+            // A queda baixa o SUFIXO inteiro a jusante (lower-only): a água
+            // continua do nível do toe — não é um poço de que a fita volta
+            // a subir. Uma descida natural maior a jusante ganha sempre.
+            let toe = hold - fall.min_drop.max(CASCADE_DROP + 0.1);
+            for s in &mut surface[k + 1..] {
+                *s = (*s).min(toe);
+            }
+        }
+        // Dois hints próximos (ou um hold acima de cota de confluência)
+        // podem criar subida — repõe a monotonia no sentido do fluxo.
+        for i in (1..surface.len()).rev() {
+            if surface[i] > surface[i - 1] {
+                surface[i - 1] = surface[i];
+            }
         }
     }
 
@@ -802,36 +1060,50 @@ pub fn carve_river(
     // Cascatas: queda > CASCADE_DROP entre estações vizinhas marca a
     // cascata; quedas contíguas (o Chaikin espalha a escarpa por 2-3
     // estações) são UMA queda — termina na primeira estação sem grande
-    // queda, e é aí que o caldeirão se escava (×1.6 → ×1.25).
+    // queda, e é aí que o caldeirão se escava. A queda ACUMULADA
+    // classifica o tier: ≥ waterfall_min_drop é CACHOEIRA (caldeirão à
+    // escala da queda, cortina alargada no mesh, spray/som próprios).
     let mut plunge = vec![1.0f32; stations.len()];
-    let mut cascades = Vec::new();
+    let mut cascades: Vec<CascadeInfo> = Vec::new();
     if spec.cascades {
         let n = stations.len();
         let mut in_fall = false;
-        let mut last_lip = 0usize;
+        let mut lip = 0usize;
+        let mut last_drop = 0usize;
+        let mut acc = 0.0f32;
         for i in 0..n.saturating_sub(1) {
             let drop = surface[i] - surface[i + 1];
             if drop > CASCADE_DROP {
                 if !in_fall {
-                    cascades.push(i);
+                    lip = i;
+                    acc = 0.0;
                     in_fall = true;
                 }
-                last_lip = i;
+                acc += drop;
+                last_drop = i;
             } else if in_fall {
                 in_fall = false;
-                for (k, f) in [(1usize, 1.6f32), (2usize, 1.25)] {
-                    if let Some(p) = plunge.get_mut(last_lip + k) {
-                        *p = (*p).max(f);
-                    }
-                }
+                close_fall(
+                    spec,
+                    &mut cascades,
+                    &mut plunge,
+                    &surface,
+                    lip,
+                    last_drop,
+                    acc,
+                );
             }
         }
         if in_fall {
-            for (k, f) in [(1usize, 1.6f32), (2usize, 1.25)] {
-                if let Some(p) = plunge.get_mut((last_lip + k).min(n - 1)) {
-                    *p = (*p).max(f);
-                }
-            }
+            close_fall(
+                spec,
+                &mut cascades,
+                &mut plunge,
+                &surface,
+                lip,
+                last_drop,
+                acc,
+            );
         }
     }
     // Nascente: a água "sai" da rocha — a estação 0 ganha um poozinho
@@ -997,6 +1269,7 @@ pub fn carve_river(
         carve_radius: reach,
         water_y,
         mirror_reach: 1.0,
+        shape: LakeShape::default(),
         stations,
         surface_y: surface,
         water_width: width,
@@ -1040,6 +1313,74 @@ fn centroid(points: &[Vec2]) -> Vec2 {
     points.iter().sum::<Vec2>() / points.len().max(1) as f32
 }
 
+/// Travessias rio × cliffs autorados, resolvidas sobre as SPECS (2D) — o
+/// carve do rio corre ANTES das bandas de cliff existirem (que são
+/// resolvidas contra a grid carvada), portanto o perfil do rio tem de ser
+/// conduzido por hints. Cada cruzamento a menos de
+/// `(width_cliff + width_rio)/2` vira um [`FallHint`]: hold do perfil a
+/// montante da crista + queda garantida a jusante (`height` autoral do
+/// cliff; height auto → [`WATERFALL_DROP`]). Determinístico: só geometria
+/// das specs, sem RNG.
+pub fn river_cliff_crossings(
+    river: &RiverSpec,
+    cliffs: &[super::cliffs::CliffSpec],
+) -> Vec<FallHint> {
+    let mut hints: Vec<FallHint> = Vec::new();
+    if river.path.len() < 2 {
+        return hints;
+    }
+    for cliff in cliffs {
+        if cliff.path.len() < 2 {
+            continue;
+        }
+        let min_drop = cliff
+            .height
+            .filter(|h| h.is_finite() && *h > 0.0)
+            .unwrap_or(WATERFALL_DROP);
+        let tol = (cliff.width + river.width) * 0.5;
+        for w in river.path.windows(2) {
+            for c in cliff.path.windows(2) {
+                if let Some(p) = seg_seg_touch(w[0], w[1], c[0], c[1], tol) {
+                    // Um hint por segmento de rio chega — cruzamentos
+                    // duplicados (crista a acompanhar o rio) dedupam-se.
+                    if !hints.iter().any(|h| h.at.distance(p) < 4.0) {
+                        hints.push(FallHint { at: p, min_drop });
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    hints
+}
+
+/// Ponto mais próximo no segmento `a0→a1` do segmento `b0→b1`; `None` se a
+/// distância mínima entre os dois exceder `tol` (não se tocam).
+fn seg_seg_touch(a0: Vec2, a1: Vec2, b0: Vec2, b1: Vec2, tol: f32) -> Option<Vec2> {
+    let (d1, d2) = (a1 - a0, b1 - b0);
+    let r = a0 - b0;
+    let (a, e) = (d1.length_squared(), d2.length_squared());
+    let (c, f) = (d1.dot(r), d2.dot(r));
+    let b = d1.dot(d2);
+    let denom = a * e - b * b;
+    let (mut s, mut t) = (0.0f32, 0.0f32);
+    if denom > 1e-12 {
+        s = ((b * f - c * e) / denom).clamp(0.0, 1.0);
+    }
+    if e > 1e-12 {
+        t = (b * s + f) / e;
+        if t < 0.0 {
+            t = 0.0;
+            s = if a > 1e-12 { (-c / a).clamp(0.0, 1.0) } else { 0.0 };
+        } else if t > 1.0 {
+            t = 1.0;
+            s = if a > 1e-12 { ((b - c) / a).clamp(0.0, 1.0) } else { 0.0 };
+        }
+    }
+    let (pa, pb) = (a0 + d1 * s, b0 + d2 * t);
+    (pa.distance_squared(pb) <= tol * tol).then_some(pa)
+}
+
 /// In-place moving average over a window of `±half` entries (edges clamp).
 fn box_smooth(values: &mut [f32], half: usize) {
     if half == 0 || values.len() < 3 {
@@ -1067,7 +1408,7 @@ fn box_smooth(values: &mut [f32], half: usize) {
 /// scale of the water column, so `opacity` now controls how *murky* the body
 /// is instead of flattening a constant transparency over the whole mirror.
 pub fn lake_water_mesh(spec: &LakeSpec, water_y: f32) -> ChunkMeshData {
-    let phases = shape_phases(spec.at);
+    let shape = LakeShape::new(spec.at);
     let y = water_y;
     let murk = spec.opacity;
     // O espelho acaba na linha de água REAL da taça (onde o perfil cruza a
@@ -1106,7 +1447,7 @@ pub fn lake_water_mesh(spec: &LakeSpec, water_y: f32) -> ChunkMeshData {
         let radial = (ring + 1) as f32 / ring_count as f32; // 0.5, 1.0
         for i in 0..LAKE_FAN_SEGMENTS {
             let theta = i as f32 / LAKE_FAN_SEGMENTS as f32 * std::f32::consts::TAU;
-            let r = lake_shape_radius(spec.radius, theta, phases) * reach * radial;
+            let r = shape.contour(spec.radius, theta) * reach * radial;
             let p = spec.at + Vec2::new(theta.cos(), theta.sin()) * r;
             let mask = (1.0 - smoothstep01((radial - (1.0 - WATER_EDGE_FADE)) / WATER_EDGE_FADE))
                 * island_mask(p);
@@ -1175,23 +1516,53 @@ pub fn river_water_mesh(spec: &RiverSpec, body: &WaterBody) -> ChunkMeshData {
         }
     }
     for i in 0..(n - 1) {
-        // Cascade: em vez da rampa linear entre cotas, FACE VERTICAL — a
-        // água despenca do lip (borda de montante) até à lâmina do
-        // caldeirão. Mesmo contrato de vértices (uv.x murk, alpha=1: uma
-        // cascata não tem margem seca); normais horizontais (a face é
+        // Cascata/cachoeira: em vez da rampa linear entre cotas, FACE
+        // VERTICAL — a água despenca do lip (borda de montante) até à
+        // lâmina da base. Mesmo contrato de vértices (uv.x murk, alpha=1:
+        // uma queda não tem margem seca); normais horizontais (a face é
         // vertical; o shader usa a geométrica para o fresnel rasante).
-        if body.cascades.contains(&i) {
-            let st0 = body.stations[i];
-            let st1 = body.stations[i + 1];
+        if let Some(&c) = body.cascades.iter().find(|c| i >= c.lip && i < c.base) {
+            // Parede (rio × cliff): UM quadro do brow ao toe, desenhado no
+            // primeiro segmento da queda; os segmentos seguintes NÃO
+            // ganham ribbon — o meio da queda é rocha cortada, não rio.
+            if c.wall && i != c.lip {
+                continue;
+            }
+            let (st0, top_y, st1, bot_y) = if c.wall {
+                (
+                    body.stations[c.lip],
+                    c.top_y,
+                    body.stations[c.base],
+                    c.bot_y,
+                )
+            } else {
+                (
+                    body.stations[i],
+                    body.surface_y[i],
+                    body.stations[i + 1],
+                    body.surface_y[i + 1],
+                )
+            };
             let dir = (st1 - st0).normalize_or_zero();
             let perp = Vec2::new(-dir.y, dir.x);
-            // A face pende ligeiramente para jusante: borda de topo a 75 %
-            // do segmento, base na estação do caldeirão.
-            let top_c = st0.lerp(st1, 0.75);
-            let half0 = body.half_width_at(i);
-            let half1 = body.half_width_at(i + 1);
-            let top_y = body.surface_y[i];
-            let bot_y = body.surface_y[i + 1];
+            // A face pende ligeiramente para jusante: na cascata, borda de
+            // topo a 75 % do segmento (os segmentos de continuação ficam a
+            // pique sobre a própria estação — cortina contínua do lip à
+            // base); na parede, 1.2 m de voo livre sobre o brow.
+            let lean = if c.wall {
+                1.2
+            } else if i == c.lip {
+                st0.distance(st1) * 0.75
+            } else {
+                0.0
+            };
+            let top_c = st0 + dir * lean;
+            // Cortina da cachoeira alarga ([`WATERFALL_CURTAIN`] ×) — a
+            // água ao despencar abre e lava as paredes do caldeirão.
+            let wide = if c.waterfall { WATERFALL_CURTAIN } else { 1.0 };
+            let (h0_i, h1_i) = if c.wall { (c.lip, c.base) } else { (i, i + 1) };
+            let half0 = body.half_width_at(h0_i) * wide;
+            let half1 = body.half_width_at(h1_i) * wide;
             let base = mesh.positions.len() as u32;
             for (c, h, y) in [(top_c, half0, top_y), (st1, half1, bot_y)] {
                 for v in [0.0_f32, 0.5, 1.0] {
@@ -1289,31 +1660,80 @@ mod tests {
 
     #[test]
     fn test_lake_shape_radius_varies_and_is_deterministic() {
-        let phases = shape_phases(Vec2::new(3.0, -7.0));
+        let shape = LakeShape::new(Vec2::new(3.0, -7.0));
         assert_eq!(
-            lake_shape_radius(10.0, 0.3, phases),
-            lake_shape_radius(10.0, 0.3, phases),
+            shape.contour(10.0, 0.3),
+            shape.contour(10.0, 0.3),
             "same position -> same contour"
         );
         let mut min = f32::INFINITY;
         let mut max = f32::NEG_INFINITY;
         for i in 0..64 {
-            let r = lake_shape_radius(10.0, i as f32 / 64.0 * std::f32::consts::TAU, phases);
+            let r = shape.contour(10.0, i as f32 / 64.0 * std::f32::consts::TAU);
             min = min.min(r);
             max = max.max(r);
         }
+        // Todo o lago sai do círculo perfeito (alongamento + harmónicos têm
+        // amplitudes mínimas > 0)…
+        assert!(min < 10.0 * 0.9 && max > 10.0 * 1.1, "organic: {min}..{max}");
+        // …mas fica dentro do pico coberto pelo AABB do carve e pelo audit.
+        let trough = 10.0 * (1.0 - LAKE_STRETCH_MAX - LAKE_HARMONIC_MAX.iter().sum::<f32>());
         assert!(
-            min < 10.0 * 0.85 && max > 10.0 * 1.15,
-            "±28% contour: {min}..{max}"
+            min > trough - 1e-4 && max < 10.0 * CONTOUR_PEAK + 1e-4,
+            "bounded variation: {min}..{max} (trough {trough})"
         );
-        assert!(min > 10.0 * 0.6 && max < 10.0 * 1.4, "bounded variation");
+        // E lagos DIFERENTES ficam diferentes: o mais lobulado de 24
+        // posições contrasta lóbulos/baías bem mais do que o mais morno.
+        let mut best_ratio = 1.0_f32;
+        let mut worst_ratio = f32::INFINITY;
+        for n in 0..24u32 {
+            let s = LakeShape::new(Vec2::new(n as f32 * 41.3 - 500.0, (n % 7) as f32 * 17.9));
+            let (mn, mx) = (0..64).fold((f32::INFINITY, f32::NEG_INFINITY), |(mn, mx), i| {
+                let r = s.radius_frac(i as f32 / 64.0 * std::f32::consts::TAU);
+                (mn.min(r), mx.max(r))
+            });
+            best_ratio = best_ratio.max(mx / mn);
+            worst_ratio = worst_ratio.min(mx / mn);
+        }
+        assert!(worst_ratio > 1.08, "todo o lago varia: {worst_ratio}");
+        assert!(best_ratio > 1.35, "algum lago é bem lobulado: {best_ratio}");
+    }
+
+    /// O alongamento é dirigido: em torno do eixo o contorno é
+    /// sistematicamente maior do que na perpendicular — é isso que faz o
+    /// lago ler-se oval em vez de "círculo ondulado".
+    #[test]
+    fn test_lake_shape_elongates_along_its_axis() {
+        let mut best: Option<(LakeShape, f32)> = None;
+        for n in 0..200u32 {
+            let at = Vec2::new(n as f32 * 37.7 - 2000.0, (n % 13) as f32 * 21.3 - 100.0);
+            let shape = LakeShape::new(at);
+            if best.map_or(true, |(_, s)| shape.stretch > s) {
+                best = Some((shape, shape.stretch));
+            }
+        }
+        let (shape, stretch) = best.expect("positions scanned");
+        assert!(stretch > 0.15, "no elongated lake in the sweep ({stretch})");
+        let window_mean = |center: f32| -> f32 {
+            let n = 64;
+            (0..n)
+                .map(|i| shape.radius_frac(center + (i as f32 / n as f32 - 0.5) * 0.9))
+                .sum::<f32>()
+                / n as f32
+        };
+        let along = window_mean(shape.axis);
+        let across = window_mean(shape.axis + std::f32::consts::FRAC_PI_2);
+        assert!(
+            along > across * 1.05,
+            "lake reads elongated: along {along} vs across {across}"
+        );
     }
 
     #[test]
     fn test_contour_peak_covers_the_harmonics() {
         // O AABB do carve usa CONTOUR_PEAK; tem de cobrir a soma real das
         // amplitudes dos harmónicos (e um pouco de folga pelo arredondamento).
-        let peak = 1.0 + SHAPE_AMPLITUDES.iter().sum::<f32>();
+        let peak = 1.0 + LAKE_STRETCH_MAX + LAKE_HARMONIC_MAX.iter().sum::<f32>();
         assert!(
             CONTOUR_PEAK + 1e-6 >= peak,
             "CONTOUR_PEAK {CONTOUR_PEAK} < pico real {peak}"
@@ -1412,6 +1832,9 @@ mod tests {
             rocks_spec: crate::terrain::shore_rocks::ShoreRocksSpec::default(),
             pool_spacing: 0.0,
             cascades: true,
+            waterfalls: true,
+            waterfall_min_drop: WATERFALL_DROP,
+            waterfall_notch: true,
             spring: false,
         }
     }
@@ -1574,11 +1997,11 @@ mod tests {
         }
     }
 
-    /// A face da cascata: o mesh ganha 12 vértices verticais por cascata —
-    /// 6 da FACE (topo no lip, base na lâmina do caldeirão, normais
-    /// horizontais a apontar a jusante) + 6 do VERSO (mesma geometria,
-    /// normal achatada para +Y, para não ler como painel escuro visto de
-    /// montante).
+    /// A face da cascata: o mesh ganha 12 vértices verticais POR SEGMENTO
+    /// da queda — cortina contínua do lip à base — 6 da FACE (topo no
+    /// início do segmento, base no fim, normais horizontais a apontar a
+    /// jusante) + 6 do VERSO (mesma geometria, normal achatada para +Y,
+    /// para não ler como painel escuro visto de montante).
     #[test]
     fn test_cascade_face_is_vertical_in_the_mesh() {
         let mut grid = BrushGrid::new(vec![0; 96 * 96], 96, 96, 96.0, 50.0, 0.0).expect("grid");
@@ -1601,16 +2024,22 @@ mod tests {
         assert_eq!(body.cascades.len(), 1);
         let mesh = river_water_mesh(&spec, &body);
         let n = body.stations.len();
+        // Cortina contínua: 12 vértices por segmento da queda (o
+        // comportamento antigo desenhava SÓ o primeiro segmento e deixava
+        // o resto da escarpa como ribbon íngreme).
+        let fall = body.cascades[0];
+        let segs = fall.base - fall.lip;
+        assert!(segs >= 1);
         assert_eq!(
             mesh.positions.len(),
-            n * 3 + 12,
-            "ribbon verts + cascade face + back: {} vs {}",
+            n * 3 + segs * 12,
+            "ribbon verts + curtain face + back: {} vs {}",
             mesh.positions.len(),
-            n * 3 + 12
+            n * 3 + segs * 12
         );
-        // Os 6 vértices da FACE: topo = cota do lip, base = cota do
-        // caldeirão, normais horizontais (face vertical).
-        let lip = body.cascades[0];
+        // Os 6 vértices da PRIMEIRA FACE: topo = cota do lip, base = cota
+        // da estação seguinte, normais horizontais (face vertical).
+        let lip = fall.lip;
         let face = &mesh.positions[n * 3..n * 3 + 6];
         for v in &face[0..3] {
             assert!((v[1] - body.surface_y[lip]).abs() < 1e-3, "top at the lip");
@@ -1624,17 +2053,18 @@ mod tests {
         for normal in &mesh.normals[n * 3..n * 3 + 6] {
             assert!(normal[1].abs() < 1e-6, "horizontal face normal");
         }
-        // Os 6 do VERSO: mesma geometria, normal +Y.
-        let back = &mesh.positions[n * 3 + 6..];
-        assert_eq!(back.len(), 6, "duplicated back vertices");
-        for (b, f) in back.iter().zip(face.iter()) {
-            assert_eq!(b, f, "back shares the face geometry");
-        }
-        for normal in &mesh.normals[n * 3 + 6..] {
-            assert!(
-                (normal[1] - 1.0).abs() < 1e-6,
-                "back normal flattened to +Y: {normal:?}"
-            );
+        // Por segmento: os 6 do VERSO seguem a face, com normal +Y.
+        for seg in 0..segs {
+            let f0 = n * 3 + seg * 12;
+            let face = &mesh.positions[f0..f0 + 6];
+            let back = &mesh.positions[f0 + 6..f0 + 12];
+            assert_eq!(back, face, "back shares the face geometry");
+            for normal in &mesh.normals[f0 + 6..f0 + 12] {
+                assert!(
+                    (normal[1] - 1.0).abs() < 1e-6,
+                    "back normal flattened to +Y: {normal:?}"
+                );
+            }
         }
     }
 
@@ -1866,7 +2296,8 @@ mod tests {
         };
         let body = carve_river(&mut grid, &spec, 0, &[]).expect("river");
         assert_eq!(body.cascades.len(), 1, "one escarpment, one cascade");
-        let lip = body.cascades[0];
+        let fall = body.cascades[0];
+        let lip = fall.lip;
         let drop = body.surface_y[lip] - body.surface_y[lip + 1];
         assert!(drop > CASCADE_DROP, "marked lip has the big drop: {drop}");
         // Caldeirão: alguma estação a jusante do lip é claramente mais
@@ -1882,6 +2313,232 @@ mod tests {
         assert!(
             pool > normal * 1.3,
             "plunge pool digs deeper: {pool} vs {normal}"
+        );
+    }
+
+    /// Cachoeira: queda acumulada ≥ waterfall_min_drop classifica o tier,
+    /// o caldeirão escala com a queda e o mesh alarga a cortina.
+    #[test]
+    fn test_waterfall_tier_scales_plunge_and_curtain() {
+        // Planalto alto a oeste (16 m), baixo a leste (2 m): queda ~14 m,
+        // muito acima do limiar de 3 m.
+        let mut grid = BrushGrid::new(vec![0; 96 * 96], 96, 96, 96.0, 50.0, 0.0).expect("grid");
+        grid.begin_stroke("plateau");
+        for z in 0..96 {
+            for x in 0..96 {
+                let p = grid.cell_center(x, z);
+                let h = if p.x < 0.0 { 16.0 } else { 2.0 };
+                grid.set_cell_height(x, z, h);
+            }
+        }
+        grid.commit_stroke();
+        let spec = RiverSpec {
+            path: vec![Vec2::new(-40.0, 0.0), Vec2::new(40.0, 0.0)],
+            width: 6.0,
+            depth: 1.5,
+            ..river_spec()
+        };
+        let body = carve_river(&mut grid, &spec, 0, &[]).expect("river");
+        assert_eq!(body.cascades.len(), 1);
+        let fall = body.cascades[0];
+        assert!(fall.waterfall, "14 m of drop is a WATERFALL: {fall:?}");
+        assert!(fall.drop >= spec.waterfall_min_drop, "drop recorded: {fall:?}");
+        assert!(!fall.wall, "profile fall starts unannotated");
+        assert!((fall.top_y - body.surface_y[fall.lip]).abs() < 1e-4);
+        assert!((fall.bot_y - body.surface_y[fall.base]).abs() < 1e-4);
+        // Caldeirão escalado: a estação da base é mais funda que o ×1.6
+        // da cascata (14 m de queda → f1 = min(1.6 + 0.12·14, 2.4) = 2.28).
+        let base_depth = body.depths[fall.base];
+        assert!(
+            base_depth > spec.depth * 1.9,
+            "waterfall plunge scales with the drop: {} vs nominal {}",
+            base_depth,
+            spec.depth
+        );
+        // Cortina: a face da cachoeira abre ×1.4 — mais larga que TUDO o
+        // que o canal próprio produz (poços incluídos).
+        let mesh = river_water_mesh(&spec, &body);
+        let plain_half = body
+            .half_width
+            .iter()
+            .copied()
+            .fold(0.0f32, f32::max)
+            .max(body.water_width * 0.5);
+        let curtain = body.half_width_at(fall.lip) * WATERFALL_CURTAIN;
+        let max_z = mesh
+            .positions
+            .iter()
+            .map(|p| p[2].abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            max_z > curtain * 0.95,
+            "curtain verts reach {curtain:.2} m: max |z| = {max_z:.2}"
+        );
+        assert!(
+            max_z > plain_half * 1.15,
+            "curtain opens past the widest channel point: {max_z:.2} vs {plain_half:.2}"
+        );
+    }
+
+    /// `waterfalls="0"` rebaixa a grande queda a cascata simples: sem
+    /// cortina alargada, caldeirão ×1.6 de sempre.
+    #[test]
+    fn test_waterfalls_false_demotes_to_cascade() {
+        let mut grid = BrushGrid::new(vec![0; 96 * 96], 96, 96, 96.0, 50.0, 0.0).expect("grid");
+        grid.begin_stroke("plateau");
+        for z in 0..96 {
+            for x in 0..96 {
+                let p = grid.cell_center(x, z);
+                let h = if p.x < 0.0 { 16.0 } else { 2.0 };
+                grid.set_cell_height(x, z, h);
+            }
+        }
+        grid.commit_stroke();
+        let spec = RiverSpec {
+            path: vec![Vec2::new(-40.0, 0.0), Vec2::new(40.0, 0.0)],
+            width: 6.0,
+            depth: 1.5,
+            waterfalls: false,
+            ..river_spec()
+        };
+        let body = carve_river(&mut grid, &spec, 0, &[]).expect("river");
+        assert_eq!(body.cascades.len(), 1, "the fall is still detected");
+        assert!(
+            !body.cascades[0].waterfall,
+            "demoted to plain cascade: {:?}",
+            body.cascades[0]
+        );
+        let base = body.cascades[0].base;
+        assert!(
+            body.depths[base] <= spec.depth * 1.61,
+            "classic ×1.6 plunge, not the scaled one: {}",
+            body.depths[base]
+        );
+    }
+
+    /// Travessia rio × cliff (hint do pre-pass): a superfície fica À
+    /// MESMA COTA a montante da crista (hold) e DESPENCA a jusante (queda
+    /// garantida, mesmo em terreno plano).
+    #[test]
+    fn test_fall_hint_holds_surface_and_forces_the_drop() {
+        let mut grid = flat_grid(); // 8 m plano por todo o lado
+        let spec = RiverSpec {
+            path: vec![Vec2::new(-40.0, 0.0), Vec2::new(40.0, 0.0)],
+            width: 6.0,
+            depth: 2.0,
+            ..river_spec()
+        };
+        let hint = FallHint {
+            at: Vec2::new(0.0, 0.0),
+            min_drop: 5.0,
+        };
+        let body = carve_river_with_falls(&mut grid, &spec, 0, &[], &[hint]).expect("river");
+        assert_eq!(body.cascades.len(), 1, "forced drop = one fall");
+        let fall = body.cascades[0];
+        assert!(fall.waterfall, "5 m ≥ 3 m: waterfall");
+        // Hold: as estações de montante até ao lip partilham a MESMA cota
+        // (a água chega ao brow ao nível).
+        let lip = fall.lip;
+        assert!(lip >= 1, "the hold needs stations upstream");
+        for i in lip.saturating_sub(2)..=lip {
+            assert!(
+                (body.surface_y[i] - body.surface_y[lip]).abs() < 1e-4,
+                "held approach is level: surface[{i}] = {} vs {}",
+                body.surface_y[i],
+                body.surface_y[lip]
+            );
+        }
+        // Queda garantida na estação seguinte à crista.
+        let drop = body.surface_y[lip] - body.surface_y[lip + 1];
+        assert!(drop >= 5.0, "forced drop ≥ min_drop: {drop}");
+        // E o carve escreveu mesmo o degrau na grid (lower-only).
+        let bed_lip = grid.sample(body.stations[lip].x, body.stations[lip].y);
+        let bed_toe = grid.sample(body.stations[lip + 1].x, body.stations[lip + 1].y);
+        assert!(bed_lip > bed_toe + 3.0, "the grid carries the step");
+    }
+
+    /// Deteção 2D de travessias sobre as SPECS: cruzamento → hint com a
+    /// queda do cliff (`height` autoral; auto → WATERFALL_DROP).
+    #[test]
+    fn test_river_cliff_crossings_from_specs() {
+        let river = RiverSpec {
+            path: vec![Vec2::new(-40.0, 0.0), Vec2::new(40.0, 0.0)],
+            width: 6.0,
+            ..river_spec()
+        };
+        let mut cliff = super::super::cliffs::CliffSpec {
+            path: vec![Vec2::new(0.0, -30.0), Vec2::new(0.0, 30.0)],
+            width: 8.0,
+            height: Some(9.0),
+            ..Default::default()
+        };
+        let hits = river_cliff_crossings(&river, &[cliff.clone()]);
+        assert_eq!(hits.len(), 1, "one crossing at x≈0");
+        assert!((hits[0].at.x - 0.0).abs() < 2.0, "at the crest: {:?}", hits[0].at);
+        assert_eq!(hits[0].min_drop, 9.0, "authored height wins");
+        // height auto → WATERFALL_DROP.
+        cliff.height = None;
+        let hits = river_cliff_crossings(&river, &[cliff]);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].min_drop, WATERFALL_DROP);
+        // Cliff longe do rio: nada.
+        let far = super::super::cliffs::CliffSpec {
+            path: vec![Vec2::new(0.0, 200.0), Vec2::new(60.0, 200.0)],
+            ..Default::default()
+        };
+        assert!(river_cliff_crossings(&river, &[far]).is_empty());
+    }
+
+    /// Parede: a anotação cola a face ao pé da banda e o mesh desenha UM
+    /// quadro do brow ao toe (os segmentos intermédios não ganham ribbon).
+    #[test]
+    fn test_wall_fall_mesh_is_one_quad_brow_to_toe() {
+        let mut grid = BrushGrid::new(vec![0; 96 * 96], 96, 96, 96.0, 50.0, 0.0).expect("grid");
+        grid.begin_stroke("plateau");
+        for z in 0..96 {
+            for x in 0..96 {
+                let p = grid.cell_center(x, z);
+                let h = if p.x < 0.0 { 16.0 } else { 2.0 };
+                grid.set_cell_height(x, z, h);
+            }
+        }
+        grid.commit_stroke();
+        let spec = RiverSpec {
+            path: vec![Vec2::new(-40.0, 0.0), Vec2::new(40.0, 0.0)],
+            width: 6.0,
+            depth: 1.5,
+            ..river_spec()
+        };
+        let mut body = carve_river(&mut grid, &spec, 0, &[]).expect("river");
+        // Simula a anotação pós-bands: a queda passa a IR ATÉ AO PÉ da
+        // banda (3 estações de face numa queda de 14 m).
+        let n = body.stations.len();
+        let bot_y = {
+            let c = &mut body.cascades[0];
+            c.wall = true;
+            c.base = (c.lip + 3).min(n - 1);
+            c.bot_y = body.surface_y[c.base] - 2.0;
+            c.drop = c.top_y - c.bot_y;
+            c.bot_y
+        };
+        let mesh = river_water_mesh(&spec, &body);
+        // A ribbon empurra n·3 vértices UMA vez (por estação); a queda em
+        // parede acrescenta UM quadro (6 face + 6 verso) — independentemente
+        // do número de segmentos que a queda cubra (os índices da ribbon é
+        // que não nascem nos segmentos da queda).
+        assert_eq!(
+            mesh.positions.len(),
+            n * 3 + 12,
+            "wall fall = one quad over the whole fall, no extra ribbon verts"
+        );
+        // O fundo do quadro está no PÉ da banda (2 m abaixo da lâmina).
+        let min_y = mesh.positions[n * 3..]
+            .iter()
+            .map(|p| p[1])
+            .fold(f32::MAX, f32::min);
+        assert!(
+            (min_y - bot_y).abs() < 1e-3,
+            "face bottom at the band toe: {min_y} vs {bot_y}"
         );
     }
 
@@ -1967,11 +2624,10 @@ mod tests {
         }
         // 2) O raise sobrevive: dentro do contorno a superfície fica à cota
         // do espelho (o remanso não baixa as estações elevadas).
-        let phases = shape_phases(lake.at);
         let mut inside = 0;
         for (st, s) in river.stations.iter().zip(&river.surface_y) {
             let theta = (st.y - lake.at.y).atan2(st.x - lake.at.x);
-            if st.distance(lake.at) <= lake_shape_radius(lake.radius, theta, phases) {
+            if st.distance(lake.at) <= lake.shape.contour(lake.radius, theta) {
                 inside += 1;
                 assert!(
                     *s >= lake.water_y - 1e-3,
@@ -2104,8 +2760,7 @@ mod tests {
             grid.sample(10.0, 10.0),
             body.water_y
         );
-        let phases = shape_phases(spec.at);
-        let contour = lake_shape_radius(spec.radius, 0.0, phases);
+        let contour = LakeShape::new(spec.at).contour(spec.radius, 0.0);
         let reach = (waterline_reach(spec.depth, spec.water_offset) * CARVE_MARGIN).clamp(0.5, 1.6);
         // Sonda 1 m FORA da linha de água mas ainda bem dentro do carve
         // antigo (contorno·CARVE_MARGIN) — antes do fix aqui estava o piso
@@ -2159,14 +2814,20 @@ mod tests {
         };
         let deep = mirror_extent(3.2);
         let shallow = mirror_extent(0.8);
-        // Pico do contorno harmónico × reach (a mesma fórmula da mesh).
-        // Os 72 segmentos amostram o contorno — o pico verdadeiro pode
-        // cair entre amostras (5.º harmónico oscila a 25°/segmento),
-        // pelo que a tolerância é de 3%.
+        // Pico do contorno AMOSTRADO nos mesmos θ do mesh × reach: comparar
+        // com o pico TEÓRICO (CONTOUR_PEAK) já não serve — com 5 termos
+        // harmónicos os picos individuais raramente alinham no mesmo θ, e o
+        // que importa é que o mesh e a fórmula concordam amostra a amostra.
+        let shape = LakeShape::new(Vec2::new(40.0, 40.0));
         let peak = |depth: f32| {
-            10.0 * CONTOUR_PEAK
-                * (waterline_reach(depth, 0.5) * CARVE_MARGIN)
-                    .clamp(0.5, CONTOUR_PEAK * CARVE_MARGIN)
+            let reach = (waterline_reach(depth, 0.5) * CARVE_MARGIN)
+                .clamp(0.5, CONTOUR_PEAK * CARVE_MARGIN);
+            (0..LAKE_FAN_SEGMENTS)
+                .map(|i| {
+                    shape.contour(10.0, i as f32 / LAKE_FAN_SEGMENTS as f32 * std::f32::consts::TAU)
+                        * reach
+                })
+                .fold(f32::NEG_INFINITY, f32::max)
         };
         assert!(
             (deep - peak(3.2)).abs() < peak(3.2) * 0.03,
@@ -2211,7 +2872,7 @@ mod tests {
         assert!(raw > 0.5 && raw < 1.0, "clamp inert, reach inside: {raw}");
         let theta: f32 = 0.83; // direção arbitrária
         let dir = Vec2::new(theta.cos(), theta.sin());
-        let contour = lake_shape_radius(spec.radius, theta, shape_phases(spec.at));
+        let contour = LakeShape::new(spec.at).contour(spec.radius, theta);
         // Na linha de água (coluna == water_offset): zero exato.
         let edge = spec.at + dir * (contour * body.mirror_reach);
         assert!(

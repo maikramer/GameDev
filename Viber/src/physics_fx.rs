@@ -126,11 +126,7 @@ fn knockback_system(
             // spawners: superfície renderizada.
             if player.is_none() {
                 transform.translation.y = terrain
-                    .surface_below(
-                        x,
-                        z,
-                        transform.translation.y + crate::player::GROUND_PROBE,
-                    )
+                    .surface_below(x, z, transform.translation.y + crate::player::GROUND_PROBE)
                     .unwrap_or_else(|| terrain.sample_mesh_surface(x, z));
             }
         }

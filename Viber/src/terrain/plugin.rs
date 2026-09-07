@@ -28,10 +28,10 @@ use std::collections::HashMap;
 #[cfg(test)]
 use std::sync::Arc;
 
-use bevy::prelude::*;
 use super::runtime::{ChunkMaterialHandle, TerrainChunkMaterials, TerrainRuntime};
 use super::spec::{DEFAULT_LOD_HYSTERESIS, DEFAULT_LOD_RESELECT_DISTANCE, TerrainSpec};
 use crate::profiler::{Group, timed};
+use bevy::prelude::*;
 
 /// Tag on every terrain chunk mesh entity managed by this plugin.
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
@@ -351,9 +351,9 @@ fn update_voxel_columns(
             commands.entity(entity).despawn();
             continue;
         }
-        chunk.lod = lod_field
-            .get(chunk.coords)
-            .unwrap_or_else(|| select_lod(dist, spec.lod_distance(), chunk.built_lod, max_lod, margin));
+        chunk.lod = lod_field.get(chunk.coords).unwrap_or_else(|| {
+            select_lod(dist, spec.lod_distance(), chunk.built_lod, max_lod, margin)
+        });
         let neighbours = lod_field.neighbours(chunk.coords);
         // Reconstruir também quando SÓ a vizinhança mudou: o LOD é o mesmo, as
         // faces de transição não.
@@ -366,7 +366,14 @@ fn update_voxel_columns(
                     commands.entity(e).despawn();
                 }
                 b.remaining = super::voxel::column_boxes(
-                    spec, grid, voxel, edge, lod0_cell, chunk.lod, chunk.coords, neighbours,
+                    spec,
+                    grid,
+                    voxel,
+                    edge,
+                    lod0_cell,
+                    chunk.lod,
+                    chunk.coords,
+                    neighbours,
                 );
                 b.target = chunk.lod;
                 b.neighbours = neighbours;
@@ -387,8 +394,7 @@ fn update_voxel_columns(
                     let Some(box_spec) = b.remaining.pop() else {
                         break;
                     };
-                    let Some(data) =
-                        super::voxel::build_box_mesh(spec, grid, voxel, &box_spec)
+                    let Some(data) = super::voxel::build_box_mesh(spec, grid, voxel, &box_spec)
                     else {
                         // Provou-se vazio depois de tudo — sem custo de
                         // orçamento, segue para a próxima caixa.
@@ -448,7 +454,14 @@ fn update_voxel_columns(
             }
             None if stale => {
                 let remaining = super::voxel::column_boxes(
-                    spec, grid, voxel, edge, lod0_cell, chunk.lod, chunk.coords, neighbours,
+                    spec,
+                    grid,
+                    voxel,
+                    edge,
+                    lod0_cell,
+                    chunk.lod,
+                    chunk.coords,
+                    neighbours,
                 );
                 commands.entity(entity).insert(ColumnBuild {
                     target: chunk.lod,
@@ -600,12 +613,7 @@ impl LodField {
             self.get(UVec2::new(x as u32, z as u32)).unwrap_or(none)
         };
         let (x, z) = (i64::from(coords.x), i64::from(coords.y));
-        [
-            at(x - 1, z),
-            at(x + 1, z),
-            at(x, z - 1),
-            at(x, z + 1),
-        ]
+        [at(x - 1, z), at(x + 1, z), at(x, z - 1), at(x, z + 1)]
     }
 
     /// Quadtree restrito: nenhuma coluna mais de um nível acima do vizinho
@@ -617,7 +625,9 @@ impl LodField {
             for z in 0..self.rows {
                 for x in 0..self.rows {
                     let coords = UVec2::new(x, z);
-                    let Some(lod) = self.get(coords) else { continue };
+                    let Some(lod) = self.get(coords) else {
+                        continue;
+                    };
                     let finest = self
                         .neighbours(coords)
                         .into_iter()
@@ -772,7 +782,11 @@ mod tests {
         for x in 0..4u32 {
             let a = f.get(UVec2::new(x, 0)).unwrap() as i32;
             let b = f.get(UVec2::new(x + 1, 0)).unwrap() as i32;
-            assert!((a - b).abs() <= 1, "degrau de {} níveis em x={x}", (a - b).abs());
+            assert!(
+                (a - b).abs() <= 1,
+                "degrau de {} níveis em x={x}",
+                (a - b).abs()
+            );
         }
     }
 
@@ -784,13 +798,9 @@ mod tests {
                 f.set(UVec2::new(x, z), (x.min(z)) as u8);
             }
         }
-        let before: Vec<Option<u8>> = (0..16)
-            .map(|i| f.get(UVec2::new(i % 4, i / 4)))
-            .collect();
+        let before: Vec<Option<u8>> = (0..16).map(|i| f.get(UVec2::new(i % 4, i / 4))).collect();
         f.clamp_two_to_one(3);
-        let after: Vec<Option<u8>> = (0..16)
-            .map(|i| f.get(UVec2::new(i % 4, i / 4)))
-            .collect();
+        let after: Vec<Option<u8>> = (0..16).map(|i| f.get(UVec2::new(i % 4, i / 4))).collect();
         assert_eq!(before, after, "um campo já legal não pode mexer-se");
     }
 
@@ -1209,7 +1219,11 @@ mod tests {
         let mut q = app
             .world_mut()
             .query::<&crate::terrain::voxel::VoxelChunk>();
-        assert_eq!(q.iter(app.world()).count(), 0, "as caixas morrem com a coluna");
+        assert_eq!(
+            q.iter(app.world()).count(),
+            0,
+            "as caixas morrem com a coluna"
+        );
     }
 
     /// Respawn no LOD que a distância pede: chunks que re-entram no raio a

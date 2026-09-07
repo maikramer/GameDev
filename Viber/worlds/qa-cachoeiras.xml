@@ -1,0 +1,51 @@
+<!-- QA das cachoeiras automáticas (apagar depois): rio × cliff = fenda de
+     spill no brow + cortina do brow ao toe + caldeirão à escala + spray +
+     névoa + loop de áudio posicional. Duas muralhas autorais no mesmo rio
+     (queda em escada) e lagoa na confluência a jusante. -->
+<world clear-color="#87ceeb">
+  <Compass />
+  <AmbientLight color="#bfd4e0" brightness="400" />
+  <DirectionalLight direction="-0.5 -1 -0.3" illuminance="28000" shadows="true" />
+
+  <Terrain name="vale" world-size="512" max-height="60" chunk-size="64"
+           levels="4" resolution="64" collision-resolution="32"
+           height-smoothing="1" seed="7"
+           base-color="#c9c5ba"
+           layers="grass vale_grass dirt dirt_trail forest_floor gravel mountain_stone sand desert_sand snow_peak swamp_mud dirt_road pebbles"
+           shore-width="5" snow-height="0.92"
+           cliff-angle="50" cliff-streaks="0.55" cliff-moss="0.4" />
+
+  <TerrainPad name="plaza" at="0 0" size="48 48" falloff="14" corner-radius="10" />
+
+  <!-- Rio de montante a jusante (seed 7 desce para sudoeste). O pre-pass
+       cruza este path com as duas muralhas abaixo: o carve segura a
+       superfície a montante de cada crista e garante a queda a jusante. -->
+  <River name="rio_cachoeiras"
+         path="170 150 130 100 96 55 66 12 40 -30 16 -70 -4 -104"
+         width="11" depth="3" water-offset="0.8"
+         bank-width="4.5" bank-height="0.9" color="#1d5a78" opacity="0.74"
+         bank="soft" rocks="1" pool-spacing="16" />
+
+  <!-- Muralha A: 12 m autoral, cruza o troço médio (~80, 32) —
+       cachoeira de parede garantida (height fixa a queda). -->
+  <Cliff name="muralha_a" path="80 96 82 -16"
+         width="7" height="12" profile="vertical" side="auto"
+         noise="0.12" seed="21" gullies="0.2" />
+
+  <!-- Muralha B: 8 m, cruza o troço baixo (~29, -12) — segunda queda da
+       escada. -->
+  <Cliff name="muralha_b" path="31 -8 28 -84"
+         width="6" height="8" profile="vertical" side="auto"
+         noise="0.12" seed="34" />
+
+  <!-- Lagoa no pé da escada: a confluência sobe as estações finais à
+       cota do espelho. -->
+  <Lake name="lagoa_baixo" at="-12 -116" radius="16" depth="3" water-offset="0.5"
+        color="#1e5a6e" opacity="0.66" ripple="1.0" bank="beach" rocks="1" />
+
+  <!-- Miradouros sobre as duas quedas (âncoras de câmara para screenshots). -->
+  <Group name="miradouro_a" translation="92 46 -22" />
+  <Group name="miradouro_b" translation="40 -4 -14" />
+
+  <OrbitCamera target="miradouro_a" distance="30" height="9" pitch="14" />
+</world>

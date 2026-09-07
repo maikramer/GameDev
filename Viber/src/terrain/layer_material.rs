@@ -2,13 +2,13 @@
 //! bindless [`bevy::pbr::Material`] PRÓPRIO (não `ExtendedMaterial` — ver o
 //! aviso de crash abaixo) for the terrain chunks built by [`super::runtime`].
 //!
-//! Every chunk carries its OWN material: the four pool textures with the
-//! highest aggregate weight in that chunk + one RGBA8 splat plane baked per
-//! chunk. The old single-material design (13 layers + 4 global splat planes,
-//! 34 bindings) crashed the NVIDIA driver's pipeline-layout path with a
-//! silent SIGSEGV; a chunk material binds 5 textures + 1 uniform and stays
-//! well clear of it, with the bonus that different areas of the world can
-//! render different layer sets.
+//! Every chunk carries its OWN material: the eight pool textures with the
+//! highest aggregate weight in that chunk + TWO RGBA8 splat planes baked per
+//! chunk (plano 0 = slots 0–3, plano 1 = slots 4–7). The old single-material
+//! design (13 layers + 4 global splat planes, 34 bindings) crashed the
+//! NVIDIA driver's pipeline-layout path with a silent SIGSEGV; the bindless
+//! chunk material stays well clear of it, with the bonus that different
+//! areas of the world can render different layer sets.
 //!
 //! Same architecture as [`super::water_material`] / [`crate::sky`] for the
 //! world constants: `viber run` rewrites the CONFIG block of
@@ -68,7 +68,7 @@ const CONFIG_END: &str = "// === END WORLD CONFIG ===";
 /// senão volta o SIGSEGV, e ele não vem com mensagem nenhuma.
 #[derive(Debug, Clone, Asset, TypePath, AsBindGroup)]
 #[data(0, TerrainChunkParams, binding_array(10))]
-#[bindless(index_table(range(0..11)))]
+#[bindless(index_table(range(0..21)))]
 pub struct TerrainChunkMaterial {
     #[texture(1)]
     #[sampler(2)]
@@ -84,7 +84,22 @@ pub struct TerrainChunkMaterial {
     pub layer3: Handle<Image>,
     #[texture(9)]
     #[sampler(10)]
+    pub layer4: Handle<Image>,
+    #[texture(11)]
+    #[sampler(12)]
+    pub layer5: Handle<Image>,
+    #[texture(13)]
+    #[sampler(14)]
+    pub layer6: Handle<Image>,
+    #[texture(15)]
+    #[sampler(16)]
+    pub layer7: Handle<Image>,
+    #[texture(17)]
+    #[sampler(18)]
     pub splat: Handle<Image>,
+    #[texture(19)]
+    #[sampler(20)]
+    pub splat2: Handle<Image>,
     /// Tabela do chunk. Sem `#[uniform]`/`#[storage]` de campo: o
     /// `#[data(...)]` da struct manda-a para a binding array partilhada dos
     /// materiais bindless (índice 0 da tabela de índices).
@@ -101,14 +116,18 @@ impl AsBindGroupShaderType<TerrainChunkParams> for TerrainChunkMaterial {
 }
 
 impl TerrainChunkMaterial {
-    /// Mutable texture handle of layer `i` (0..3); the failed-slot
+    /// Mutable texture handle of layer `i` (0..8); the failed-slot
     /// repointing walks this.
     pub fn texture_mut(&mut self, i: usize) -> &mut Handle<Image> {
         match i {
             0 => &mut self.layer0,
             1 => &mut self.layer1,
             2 => &mut self.layer2,
-            _ => &mut self.layer3,
+            3 => &mut self.layer3,
+            4 => &mut self.layer4,
+            5 => &mut self.layer5,
+            6 => &mut self.layer6,
+            _ => &mut self.layer7,
         }
     }
 }
@@ -138,14 +157,14 @@ impl bevy::pbr::Material for TerrainChunkMaterial {
 /// Per-chunk style + placement table (uniform binding 50). `tiles[i].x` is
 /// the tile size in meters of layer i, `tints/flats/roughs` its color
 /// correction, flat far color and perceptual roughness; `chunk` places the
-/// splat plane (xy = origin XZ, z = edge size) and names the rock layer for
-/// the triplanar walls (w = 0..3, -1 = no rock layer in this chunk).
+/// splat planes (xy = origin XZ, z = edge size) and names the rock layer for
+/// the triplanar walls (w = 0..7, -1 = no rock layer in this chunk).
 #[derive(Debug, Clone, Copy, ShaderType)]
 pub struct TerrainChunkParams {
-    pub tiles: [Vec4; 4],
-    pub tints: [Vec4; 4],
-    pub flats: [Vec4; 4],
-    pub roughs: [Vec4; 4],
+    pub tiles: [Vec4; 8],
+    pub tints: [Vec4; 8],
+    pub flats: [Vec4; 8],
+    pub roughs: [Vec4; 8],
     pub chunk: Vec4,
     /// `rgb` = dia/noite tint do terreno (day factor 1 = branco).
     pub day_tint: Vec4,
@@ -153,14 +172,27 @@ pub struct TerrainChunkParams {
     /// sol que as sombras seguem, publicado no passo quantizado do day
     /// tint), `w` = 1 quando o sistema já publicou um sol real.
     pub sun_dir: Vec4,
+    /// Pele das paredes, AO VIVO (`viber.debug.ground{...}`): `x` =
+    /// tri_slope (gate de declive do triplanar), `y` = tri_soft, `z` =
+    /// strata_spacing, `w` = strata_strength.
+    pub walls_a: Vec4,
+    /// `x` = rock_darken, `y` = streaks, `z` = moss, `w` = livre.
+    pub walls_b: Vec4,
 }
 
 impl TerrainChunkParams {
-    /// Builds the table from four pool slots (`super::splat` indices) plus
-    /// the chunk placement, using [`SLOT_STYLES`] for the visual constants.
-    pub fn from_slots(slots: [usize; 4], origin: [f32; 2], edge: f32) -> Self {
+    /// Builds the table from eight pool slots (`super::splat` indices) plus
+    /// the chunk placement, using [`SLOT_STYLES`] for the visual constants
+    /// and `cfg` for the initial wall skin (`walls_a`/`walls_b` — depois
+    /// `viber.debug.ground{...}` move-as ao vivo).
+    pub fn from_slots(
+        slots: [usize; 8],
+        origin: [f32; 2],
+        edge: f32,
+        cfg: &TerrainChunkConfig,
+    ) -> Self {
         let pick = |key: fn(&LayerStyle) -> f32| {
-            let mut out = [Vec4::ZERO; 4];
+            let mut out = [Vec4::ZERO; 8];
             for (i, &slot) in slots.iter().enumerate() {
                 out[i] = Vec4::splat(key(&SLOT_STYLES[slot]));
             }
@@ -187,6 +219,13 @@ impl TerrainChunkParams {
             // Default até o primeiro publish do `terrain_daynight_tint` —
             // o mesmo vetor que o shader hardcoded usava antes do uniform.
             sun_dir: Vec4::new(0.35, -0.8, -0.45, 0.0),
+            walls_a: Vec4::new(
+                cfg.tri_slope,
+                cfg.tri_soft,
+                cfg.strata_spacing,
+                cfg.strata_strength,
+            ),
+            walls_b: Vec4::new(cfg.rock_darken, cfg.streaks, cfg.moss, 0.0),
         }
     }
 }
@@ -263,6 +302,23 @@ pub struct TerrainChunkConfig {
 }
 
 impl TerrainChunkConfig {
+    /// Config de um `<Terrain>` com `layers` (o mesmo spec que o bootstrap
+    /// usa para os splats) — o `from_world` delega aqui.
+    pub fn from_terrain_spec(spec: &crate::terrain::spec::TerrainSpec) -> Self {
+        // The wall gate shares the cliff trigger: a 50° wall starts at
+        // slope 1 − cos(50°) ≈ 0.36. cliff-angle >= ~90° disables the path.
+        let tri_slope = (1.0 - spec.cliff_angle.to_radians().cos()).clamp(0.0, 1.0);
+        TerrainChunkConfig {
+            tri_slope,
+            tri_soft: 0.12,
+            strata_spacing: 4.0,
+            strata_strength: 0.25,
+            rock_darken: 0.45,
+            streaks: spec.cliff_streaks.clamp(0.0, 1.0),
+            moss: spec.cliff_moss.clamp(0.0, 1.0),
+        }
+    }
+
     /// First `<Terrain>` with `layers` (the same spec the bootstrap bakes
     /// chunk splats for).
     pub fn from_world(entities: &[crate::recipes::EntitySpec]) -> Option<TerrainChunkConfig> {
@@ -280,18 +336,7 @@ impl TerrainChunkConfig {
             None
         }
         let spec = walk(entities)?;
-        // The wall gate shares the cliff trigger: a 50° wall starts at
-        // slope 1 − cos(50°) ≈ 0.36. cliff-angle >= ~90° disables the path.
-        let tri_slope = (1.0 - spec.cliff_angle.to_radians().cos()).clamp(0.0, 1.0);
-        Some(TerrainChunkConfig {
-            tri_slope,
-            tri_soft: 0.12,
-            strata_spacing: 4.0,
-            strata_strength: 0.25,
-            rock_darken: 0.45,
-            streaks: spec.cliff_streaks.clamp(0.0, 1.0),
-            moss: spec.cliff_moss.clamp(0.0, 1.0),
-        })
+        Some(Self::from_terrain_spec(&spec))
     }
 
     /// Rewrite the CONFIG const block of the shader template (the rest of the
@@ -486,8 +531,8 @@ mod tests {
     fn test_chunk_material_stays_bindless() {
         let source = include_str!("layer_material.rs");
         assert!(
-            source.contains("#[bindless(index_table(range(0..11)))]"),
-            "TerrainChunkMaterial tem de continuar bindless"
+            source.contains("#[bindless(index_table(range(0..21)))]"),
+            "TerrainChunkMaterial tem de continuar bindless (21 entradas: data + 10 pares)"
         );
         assert!(
             source.contains("#[data(0, TerrainChunkParams, binding_array(10))]"),
@@ -593,25 +638,39 @@ mod tests {
         assert!(bare.is_none(), "no layers → no config");
     }
 
-    /// A tabela de params embute os estilos dos 4 slots e o índice da layer
-    /// de rocha (mountain_stone) para as paredes triplanares.
+    /// A tabela de params embute os estilos dos 8 slots, o índice da layer
+    /// de rocha (mountain_stone) para as paredes triplanares e a pele das
+    /// paredes do config.
     #[test]
     fn test_chunk_params_pick_rock_layer() {
         use super::super::splat::{SLOT_DIRT, SLOT_GRASS, SLOT_MOUNTAIN_STONE, SLOT_SNOW_PEAK};
+        let cfg = TerrainChunkConfig {
+            tri_slope: 0.36,
+            tri_soft: 0.12,
+            strata_spacing: 4.0,
+            strata_strength: 0.25,
+            rock_darken: 0.45,
+            streaks: 0.5,
+            moss: 0.35,
+        };
         let params = TerrainChunkParams::from_slots(
-            [SLOT_GRASS, SLOT_MOUNTAIN_STONE, SLOT_DIRT, SLOT_SNOW_PEAK],
+            [SLOT_GRASS, SLOT_MOUNTAIN_STONE, SLOT_DIRT, SLOT_SNOW_PEAK, 4, 5, 7, 12],
             [-32.0, 96.0],
             64.0,
+            &cfg,
         );
         assert_eq!(params.chunk.w, 1.0, "mountain_stone é a layer 1 do chunk");
         assert_eq!(params.tiles[2].x, SLOT_STYLES[SLOT_DIRT].tile);
         assert_eq!(params.tints[3].xyz().x, SLOT_STYLES[SLOT_SNOW_PEAK].tint[0]);
         assert_eq!(params.chunk.z, 64.0);
+        assert_eq!(params.walls_a.x, 0.36, "tri_slope vem do config");
+        assert_eq!(params.walls_b.z, 0.35, "moss vem do config");
 
         let no_rock = TerrainChunkParams::from_slots(
-            [SLOT_GRASS, SLOT_DIRT, SLOT_SNOW_PEAK, 4],
+            [SLOT_GRASS, SLOT_DIRT, SLOT_SNOW_PEAK, 4, 5, 7, 8, 12],
             [0.0, 0.0],
             64.0,
+            &cfg,
         );
         assert_eq!(no_rock.chunk.w, -1.0, "sem mountain_stone → sem triplanar");
     }

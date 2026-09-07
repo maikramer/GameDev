@@ -19,10 +19,12 @@
 //! splat + exclusão de relva/spawners na faixa da parede). Puro e
 //! determinístico: toda a sondagem ao grid acontece aqui, uma vez.
 
-use bevy::math::Vec2;
+use bevy::math::{Vec2, Vec3};
 
+use super::mods::{CapsuleMod, ModOp, VoxelMod};
 use super::super::cliffs::{CliffProfile, hash01};
 use super::super::mesh::HeightField;
+use super::super::paths::{PathHit, nearest_on_path};
 use super::cliff::CliffBand;
 use crate::terrain::water::{BankStyle, LakeSpec, RiverSpec, WaterBody};
 
@@ -150,7 +152,7 @@ pub fn lake_shore_band(
     // Anel fechado: amostra o contorno harmónico na linha de água real e
     // fecha repetindo a primeira estação no fim (into_mods corta por pares).
     let segments = 96;
-    let phases = super::super::water::shape_phases(spec.at);
+    let shape = super::super::water::LakeShape::new(spec.at);
     let reach = (super::super::water::waterline_reach(spec.depth, spec.water_offset)
         * super::super::water::CARVE_MARGIN)
         .clamp(0.5, 1.6);
@@ -169,7 +171,7 @@ pub fn lake_shore_band(
         let theta = k as f32 / segments as f32 * std::f32::consts::TAU;
         // A crista fica FORA da lâmina (a parede sobe a partir dela); a
         // sonda do topo, mais para fora ainda — o banco natural.
-        let waterline = super::super::water::lake_shape_radius(spec.radius, theta, phases) * reach;
+        let waterline = shape.contour(spec.radius, theta) * reach;
         let crest_r = waterline + BENCH;
         let crest = spec.at + Vec2::new(theta.cos(), theta.sin()) * crest_r;
         let probe = spec.at + Vec2::new(theta.cos(), theta.sin()) * (crest_r + TOP_PROBE);
@@ -283,6 +285,123 @@ pub fn spring_band(
         talus: false,
         talus_angle: 36.0,
     })
+}
+
+/// Folga (m) além de `meia-largura da banda + meia-largura do canal` ao
+/// testar se uma queda do rio cruza a parede.
+const WALL_MATCH_MARGIN: f32 = 1.0;
+/// Recuo (m) da fenda de spill para dentro da crista — a água "sai" da
+/// fenda em vez de beijar a parede.
+const SPILL_BORE: f32 = 2.5;
+/// Voo (m) da fenda para além do pé da banda — a fenda atravessa a parede
+/// inteira, e um pouco a jusante, para se ler de frente.
+const SPILL_RUN: f32 = 1.5;
+
+/// Cachoeiras de PAREDE: anota as quedas dos rios que despencam numa banda
+/// de `<Cliff>` e devolve os mods subtractivos de spill.
+///
+/// O carve do rio já conduziu o perfil pelos hints do pre-pass (hold a
+/// montante da crista + queda garantida a jusante —
+/// [`crate::terrain::water::river_cliff_crossings`]); aqui, com as bandas
+/// JÁ resolvidas contra a grid carvada, cada queda grande cujo meio cai
+/// dentro da pegada de uma banda passa a `wall = true`: a face vai do brow
+/// ao toe da banda (`bot_y` = pé da banda, nunca acima da lâmina a
+/// jusante) e o mesh desenha UM quadro de parede em vez de faces por
+/// segmento. A fenda (capsule subtract no brow, largura ∝ canal) abre a
+/// crista por onde a água despenca — a parede em si fica sólida.
+///
+/// Determinístico: só leituras de bandas/corpos já resolvidos, sem RNG.
+pub fn wall_waterfalls(
+    rivers: &[RiverSpec],
+    bodies: &mut [WaterBody],
+    water_specs: &[(bool, usize)],
+    bands: &[CliffBand],
+) -> Vec<Box<dyn VoxelMod>> {
+    let mut mods: Vec<Box<dyn VoxelMod>> = Vec::new();
+    if bands.is_empty() {
+        return mods;
+    }
+    for (body, &(is_lake, spec_i)) in bodies.iter_mut().zip(water_specs) {
+        if is_lake || spec_i >= rivers.len() {
+            continue;
+        }
+        let spec = &rivers[spec_i];
+        // Leituras de que a anotação precisa, clonadas ANTES do borrow
+        // mutável das quedas (estações/meias-larguras são pequenas —
+        // bootstrap-only).
+        let stations = body.stations.clone();
+        let halfs = body.half_width.clone();
+        let water_width = body.water_width;
+        let half_at =
+            |i: usize| halfs.get(i).copied().unwrap_or(water_width * 0.5);
+        for c in body.cascades.iter_mut() {
+            if !c.waterfall || c.wall {
+                continue;
+            }
+            let mid = (c.lip + c.base) / 2;
+            let Some(st) = stations.get(mid) else {
+                continue;
+            };
+            // A banda mais próxima do meio da queda.
+            let mut best: Option<(f32, usize, PathHit)> = None;
+            for (bi, band) in bands.iter().enumerate() {
+                let Some(hit) = nearest_on_path(&band.stations, *st) else {
+                    continue;
+                };
+                let d = hit.point.distance(*st);
+                if best.as_ref().map_or(true, |(bd, _, _)| d < *bd) {
+                    best = Some((d, bi, hit));
+                }
+            }
+            let Some((dist, bi, hit)) = best else {
+                continue;
+            };
+            let band = &bands[bi];
+            // Leituras na estação da banda mais próxima do cruzamento.
+            let idx = (hit.station(band.stations.len()).round() as usize)
+                .min(band.stations.len() - 1);
+            let band_w = band.width[idx];
+            if dist > band_w * 0.5 + half_at(mid) + WALL_MATCH_MARGIN {
+                continue;
+            }
+            // A face cola-se ao pé da parede (submerso no caldeirão se ele
+            // desce abaixo do pé — nunca acima da lâmina a jusante).
+            let bot = band.bot_y[idx].min(c.bot_y);
+            if c.top_y - bot < c.drop * 0.6 {
+                continue;
+            }
+            c.wall = true;
+            c.bot_y = bot;
+            c.drop = (c.top_y - bot).max(0.0);
+            if !spec.waterfall_notch {
+                continue;
+            }
+            // Fenda de spill: cápsula atravessando a crista no cruzamento,
+            // centrada ligeiramente ACIMA da lâmina (remove o sill entre o
+            // canal e a face sem rasgar o caldeirão abaixo).
+            let crest = hit.point;
+            let normal = band.drop_normal[idx];
+            let radius = (half_at(c.lip) * 1.2).max(0.8);
+            let a = Vec3::new(
+                crest.x - normal.x * SPILL_BORE,
+                c.top_y + radius * 0.25,
+                crest.y - normal.y * SPILL_BORE,
+            );
+            let b = Vec3::new(
+                crest.x + normal.x * (band_w + SPILL_RUN),
+                c.top_y + radius * 0.25,
+                crest.y + normal.y * (band_w + SPILL_RUN),
+            );
+            mods.push(Box::new(CapsuleMod::new(
+                format!("spill:{spec_i}:{}", c.lip),
+                a,
+                b,
+                radius,
+                ModOp::Subtract,
+            )));
+        }
+    }
+    mods
 }
 
 #[cfg(test)]
@@ -452,5 +571,68 @@ mod tests {
             "the channel stays open"
         );
         let _ = (surf, top, bot);
+    }
+
+    /// Cachoeira de parede: a anotação cola a face ao PÉ da banda (quando
+    /// ele desce abaixo do perfil), marca `wall` e devolve a cápsula de
+    /// spill no brow.
+    #[test]
+    fn test_wall_waterfalls_annotate_and_emit_spill() {
+        let mut grid = flat_grid();
+        let spec = RiverSpec {
+            path: vec![Vec2::new(-40.0, 0.0), Vec2::new(40.0, 0.0)],
+            width: 6.0,
+            depth: 2.0,
+            ..RiverSpec::default()
+        };
+        let mut body = carve_river(&mut grid, &spec, 0, &[]).expect("river");
+        // Queda no meio do rio (como o hint do pre-pass a produz) + tier
+        // cachoeira: 8 m de perfil, o pé da banda desce ABAIXO disso.
+        let mid = body.stations.len() / 2;
+        let top = body.surface_y[mid];
+        body.surface_y[mid + 1] = top - 8.0;
+        body.cascades.push(crate::terrain::water::CascadeInfo {
+            lip: mid,
+            base: mid + 1,
+            drop: 8.0,
+            waterfall: true,
+            wall: false,
+            top_y: top,
+            bot_y: top - 8.0,
+        });
+        // Banda de cliff a cruzar o rio a right angles no meio: crista
+        // sobre a estação central, topo 2 m acima da lâmina, pé 9 m abaixo.
+        let crest = body.stations[mid];
+        let band = CliffBand {
+            stations: vec![
+                Vec2::new(crest.x, crest.y - 20.0),
+                Vec2::new(crest.x, crest.y + 20.0),
+            ],
+            drop_normal: vec![Vec2::new(1.0, 0.0), Vec2::new(1.0, 0.0)],
+            top_y: vec![top + 2.0, top + 2.0],
+            bot_y: vec![top - 9.0, top - 9.0],
+            width: vec![5.0, 5.0],
+            arc: vec![0.0, 40.0],
+            columns: Vec::new(),
+            profile: CliffProfile::Vertical,
+            seed: 7,
+            toe_ground: vec![top - 9.0, top - 9.0],
+            talus_run: vec![0.0, 0.0],
+            talus: false,
+            talus_angle: 36.0,
+        };
+        let mut bodies = vec![body];
+        let specs = vec![(false, 0usize)];
+        let mods = wall_waterfalls(&[spec], &mut bodies, &specs, &[band]);
+        let c = &bodies[0].cascades[0];
+        assert!(c.wall, "annotated as a wall fall: {c:?}");
+        assert!(
+            (c.bot_y - (top - 9.0)).abs() < 1e-4,
+            "face bottom glued to the band toe: {} vs {}",
+            c.bot_y,
+            top - 9.0
+        );
+        assert!((c.drop - 9.0).abs() < 1e-4, "drop follows the face: {}", c.drop);
+        assert_eq!(mods.len(), 1, "one spill capsule for one fall");
     }
 }

@@ -593,7 +593,10 @@ mod tests {
         // `hero_controller`) acima do collider; a sonda tem de começar em ar.
         // Valores em jogo: GROUND_PROBE e a skin, à data deste teste.
         let probe_ok = GROUND_PROBE > 0.02 && GROUND_PROBE < 0.2;
-        assert!(probe_ok, "GROUND_PROBE={GROUND_PROBE} saiu da janela (skin, degrau)");
+        assert!(
+            probe_ok,
+            "GROUND_PROBE={GROUND_PROBE} saiu da janela (skin, degrau)"
+        );
     }
 
     #[test]
@@ -605,7 +608,10 @@ mod tests {
         // Um frame à velocidade terminal tem de caber num voxel de LOD 0 (1 m)
         // a 60 fps, senão o clamp não resolve nada.
         let frame_drop = TERMINAL_VELOCITY / 60.0;
-        assert!(frame_drop < 1.0, "queda de {frame_drop} m/frame salta o voxel");
+        assert!(
+            frame_drop < 1.0,
+            "queda de {frame_drop} m/frame salta o voxel"
+        );
         // Subir (salto) nunca é cortado — o apex está afinado contra GRAVITY.
         assert_eq!(clamp_fall_speed(0.0), 0.0);
         assert_eq!(clamp_fall_speed(1000.0), 1000.0);

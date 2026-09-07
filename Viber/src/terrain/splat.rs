@@ -184,7 +184,10 @@ impl Biome {
             Biome::Vale => {
                 ground[SLOT_GRASS] = 0.56;
                 ground[SLOT_VALE_GRASS] = 0.44;
-                (0.0, 0.0, 1.0, 0.0)
+                // 0.75: a 1.0 as manchas de terra/folhada liam-se como
+                // borrões escuros espalhados pelo vale inteiro (crítica do
+                // autor, 2026-09-07) — variedade sim, sardas não.
+                (0.0, 0.0, 0.75, 0.0)
             }
             Biome::Forest => {
                 ground[SLOT_FOREST_FLOOR] = 0.46;
@@ -344,6 +347,46 @@ pub struct SplatParams {
     pub texel: f32,
     /// Climas do chão. Vazio = o mundo todo é `Biome::Vale`.
     pub biomes: BiomeField,
+    /// Knobs ao vivo (`viber.debug.ground{...}`) — defaults = r7.
+    pub tuning: SplatTuning,
+}
+
+/// Live tuning of the ground noise layers — os knobs que o
+/// `viber.debug.ground{...}` move SEM rebuild (o rebake dos splats lê-os).
+/// Defaults = o comportamento de r7.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SplatTuning {
+    /// Escala sobre a `patchiness` do bioma (manchas de terra/folhada).
+    pub patchiness: f32,
+    /// Largura do ombro de cascalho abaixo da linha de rocha (slope units).
+    pub gravel_shoulder: f32,
+    /// Densidade das manchas de `dirt` (0 = off).
+    pub dirt_density: f32,
+    /// Densidade das manchas de `forest_floor` (0 = off).
+    pub forest_density: f32,
+    /// Banda de areia fora da linha de água (m; Some = sobrepõe
+    /// `shore-width`).
+    pub shore_width: Option<f32>,
+    /// Suavidade das REGIÕES relva-escura↔relva-clara (`n_region`): 0 =
+    /// banda fina de hoje (regiões contrastadas — as "manchas"), 1 =
+    /// tudo fundido num verde único. Default 0.
+    pub vale_soft: f32,
+}
+impl Default for SplatTuning {
+    fn default() -> Self {
+        Self {
+            // Defaults r7 (crítica "manchas no chão", 2026-09-07): variedade
+            // SUBTIL — os blobs de dois verdes e as manchas de terra/folhada
+            // cheias eram lidas como sujidade. `viber.debug.ground{...}`
+            // move tudo ao vivo (0..2 reintroduz a variedade cheia).
+            patchiness: 1.0,
+            gravel_shoulder: 0.05,
+            dirt_density: 0.6,
+            forest_density: 0.6,
+            shore_width: None,
+            vale_soft: 0.6,
+        }
+    }
 }
 
 impl Default for SplatParams {
@@ -354,6 +397,7 @@ impl Default for SplatParams {
             seed: 0,
             texel: 0.0,
             biomes: BiomeField::default(),
+            tuning: SplatTuning::default(),
         }
     }
 }
@@ -443,7 +487,11 @@ pub fn generate_splats(
     };
     let size = ((world / texel).round() as u32).clamp(16, 4096);
 
-    let shore = params.shore_width.max(0.5);
+    let shore = params
+        .tuning
+        .shore_width
+        .unwrap_or(params.shore_width)
+        .max(0.5);
     let water_boxes: Vec<(Bounds, &WaterBody)> = water
         .iter()
         .filter(|b| b.radius > 0.0 || !b.stations.is_empty())
@@ -606,24 +654,39 @@ pub fn weights_at(
     //
     // A banda de cascalho arrancava a 0.16 (≈33°) e cobria metade do mundo
     // assim que o terreno deixou de ser uma planície: agora é um ombro
-    // estreito, colado ao sopé da rocha.
-    let gravel = smoothstep(rock0 - 0.11, rock0 - 0.01, slope) * (1.0 - stone) * (1.0 - snow);
-    let patch = climate.patchiness;
-    let forest = smoothstep(0.57, 0.66, n_forest)
-        * smoothstep(0.52, 0.64, n_forest_region)
+    // estreito, colado ao sopé da rocha. (r7: o ombro antigo
+    // [rock0−0.11, rock0−0.01] apanhava TODA a meia-encosta dos morros
+    // proceduralmente ondulados e lia-se como manchas cinzentas — o cascalho
+    // é o colar DEBAIXO da pedra, não a encosta toda.) Largura ao vivo:
+    // `tuning.gravel_shoulder`.
+    let tuning = &ctx.params.tuning;
+    let gravel = smoothstep(
+        rock0 - tuning.gravel_shoulder,
+        rock0 - 0.005,
+        slope,
+    ) * (1.0 - stone)
+        * (1.0 - snow);
+    let patch = climate.patchiness * tuning.patchiness;
+    // Manchas mais RARAS (limiares subidos em r7): a 0.57–0.66 o fbm abria
+    // borriões escuros em toda a colina; a faixa estreita deixa só os
+    // núcleos das manchas e as bordas dissolve-em-relva.
+    let forest = smoothstep(0.60, 0.70, n_forest)
+        * smoothstep(0.55, 0.67, n_forest_region)
         * smoothstep(0.38, 0.28, slope)
         * (1.0 - snow)
         * (1.0 - sand_mask)
-        * patch;
-    let dirt = smoothstep(0.58, 0.66, n_dirt)
-        * smoothstep(0.55, 0.65, n_dirt_region)
+        * patch
+        * tuning.forest_density;
+    let dirt = smoothstep(0.62, 0.72, n_dirt)
+        * smoothstep(0.58, 0.68, n_dirt_region)
         // Piso do vale fica relva; terra nasce em altitude média (laderas
         // e transições) — em plano plano as fronteiras das regiões liam-se
         // como linhas artificiais.
         * smoothstep(0.10, 0.28, h)
         * (1.0 - snow)
         * (1.0 - sand_mask)
-        * patch;
+        * patch
+        * tuning.dirt_density;
 
     // ── Worn road shoulders (skipped underwater/over sand: road ribbons
     //    cross rivers on bridges only, but a drowned trail must not bleach
@@ -657,8 +720,11 @@ pub fn weights_at(
     //    sem depender dos props plantados por cima.
     let ground = (budget - rest_sum).max(0.0);
     // Dentro da paleta, o par relva/vale_grass ainda se reparte pelo ruído
-    // de região — senão o vale inteiro fica de um verde só.
-    let vale = smoothstep(0.44, 0.56, n_region);
+    // de região — senão o vale inteiro fica de um verde só. `vale_soft`
+    // (ao vivo) alarga a banda: 0 = regiões contrastadas de hoje, 1 = os
+    // dois verdes fundidos (as "manchas" desaparecem).
+    let vale_band = 0.06 + tuning.vale_soft.clamp(0.0, 1.0) * 0.94;
+    let vale = smoothstep(0.5 - vale_band * 0.5, 0.5 + vale_band * 0.5, n_region);
     let mut out = [0.0; LAYER_COUNT];
     let g_grass = climate.ground[SLOT_GRASS] + climate.ground[SLOT_VALE_GRASS];
     for (slot, weight) in climate.ground.iter().enumerate() {
@@ -888,29 +954,33 @@ pub fn splat_images(map: &SplatMap) -> [Image; 4] {
 /// a densidade do plano global 2048² de um mundo de 4 km).
 pub const CHUNK_SPLAT_TEXELS: u32 = 32;
 
-/// Baked splat of ONE chunk: the four pool slots it renders with plus the
-/// RGBA8 weight plane (`size²` texels, row-major, R = slot 0, …, A = slot 3,
-/// weights renormalized to sum 1).
+/// Baked splat of ONE chunk: the eight pool slots it renders with plus the
+/// TWO RGBA8 weight planes (`size²` texels each, row-major; plane 0 =
+/// slots 0–3 nos canais RGBA, plane 1 = slots 4–7, weights renormalized to
+/// sum 1 across BOTH planes).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChunkSplat {
-    pub slots: [usize; 4],
+    pub slots: [usize; 8],
     pub size: u32,
     pub rgba: Vec<u8>,
+    pub rgba2: Vec<u8>,
 }
 
 /// Bakes one chunk splat from a full weights grid (per-texel [`LAYER_COUNT`]
 /// weights) plus the per-slot aggregate — the two passes of
 /// [`generate_chunk_splats`] split so tests can drive a single chunk.
 ///
-/// `force_rock`/`force_bed` garantem que parede e leito sobrevivem à eleição
-/// top-4: um texel a 100% seixo num chunk de relva lê-se relva depois da
-/// renormalização — os dois overrides existem porque essas camadas são as
-/// que o olho apanha (sob água transparente, na parede a triplanar).
+/// `force_rock`/`force_bed`/`force_shore` garantem que parede, leito e a
+/// PRAIA DA MARGEM sobrevivem à eleição top-8: um texel a 100% seixo num
+/// chunk de relva lê-se relva depois da renormalização — os overrides
+/// existem porque essas camadas são as que o olho apanha (sob água
+/// transparente, na parede a triplanar, na linha de areia da praia).
 fn pack_chunk_splat(
     weights: &[[f32; LAYER_COUNT]],
     size: u32,
     force_rock: bool,
     force_bed: bool,
+    force_shore: bool,
 ) -> ChunkSplat {
     let mut sums = [0.0f32; LAYER_COUNT];
     for w in weights {
@@ -918,48 +988,67 @@ fn pack_chunk_splat(
             sums[slot] += weight;
         }
     }
-    // Top-4 by aggregate weight; order is descending so the dominant layer
-    // rides channel R (and the repointing falls back to it).
+    // Top-8 by aggregate weight; order is descending so the dominant layer
+    // rides channel R of plane 0 (and the repointing falls back to it).
     let mut slots: [usize; LAYER_COUNT] = core::array::from_fn(|i| i);
     slots.sort_by(|&a, &b| sums[b].total_cmp(&sums[a]));
-    let mut top: [usize; 4] = [slots[0], slots[1], slots[2], slots[3]];
-    // A chunk with cliff walls always carries the rock layer — the triplanar
-    // gate needs a texture to project (see `TerrainChunkParams::from_slots`).
-    if force_rock && !top.contains(&SLOT_MOUNTAIN_STONE) {
-        top[3] = SLOT_MOUNTAIN_STONE;
+    let mut selected: Vec<usize> = slots[..8].to_vec();
+    // Overrides entram do FIM da tabela (os picks de menor peso) — num chunk
+    // de gorge com lago ao pé rock/bed/sand coexistem em vez de um apagar o
+    // outro. Evict só picks NATURAIS: um slot forçado por um override
+    // anterior nunca é despejado por um seguinte.
+    let forced = [SLOT_MOUNTAIN_STONE, SLOT_RIVERBED, SLOT_SAND];
+    let wanted = [
+        (force_rock, SLOT_MOUNTAIN_STONE),
+        (force_bed, SLOT_RIVERBED),
+        (force_shore, SLOT_SAND),
+    ];
+    for (needed, slot) in wanted {
+        if needed && !selected.contains(&slot) {
+            if selected.len() >= 8 {
+                let pos = selected
+                    .iter()
+                    .rposition(|&s| !forced.contains(&s))
+                    .unwrap_or(selected.len() - 1);
+                selected.remove(pos);
+            }
+            selected.push(slot);
+        }
     }
-    // Rock e bed forçados entram do FIM da tabela (os dois picks de menor
-    // peso) — num chunk de gorge com lago ao pé os dois coexistem em vez
-    // de um apagar o outro.
-    if force_bed && !top.contains(&SLOT_RIVERBED) {
-        let pos = if force_rock && top[3] == SLOT_MOUNTAIN_STONE {
-            2
-        } else {
-            3
-        };
-        top[pos] = SLOT_RIVERBED;
-    }
+    let top: [usize; 8] = selected.try_into().expect("8 slots");
 
     let mut rgba = vec![0u8; (size * size * 4) as usize];
+    let mut rgba2 = vec![0u8; (size * size * 4) as usize];
     for (i, w) in weights.iter().enumerate() {
-        let picked = [w[top[0]], w[top[1]], w[top[2]], w[top[3]]];
+        let mut picked = [0.0f32; 8];
+        for (k, &slot) in top.iter().enumerate() {
+            picked[k] = w[slot];
+        }
         let total: f32 = picked.iter().sum();
         // Full fallback (a chunk outside every field): all weight on the
-        // dominant slot — the ground never renders unblended white.
+        // dominant slot of plane 0 — the ground never renders unblended
+        // white. A normalização é CONJUNTA aos 8 pesos: renormalizar cada
+        // plano por separado multiplicava texels de fronteira.
         let packed = if total < 1e-5 {
-            [1.0f32, 0.0, 0.0, 0.0]
+            [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         } else {
             picked.map(|weight| weight / total)
         };
         for (channel, &weight) in packed.iter().enumerate() {
             // 251 keeps the u8 sum (with rounding) ≤ 255.
-            rgba[i * 4 + channel] = (weight * 251.0).round().clamp(0.0, 251.0) as u8;
+            let byte = (weight * 251.0).round().clamp(0.0, 251.0) as u8;
+            if channel < 4 {
+                rgba[i * 4 + channel] = byte;
+            } else {
+                rgba2[i * 4 + channel - 4] = byte;
+            }
         }
     }
     ChunkSplat {
         slots: top,
         size,
         rgba,
+        rgba2,
     }
 }
 
@@ -981,7 +1070,11 @@ pub fn generate_chunk_splats(
     let world = grid.world_size();
     let size = CHUNK_SPLAT_TEXELS;
     let texel = chunk_edge / size as f32;
-    let shore = params.shore_width.max(0.5);
+    let shore = params
+        .tuning
+        .shore_width
+        .unwrap_or(params.shore_width)
+        .max(0.5);
     let water_boxes: Vec<(Bounds, &WaterBody)> = water
         .iter()
         .filter(|b| b.radius > 0.0 || !b.stations.is_empty())
@@ -1045,17 +1138,22 @@ pub fn generate_chunk_splats(
                 false
             });
             // Um texel a ≥25% seixo lê-se leito: o chunk tem de carregar a
-            // textura mesmo que o agregado do leito perca a eleição top-4.
+            // textura mesmo que o agregado do leito perca a eleição top-8.
             let has_bed = weights.iter().any(|w| w[SLOT_RIVERBED] >= 0.25);
-            out.push(pack_chunk_splat(&weights, size, has_core, has_bed));
+            // Idem para a PRAIA: a areia da margem perdia a eleição em
+            // chunks de relva e a praia quebrava em costuras retas de chunk.
+            let has_shore = weights.iter().any(|w| w[SLOT_SAND] >= 0.25);
+            out.push(pack_chunk_splat(&weights, size, has_core, has_bed, has_shore));
         }
     }
     out
 }
 
 /// One chunk's splat plane as a Bevy image (mip chain + linear/aniso via the
-/// shared patcher; ClampToEdge — UVs are 0..1 over the chunk).
-pub fn chunk_splat_image(splat: &ChunkSplat) -> Image {
+/// shared patcher; ClampToEdge — UVs are 0..1 over the chunk). `plane` 0/1:
+/// os canais RGBA do plano cobrem os slots 0–3 / 4–7 do [`ChunkSplat`].
+pub fn chunk_splat_plane_image(splat: &ChunkSplat, plane: usize) -> Image {
+    let rgba = if plane == 0 { &splat.rgba } else { &splat.rgba2 };
     let mut image = Image::new(
         Extent3d {
             width: splat.size,
@@ -1063,13 +1161,23 @@ pub fn chunk_splat_image(splat: &ChunkSplat) -> Image {
             depth_or_array_layers: 1,
         },
         bevy::render::render_resource::TextureDimension::D2,
-        splat.rgba.clone(),
-        TextureFormat::Rgba8Unorm,
+        rgba.clone(),
+        bevy::render::render_resource::TextureFormat::Rgba8Unorm,
         RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
     );
-    image.data = Some(splat.rgba.clone());
+    image.data = Some(rgba.clone());
     patch_image(&mut image, false);
     image
+}
+
+/// Plane 0 do splat de chunk (slots 0–3).
+pub fn chunk_splat_image(splat: &ChunkSplat) -> Image {
+    chunk_splat_plane_image(splat, 0)
+}
+
+/// Plane 1 do splat de chunk (slots 4–7).
+pub fn chunk_splat2_image(splat: &ChunkSplat) -> Image {
+    chunk_splat_plane_image(splat, 1)
 }
 
 #[cfg(test)]
@@ -1077,6 +1185,7 @@ mod tests {
     use super::*;
     use crate::terrain::brush::BrushGrid;
     use crate::terrain::heightmap::HeightMapU16;
+    use crate::terrain::water::LakeShape;
 
     /// Flat 64 m world with one deep lake and one river.
     struct World {
@@ -1130,6 +1239,7 @@ mod tests {
             seed: 7,
             texel: 1.0,
             biomes: BiomeField::default(),
+            tuning: SplatTuning::default(),
         }
     }
 
@@ -1356,6 +1466,7 @@ mod tests {
             carve_radius: 12.5,
             water_y: 40.0,
             mirror_reach: 1.0,
+            shape: LakeShape::default(),
             stations: Vec::new(),
             surface_y: Vec::new(),
             water_width: 0.0,
@@ -1453,7 +1564,7 @@ mod tests {
     /// pesos a somar ~1 por texel; chunks diferentes podem escolher slots
     /// diferentes (o ponto do material por chunk).
     #[test]
-    fn test_generate_chunk_splats_renormalizes_and_picks_top4() {
+    fn test_generate_chunk_splats_renormalizes_and_picks_top8() {
         let world = flat_world();
         let chunk_edge = 32.0; // flat_world é um mundo 64 m → 2×2 chunks
         let rows = 2;
@@ -1473,19 +1584,32 @@ mod tests {
                 splat.rgba.len(),
                 (CHUNK_SPLAT_TEXELS * CHUNK_SPLAT_TEXELS * 4) as usize
             );
+            assert_eq!(splat.rgba2.len(), splat.rgba.len());
+            assert_eq!(splat.slots.len(), 8);
             assert!(splat.slots.iter().all(|&s| s < LAYER_COUNT));
             assert!(splat.rgba.iter().all(|&v| v <= 251));
-            // Cada texel: os 4 pesos renormalizados somam ~1 (o clamp de 251
-            // por canal deixa a soma u8 abaixo de 255).
+            assert!(splat.rgba2.iter().all(|&v| v <= 251));
+            // Cada texel: os 8 pesos renormalizados (planos 0+1 SOMADOS)
+            // fecham ~1 — o clamp de 251 por canal deixa a soma u8 abaixo
+            // de 255. (Um plano sozinho pode ficar a 0: o peso do texel
+            // vive inteiro nos slots 4–7.)
             for i in 0..(splat.size * splat.size) as usize {
-                let sum: u16 = (0..4).map(|c| splat.rgba[i * 4 + c] as u16).sum();
+                let sum: u16 = (0..4)
+                    .map(|c| splat.rgba[i * 4 + c] as u16 + splat.rgba2[i * 4 + c] as u16)
+                    .sum();
                 assert!(sum >= 245, "texel {i} soma {sum} — pesos têm de fechar ~1");
             }
         }
-        // O chunk (0,0) contém o lago (-20,-10); o (1,1) é relva — areia ou
-        // leito só podem estar entre os slots do chunk com água.
+        // O chunk (0,0) contém o lago (-20,-10); o (1,1) é relva — a AREIA
+        // da margem é contrato forçado (costura de praia não pode quebrar
+        // entre chunks) e o leito também; o chunk seco fica nas relvas.
         let water_chunk = &splats[0]; // cz=0,cx=0 → canto -X/-Z
         let far_chunk = &splats[3]; // cz=1,cx=1 → canto +X/+Z
+        assert!(
+            water_chunk.slots.contains(&SLOT_SAND),
+            "chunk do lago deve carregar areia da margem: {:?}",
+            water_chunk.slots
+        );
         assert!(
             water_chunk.slots.contains(&SLOT_SAND) || water_chunk.slots.contains(&SLOT_RIVERBED),
             "chunk do lago deve carregar areia/leito: {:?}",
@@ -1500,5 +1624,7 @@ mod tests {
         let image = chunk_splat_image(&splats[0]);
         assert_eq!(image.width(), CHUNK_SPLAT_TEXELS);
         assert!(image.texture_descriptor.mip_level_count > 1, "mips baked");
+        let image2 = chunk_splat2_image(&splats[0]);
+        assert_eq!(image2.width(), CHUNK_SPLAT_TEXELS);
     }
 }

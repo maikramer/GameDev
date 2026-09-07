@@ -10,11 +10,11 @@ use viber::recipes;
 use viber::terrain::brush::BrushGrid;
 use viber::terrain::features::apply_features;
 use viber::terrain::heightmap::HeightMapU16;
+use viber::terrain::voxel::transvoxel_mesh::sliver_area2_floor;
 use viber::terrain::voxel::{
     Bounds3, ChunkClass, VOXEL_CHUNK_CELLS, VoxelChunkParams, VoxelField, VoxelMod,
     build_voxel_mesh,
 };
-use viber::terrain::voxel::transvoxel_mesh::sliver_area2_floor;
 use viber::xml;
 
 use std::path::Path;
@@ -60,8 +60,59 @@ fn carve(world_file: &str) -> (BrushGrid, VoxelField, viber::terrain::spec::Terr
     for arch in &pending.features.arches {
         mods.extend(arch.build(&grid));
     }
+    for bridge in &pending.features.bridges {
+        mods.extend(bridge.build(&grid));
+    }
+    // `<RockFeatures>` resolves against the carved grid and then builds like
+    // anything authored — same order the bootstrap uses.
+    for seeded in seed_rocks(&grid, &pending.features) {
+        mods.extend(seeded);
+    }
     let field = VoxelField::new(mods, spec.world_size, spec.chunk_size);
     (grid, field, spec)
+}
+
+/// Resolves every `<RockFeatures>` field the way the bootstrap does, and
+/// returns the mods each seeded feature builds.
+fn seed_rocks(
+    grid: &BrushGrid,
+    features: &viber::terrain::features::TerrainFeatures,
+) -> Vec<Vec<Box<dyn VoxelMod>>> {
+    let guards = viber::terrain::voxel::ScatterGuards::default();
+    let mut out = Vec::new();
+    for field in &features.rock_fields {
+        let got = field.resolve(grid, &guards);
+        for c in &got.caves {
+            out.push(c.build(grid));
+        }
+        for a in &got.arches {
+            out.push(a.build(grid));
+        }
+        for b in &got.bridges {
+            out.push(b.build(grid));
+        }
+    }
+    out
+}
+
+/// The seeded specs of the QA world's one `<RockFeatures>` field.
+fn qa_scatter() -> (BrushGrid, viber::terrain::voxel::ScatterResult) {
+    let (grid, _field, _spec) = carve("qa-pontes.xml");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("worlds")
+        .join("qa-pontes.xml");
+    let loaded = xml::include::load_world(&path).expect("world loads");
+    let world = recipes::parse_world(&loaded.root_attrs, &loaded.nodes).expect("world parses");
+    let mut pending = viber::recipes::spawn::PendingTerrain::default();
+    viber::recipes::spawn::collect_terrain(&world.entities, &mut pending);
+    let spec = pending
+        .features
+        .rock_fields
+        .first()
+        .expect("the QA world seeds rocks")
+        .clone();
+    let got = spec.resolve(&grid, &viber::terrain::voxel::ScatterGuards::default());
+    (grid, got)
 }
 
 #[test]
@@ -559,4 +610,403 @@ fn test_folded_cliff_walls_have_no_holes_and_bounded_flips() {
         "{total_flipped} backfacing triangles across the cliff walls — the \
          thin-sheet speckling regressed past its documented bound"
     );
+}
+
+// --------------------------------------------------------------- travessias
+
+/// Walks the deck of a `<Bridge>` and returns, per sampled point, the spans
+/// the column resolves to. A crossing you can use is one where the walker
+/// finds a solid slab with air under it.
+fn deck_spans(
+    grid: &BrushGrid,
+    field: &VoxelField,
+    from: bevy::math::Vec2,
+    to: bevy::math::Vec2,
+    samples: usize,
+) -> Vec<(f32, Vec<viber::terrain::voxel::Span>)> {
+    (0..=samples)
+        .map(|i| {
+            let t = i as f32 / samples as f32;
+            let p = from.lerp(to, t);
+            (t, field.column(grid, p.x, p.y))
+        })
+        .collect()
+}
+
+#[test]
+fn test_the_stone_bridge_puts_a_deck_over_the_river_with_air_under_it() {
+    let (grid, field, _spec) = carve("qa-pontes.xml");
+    // The middle third of the span: over the channel, clear of both banks.
+    let walk = deck_spans(
+        &grid,
+        &field,
+        bevy::math::Vec2::new(-14.0, 0.0),
+        bevy::math::Vec2::new(14.0, 0.0),
+        14,
+    );
+    let two_span = walk.iter().filter(|(_, s)| s.len() >= 2).count();
+    assert!(
+        two_span >= walk.len() / 2,
+        "over the channel most columns must be deck + bed, got {two_span} of {}",
+        walk.len()
+    );
+
+    // The deck is walkable from above and the water is reachable from below:
+    // `sample` (the top of the world) is the deck, `surface_below` from just
+    // under it is the river bed. That pair is the whole point of the feature.
+    let mid = bevy::math::Vec2::new(0.0, 0.0);
+    let top = field.surface_top(&grid, mid.x, mid.y);
+    let ground = grid.sample(mid.x, mid.y);
+    assert!(
+        top > ground + 1.0,
+        "deck at {top:.2} must stand clear of the bed at {ground:.2}"
+    );
+    let under = field
+        .surface_below(&grid, mid.x, mid.y, top - 2.5)
+        .expect("there is a river bed under the deck");
+    assert!(
+        under <= ground + 0.6,
+        "under the deck the walker lands on the bed ({under:.2}), not on the slab"
+    );
+    assert!(
+        top - under >= 2.0,
+        "headroom under the deck is {:.2} m, too low to pass",
+        top - under
+    );
+}
+
+#[test]
+fn test_the_stone_bridge_has_piers_between_its_arcades() {
+    let (grid, field, _spec) = carve("qa-pontes.xml");
+    // Three arcades over an 80 m deck: the openings are wide, the piers
+    // between them are narrow. Sampling the underside along the whole deck
+    // must find BOTH — all-solid means the arcades never cut, all-air means
+    // the spandrel never built.
+    let mut open = 0;
+    let mut solid = 0;
+    for i in 0..=80 {
+        let x = -40.0 + i as f32;
+        let ground = grid.sample(x, 0.0);
+        // A metre over the ground: inside a pier this is rock, inside an
+        // arcade it is air.
+        let p = Vec3::new(x, ground + 1.5, 0.0);
+        if field.density(&grid, p) < 0.0 {
+            solid += 1;
+        } else {
+            open += 1;
+        }
+    }
+    assert!(open > 20, "the arcades never opened ({open} air samples)");
+    assert!(solid > 5, "no masonry between the arcades ({solid} rock samples)");
+}
+
+#[test]
+fn test_the_natural_bridge_spans_without_a_single_pier() {
+    let (grid, field, _spec) = carve("qa-pontes.xml");
+    // The rock span crosses the same channel further north. Chaikin flattens
+    // the authored apex, so the deck rides close to the chord — sample that.
+    let walk = deck_spans(
+        &grid,
+        &field,
+        bevy::math::Vec2::new(-22.0, 62.0),
+        bevy::math::Vec2::new(6.0, 62.0),
+        12,
+    );
+    assert!(
+        walk.iter().all(|(_, s)| s.len() >= 2),
+        "a span with no piers must leave rock-then-air-then-bed everywhere: {:?}",
+        walk.iter().map(|(t, s)| (*t, s.len())).collect::<Vec<_>>()
+    );
+    // No pier: the air under the span is continuous, so every sample keeps a
+    // real gap between the arch band and the bed.
+    for (t, spans) in &walk {
+        let band = spans[0];
+        let bed = spans[1];
+        assert!(
+            band.bottom - bed.top >= 2.0,
+            "t={t:.2}: only {:.2} m of air under the span — that reads as a pier",
+            band.bottom - bed.top
+        );
+        // Authored 4 m thick: rock, not a paper slab.
+        assert!(
+            band.thickness() >= 2.0,
+            "t={t:.2}: rock span is only {:.2} m thick",
+            band.thickness()
+        );
+    }
+}
+
+#[test]
+fn test_a_bridge_ends_on_its_banks_instead_of_floating() {
+    let (grid, field, _spec) = carve("qa-pontes.xml");
+    // At both abutments the deck must meet the terrain: one span, no gap.
+    for x in [-40.0f32, 40.0] {
+        let spans = field.column(&grid, x, 0.0);
+        assert_eq!(
+            spans.len(),
+            1,
+            "abutment at x={x} left a gap between deck and bank: {spans:?}"
+        );
+    }
+}
+
+// ------------------------------------------------------ grutas com salas
+
+#[test]
+fn test_the_chamber_is_a_room_with_a_roof_over_it() {
+    let (grid, field, _spec) = carve("qa-pontes.xml");
+    // Six metres off the chamber's centre: still well inside the 9 m room,
+    // and clear of the shaft that opens its middle to the sky.
+    let (x, z) = (-70.0f32, -62.0f32);
+    let spans = field.column(&grid, x, z);
+    assert_eq!(
+        spans.len(),
+        2,
+        "inside the room the column is roof + floor, got {spans:?}"
+    );
+    let (roof, floor) = (spans[0], spans[1]);
+    assert!(
+        roof.bottom - floor.top >= 3.0,
+        "the room is only {:.2} m tall — that is a tunnel, not a hall",
+        roof.bottom - floor.top
+    );
+    // And there is real rock overhead, not a skin.
+    assert!(
+        roof.thickness() >= 1.0,
+        "the roof is {:.2} m thick",
+        roof.thickness()
+    );
+}
+
+#[test]
+fn test_the_shaft_opens_the_chamber_to_the_sky() {
+    let (grid, field, _spec) = carve("qa-pontes.xml");
+    // Straight down the chimney: no rock at all between the room and daylight,
+    // so the top of the world here is the chamber floor.
+    let (x, z) = (-76.0f32, -62.0f32);
+    let ground = grid.sample(x, z);
+    let top = field.surface_top(&grid, x, z);
+    assert!(
+        top < ground - 5.0,
+        "the shaft must cut through: surface {top:.2} vs ground {ground:.2}"
+    );
+    assert_eq!(
+        field.column(&grid, x, z).len(),
+        1,
+        "a chimney leaves one solid — everything above the floor is air"
+    );
+    // Two metres to the side the rock is back: the shaft is a shaft, not a
+    // crater.
+    assert!(
+        field.surface_top(&grid, x + 4.0, z) > ground - 2.0,
+        "the shaft ate the whole hillside"
+    );
+}
+
+#[test]
+fn test_the_cave_radius_profile_widens_into_the_gallery() {
+    use viber::terrain::paths::{chaikin_smooth, resample};
+    let (grid, field, _spec) = carve("qa-pontes.xml");
+    // `radius="2.5 5 3"`: the tube is narrowest at the mouths and widest in
+    // the middle. Walk the tunnel's own line (the same smoothing the build
+    // does) and measure the void, staying clear of the chamber at t ~ 0.5.
+    let authored = vec![
+        bevy::math::Vec2::new(-104.0, -84.0),
+        bevy::math::Vec2::new(-76.0, -62.0),
+        bevy::math::Vec2::new(-44.0, -52.0),
+    ];
+    let line = resample(&chaikin_smooth(&authored, 2, false), 4.0);
+    // Arc-length fractions, the same parametrisation the build uses: the
+    // stations are not evenly spaced once the authored end point is pinned.
+    let mut run = 0.0f32;
+    let mut arc = vec![0.0f32];
+    for pair in line.windows(2) {
+        run += pair[0].distance(pair[1]);
+        arc.push(run);
+    }
+    let ts: Vec<f32> = arc.iter().map(|d| d / run).collect();
+    let void_at = |i: usize| -> f32 {
+        let p = line[i];
+        let spans = field.column(&grid, p.x, p.y);
+        if spans.len() < 2 {
+            return 0.0;
+        }
+        spans[0].bottom - spans[1].top
+    };
+    let mut near_mouth = 0.0f32;
+    let mut toward_gallery = 0.0f32;
+    for (i, t) in ts.iter().enumerate() {
+        // Clear of the mouth ramp (t < 0.18) at one end and of the chamber at
+        // the other, so what is being compared is the tube's own radius.
+        if (0.20..0.28).contains(t) {
+            near_mouth = near_mouth.max(void_at(i));
+        } else if (0.38..0.46).contains(t) {
+            toward_gallery = toward_gallery.max(void_at(i));
+        }
+    }
+    assert!(near_mouth > 0.0, "the tunnel never opened near the mouth");
+    assert!(
+        toward_gallery > near_mouth + 1.0,
+        "the gallery ({toward_gallery:.2} m) must be clearly taller than the \
+         tunnel near the mouth ({near_mouth:.2} m)"
+    );
+}
+
+// --------------------------------------------------------- arcos e viadutos
+
+#[test]
+fn test_the_natural_arch_tilts_with_the_slope_instead_of_floating() {
+    let (grid, field, _spec) = carve("qa-pontes.xml");
+    // Mid-span of the rock band: air under it, ground below that.
+    let (x, z) = (70.0f32, -65.0f32);
+    let spans = field.column(&grid, x, z);
+    assert_eq!(spans.len(), 2, "band over ground, got {spans:?}");
+    let (band, ground) = (spans[0], spans[1]);
+    assert!(
+        band.bottom - ground.top >= 3.0,
+        "only {:.2} m of headroom under the arch",
+        band.bottom - ground.top
+    );
+    // Both legs are planted: sampling right at each foot finds a single solid
+    // reaching the ground, no floating stub.
+    for (fx, fz) in [(58.0f32, -72.0f32), (82.0, -58.0)] {
+        let at_foot = field.column(&grid, fx, fz);
+        assert_eq!(
+            at_foot.len(),
+            1,
+            "the foot at ({fx}, {fz}) is not on the ground: {at_foot:?}"
+        );
+    }
+}
+
+#[test]
+fn test_the_viaduct_repeats_its_opening_along_the_path() {
+    let (grid, field, _spec) = carve("qa-pontes.xml");
+    // `spans="4"` over a 48 m path: walking the line must pass under four
+    // separate bands, each with its own ground underneath.
+    let mut openings = 0;
+    let mut was_open = false;
+    for i in 0..=96 {
+        let t = i as f32 / 96.0;
+        let x = 66.0 + 48.0 * t;
+        let z = 18.0 + 8.0 * t;
+        let open = field.column(&grid, x, z).len() >= 2;
+        if open && !was_open {
+            openings += 1;
+        }
+        was_open = open;
+    }
+    assert_eq!(openings, 4, "expected four distinct openings, found {openings}");
+}
+
+// --------------------------------------------------------------- dispersão
+
+#[test]
+fn test_the_same_seed_seeds_the_same_rocks_twice() {
+    let (grid, first) = qa_scatter();
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("worlds")
+        .join("qa-pontes.xml");
+    let loaded = xml::include::load_world(&path).expect("world loads");
+    let world = recipes::parse_world(&loaded.root_attrs, &loaded.nodes).expect("world parses");
+    let mut pending = viber::recipes::spawn::PendingTerrain::default();
+    viber::recipes::spawn::collect_terrain(&world.entities, &mut pending);
+    let spec = pending.features.rock_fields[0].clone();
+    let second = spec.resolve(&grid, &viber::terrain::voxel::ScatterGuards::default());
+    assert!(!first.is_empty(), "the field seeded nothing at all");
+    assert_eq!(
+        first, second,
+        "the same seed over the same terrain must place the same rocks"
+    );
+
+    // A different seed moves them. Otherwise the seed is decorative.
+    let moved = viber::terrain::voxel::RockFeaturesSpec {
+        seed: spec.seed + 1,
+        ..spec.clone()
+    }
+    .resolve(&grid, &viber::terrain::voxel::ScatterGuards::default());
+    assert_ne!(first, moved, "changing the seed changed nothing");
+}
+
+#[test]
+fn test_seeded_rocks_stay_inside_the_region_and_respect_the_budget() {
+    let (_grid, got) = qa_scatter();
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("worlds")
+        .join("qa-pontes.xml");
+    let loaded = xml::include::load_world(&path).expect("world loads");
+    let world = recipes::parse_world(&loaded.root_attrs, &loaded.nodes).expect("world parses");
+    let mut pending = viber::recipes::spawn::PendingTerrain::default();
+    viber::recipes::spawn::collect_terrain(&world.entities, &mut pending);
+    let spec = &pending.features.rock_fields[0];
+
+    assert!(got.arches.len() <= spec.arches as usize);
+    assert!(got.caves.len() <= spec.caves as usize);
+    assert!(got.bridges.len() <= spec.bridges as usize);
+
+    // Anchors inside the region. A feature's own path reaches beyond it by
+    // design (an arch is wider than its site) — the seed point is what the
+    // region bounds.
+    let lo = spec.min.min(spec.max);
+    let hi = spec.min.max(spec.max);
+    let inside = |p: bevy::math::Vec2| {
+        p.x >= lo.x - 0.01 && p.x <= hi.x + 0.01 && p.y >= lo.y - 0.01 && p.y <= hi.y + 0.01
+    };
+    for cave in &got.caves {
+        assert!(inside(cave.path[0]), "cave mouth outside the region");
+    }
+    for bridge in &got.bridges {
+        assert!(inside(bridge.path[1]), "bridge centre outside the region");
+    }
+}
+
+#[test]
+fn test_seeded_rocks_keep_out_of_the_water() {
+    // The guards are the point: a rock span seeded into the middle of the
+    // river channel is worse than no span at all.
+    let (grid, _field, _spec) = carve("qa-pontes.xml");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("worlds")
+        .join("qa-pontes.xml");
+    let loaded = xml::include::load_world(&path).expect("world loads");
+    let world = recipes::parse_world(&loaded.root_attrs, &loaded.nodes).expect("world parses");
+    let mut pending = viber::recipes::spawn::PendingTerrain::default();
+    viber::recipes::spawn::collect_terrain(&world.entities, &mut pending);
+    // A field deliberately laid over the river, with the water guard armed.
+    let over_the_river = viber::terrain::voxel::RockFeaturesSpec {
+        min: bevy::math::Vec2::new(-40.0, -110.0),
+        max: bevy::math::Vec2::new(40.0, 90.0),
+        seed: 3,
+        arches: 8,
+        caves: 4,
+        spacing: 18.0,
+        min_slope: 5.0,
+        min_drop: 1.0,
+        ..viber::terrain::voxel::RockFeaturesSpec::default()
+    };
+    let mut carved = BrushGrid::from_height_map(
+        &HeightMapU16::procedural(&_spec, _spec.resolution.max(1) as usize),
+        _spec.world_size,
+        _spec.max_height,
+        _spec.height_smoothing,
+    )
+    .expect("grid builds");
+    let result = viber::terrain::features::apply_features(&mut carved, &pending.features);
+    let guards = viber::terrain::voxel::ScatterGuards {
+        water: &result.water,
+        roads: &result.roads,
+    };
+    let got = over_the_river.resolve(&grid, &guards);
+    assert!(!got.is_empty(), "nothing seeded — the test proves nothing");
+    for p in got
+        .arches
+        .iter()
+        .flat_map(|a| a.path.iter())
+        .chain(got.caves.iter().map(|c| &c.path[0]))
+    {
+        assert!(
+            !result.water.iter().any(|w| w.contains(*p)),
+            "a rock was seeded inside the water carve zone at {p:?}"
+        );
+    }
 }

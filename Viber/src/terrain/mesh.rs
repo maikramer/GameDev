@@ -247,5 +247,4 @@ mod tests {
         let cliff = tint_vertex_color(199.0, 0.0, 200.0, &tint);
         assert!(cliff[0] > cliff[1], "rock beats snow on a cliff: {cliff:?}");
     }
-
 }

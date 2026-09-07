@@ -51,15 +51,44 @@ pub struct ModIndex {
     mod_bounds: Vec<Bounds3>,
 }
 
+/// Finest bucket pitch worth building (meters). Below this the grid costs more
+/// to walk than the candidates it saves.
+const MIN_CELL_SIZE: f32 = 8.0;
+/// Cells per world edge the grid will not exceed, so the bucket array stays
+/// small on a 4 km world.
+const MAX_CELLS_PER_EDGE: f32 = 256.0;
+/// Below this many mods the caller's hint is kept: a world with three cliffs
+/// pays nothing for a coarse grid, and a fine one would be mostly empty.
+const REFINE_ABOVE_MODS: usize = 16;
+
+/// The bucket pitch actually used.
+///
+/// The caller hints the terrain chunk size, which is the right pitch for a
+/// world whose only mods are a couple of cliffs. It is the wrong one for a
+/// world with bridges: forty deck boxes land in one 64 m bucket, and
+/// [`super::field::VoxelField::density`] then AABB-tests all forty at every
+/// one of the ~39 k samples a LOD0 box takes. Refining the pitch is what
+/// keeps that list short — measured at ~3.5x on the bridge column of
+/// `worlds/qa-pontes.xml` (`tests/chunk_build_bench.rs`).
+fn resolve_cell_size(hint: f32, world_size: f32, mods: usize) -> f32 {
+    if mods < REFINE_ABOVE_MODS {
+        return hint;
+    }
+    let floor = (world_size.max(1.0) / MAX_CELLS_PER_EDGE).max(MIN_CELL_SIZE);
+    // Refine to the floor, but never coarsen a caller that already asked finer.
+    hint.min(floor)
+}
+
 impl ModIndex {
     /// Builds the index for `mods` over a world of `world_size` meters
     /// centred on the origin (the convention every other terrain module uses).
     pub fn build(mods: &[Box<dyn VoxelMod>], world_size: f32, cell_size: f32) -> Self {
-        let cell_size = if cell_size.is_finite() && cell_size > 0.0 {
+        let hint = if cell_size.is_finite() && cell_size > 0.0 {
             cell_size
         } else {
             DEFAULT_CELL_SIZE
         };
+        let cell_size = resolve_cell_size(hint, world_size, mods.len());
         let world_size = world_size.max(cell_size);
         let half = world_size * 0.5;
         // A world with no mods allocates nothing at all. Every query early-outs

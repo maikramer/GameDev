@@ -25,8 +25,8 @@
 use bevy::math::{Vec2, Vec3};
 use transvoxel::prelude::*;
 use transvoxel::structs::grid_point::GridPoint;
-use transvoxel::traits::data_field::DataField;
 use transvoxel::structs::vertex_index::VertexIndex;
+use transvoxel::traits::data_field::DataField;
 use transvoxel::traits::mesh_builder::MeshBuilder;
 
 use super::super::mesh::{ChunkMeshData, TintParams, tint_vertex_color};
@@ -208,12 +208,8 @@ impl MeshBuilder<f32, f32> for ChunkMeshBuilder<'_> {
         // superfícies lerem como uma só. Com o blend de layers o R passa a ser
         // wall-space (dado que o fragment lê) e o A o fator de cliff, tal como
         // `build_chunk_mesh` faz.
-        let mut color = tint_vertex_color(
-            world.y,
-            normal.y,
-            self.params.max_height,
-            &self.params.tint,
-        );
+        let mut color =
+            tint_vertex_color(world.y, normal.y, self.params.max_height, &self.params.tint);
         if self.params.uses_layer_material {
             color[0] = WALL_NEUTRAL;
             color[3] = 1.0;
@@ -270,8 +266,7 @@ impl<'a> LatticeField<'a> {
         for iz in 0..pts {
             for iy in 0..pts {
                 for ix in 0..pts {
-                    let p = base
-                        + Vec3::new(ix as f32 * cell, iy as f32 * cell, iz as f32 * cell);
+                    let p = base + Vec3::new(ix as f32 * cell, iy as f32 * cell, iz as f32 * cell);
                     samples.push(-(density)(p));
                 }
             }
@@ -425,10 +420,16 @@ mod tests {
             );
         }
         for n in &data.normals {
-            assert!(n[1] > 0.99, "normal do chão tem de apontar para cima: {n:?}");
+            assert!(
+                n[1] > 0.99,
+                "normal do chão tem de apontar para cima: {n:?}"
+            );
         }
         for i in &data.indices {
-            assert!((*i as usize) < data.positions.len(), "índice fora do buffer");
+            assert!(
+                (*i as usize) < data.positions.len(),
+                "índice fora do buffer"
+            );
         }
     }
 

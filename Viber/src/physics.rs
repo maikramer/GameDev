@@ -302,8 +302,7 @@ impl bevy::app::Plugin for PhysicsPlugin {
                     // as novas no mesmo frame, e sem esta ordem o streaming
                     // via a grelha do frame anterior — um ou mais frames sem
                     // chão debaixo do herói a cada troca de LOD.
-                    stream_voxel_colliders
-                        .after(crate::terrain::plugin::TerrainSet::Columns),
+                    stream_voxel_colliders.after(crate::terrain::plugin::TerrainSet::Columns),
                 ),
             );
         if self.debug {
@@ -1053,7 +1052,8 @@ impl ColumnColliderBake {
         self.vertices
             .extend(data.positions.iter().map(|p| origin + Vec3::from(*p)));
         for tri in data.indices.chunks_exact(3) {
-            self.indices.push([tri[0] + base, tri[1] + base, tri[2] + base]);
+            self.indices
+                .push([tri[0] + base, tri[1] + base, tri[2] + base]);
         }
     }
 
@@ -1064,9 +1064,11 @@ impl ColumnColliderBake {
             return;
         };
         let base = self.vertices.len() as u32;
-        self.vertices.extend(vertices.into_iter().map(|p| origin + p));
+        self.vertices
+            .extend(vertices.into_iter().map(|p| origin + p));
         for tri in indices {
-            self.indices.push([tri[0] + base, tri[1] + base, tri[2] + base]);
+            self.indices
+                .push([tri[0] + base, tri[1] + base, tri[2] + base]);
         }
     }
 
@@ -1196,12 +1198,7 @@ mod terrain_collider_tests {
     /// Dois triângulos formando um quadrado unitário a y=5, origin-relative.
     fn quad_mesh_data(y: f32) -> ChunkMeshData {
         ChunkMeshData {
-            positions: vec![
-                [0.0, y, 0.0],
-                [1.0, y, 0.0],
-                [1.0, y, 1.0],
-                [0.0, y, 1.0],
-            ],
+            positions: vec![[0.0, y, 0.0], [1.0, y, 0.0], [1.0, y, 1.0], [0.0, y, 1.0]],
             normals: vec![[0.0, 1.0, 0.0]; 4],
             uvs: vec![[0.0, 0.0]; 4],
             colors: Vec::new(),
@@ -1229,7 +1226,10 @@ mod terrain_collider_tests {
     fn test_an_empty_bake_builds_nothing() {
         let bake = ColumnColliderBake::new();
         assert!(bake.is_empty());
-        assert!(bake.bake().is_none(), "coluna sem geometria não tem collider");
+        assert!(
+            bake.bake().is_none(),
+            "coluna sem geometria não tem collider"
+        );
     }
 
     #[test]
@@ -1256,10 +1256,12 @@ mod terrain_collider_tests {
         let (half, edge) = (128.0_f32, 64.0_f32);
         let coords = UVec2::new(2, 2); // XZ [0, 64]²
         // Dentro do quadrado: 0.
-        assert_eq!(column_xz_distance(Vec3::new(10.0, 500.0, 30.0), coords, half, edge), 0.0);
+        assert_eq!(
+            column_xz_distance(Vec3::new(10.0, 500.0, 30.0), coords, half, edge),
+            0.0
+        );
         // Fora: distância euclidiana ao rectângulo, Y ignorado.
         let d = column_xz_distance(Vec3::new(80.0, 0.0, 30.0), coords, half, edge);
         assert!((d - 16.0).abs() < 1e-4, "d={d}");
     }
 }
-

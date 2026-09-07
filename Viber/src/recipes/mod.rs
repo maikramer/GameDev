@@ -12,7 +12,7 @@ pub mod transform;
 use crate::physics::{PhysicsSpec, parse_body, parse_collider};
 use std::collections::BTreeMap;
 
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
 use bevy::math::Vec2;
 
 use crate::terrain::TerrainSpec;
@@ -21,7 +21,11 @@ use crate::terrain::decal::GroundDecalSpec;
 use crate::terrain::roads::{RoadNetworkSpec, RoadProfile, RoadSpec, SegmentSpec, WaySpec};
 use crate::terrain::spec::TerrainPadSpec;
 use crate::terrain::voxel::ArchSpec;
+use crate::terrain::voxel::arch::ArchProfile;
+use crate::terrain::voxel::BridgeSpec;
+use crate::terrain::voxel::BridgeStyle;
 use crate::terrain::voxel::CaveSpec;
+use crate::terrain::voxel::RockFeaturesSpec;
 use crate::terrain::water::{LakeSpec, RiverSpec};
 use crate::xml::{XmlNode, values};
 
@@ -46,6 +50,8 @@ pub const KNOWN_TAGS: &[&str] = &[
     "cliff",
     "cave",
     "arch",
+    "bridge",
+    "rockfeatures",
     "grounddecal",
     "road",
     "roadnetwork",
@@ -239,6 +245,19 @@ pub enum EntityKind {
     /// two solid spans.
     Arch {
         spec: ArchSpec,
+    },
+    /// `<Bridge>` — a crossing built as union solids in the voxel field
+    /// (`src/terrain/voxel/bridge.rs`), so the deck the mesher draws is the
+    /// deck the collider bakes. Unlike a `<Road profile="bridge">` ribbon,
+    /// you can stand on it.
+    Bridge {
+        spec: BridgeSpec,
+    },
+    /// `<RockFeatures>` — arches, caves and rock spans seeded over a region
+    /// (`src/terrain/voxel/scatter.rs`). Resolves into ordinary specs at
+    /// bootstrap, so nothing downstream sees a new kind of feature.
+    RockFeatures {
+        spec: RockFeaturesSpec,
     },
     /// `<Road>` — carved corridor + ribbon.
     Road {
@@ -897,6 +916,8 @@ fn parse_entity(node: &XmlNode, ctx: &mut ParseCtx) -> Result<Option<EntitySpec>
         "cliff" => finish_cliff(node, ctx).map(Some),
         "cave" => finish_cave(node, ctx).map(Some),
         "arch" => finish_arch(node, ctx).map(Some),
+        "bridge" => finish_bridge(node, ctx).map(Some),
+        "rockfeatures" => finish_rock_features(node, ctx).map(Some),
         "road" => finish_road(node, ctx).map(Some),
         "roadnetwork" => finish_road_network(node, ctx).map(Some),
         "include" => bail!(
@@ -2648,6 +2669,12 @@ fn finish_river(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> {
             }
             "pool-spacing" => spec.pool_spacing = values::parse_f32(&value, &kctx)?.max(0.0),
             "cascades" => spec.cascades = values::parse_bool(&value, &kctx)?,
+            "waterfalls" => spec.waterfalls = values::parse_bool(&value, &kctx)?,
+            "waterfall-min-drop" => {
+                spec.waterfall_min_drop = values::parse_f32(&value, &kctx)?
+                    .clamp(crate::terrain::water::CASCADE_DROP, 20.0)
+            }
+            "waterfall-notch" => spec.waterfall_notch = values::parse_bool(&value, &kctx)?,
             "spring" => spec.spring = values::parse_bool(&value, &kctx)?,
             other => ctx
                 .warnings
@@ -2755,7 +2782,6 @@ fn finish_cliff(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> {
 /// solid in the voxel field, which is why there can be rock above you inside.
 fn finish_cave(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> {
     let (common, rest) = parse_common(node, ctx)?;
-    warn_children(node, ctx);
     let ctx_tag = format!("<{}>", node.tag);
     let off = terrain_offset(&common, node, ctx);
     let mut spec = CaveSpec {
@@ -2768,28 +2794,62 @@ fn finish_cave(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> {
             "path" => {
                 spec.path = offset_path(values::parse_vec2_list(&value, &kctx)?, off);
             }
-            "radius" => spec.radius = values::parse_f32(&value, &kctx)?,
+            "radius" => {
+                let radii = values::parse_f32_list(&value, &kctx)?;
+                if radii.is_empty() {
+                    bail!("{ctx_tag}: `radius` needs at least one number");
+                }
+                spec.radius = radii;
+            }
             "depth" => spec.depth = values::parse_f32(&value, &kctx)?,
             "open-ends" => spec.open_ends = values::parse_bool(&value, &kctx)?,
+            "mouth-flare" => spec.mouth_flare = values::parse_f32(&value, &kctx)?,
+            "mouth-fraction" => spec.mouth_fraction = values::parse_f32(&value, &kctx)?,
             other => ctx
                 .warnings
                 .push(format!("{ctx_tag}: ignored attribute `{other}`")),
         }
     }
+    // Rooms and chimneys hang off the tunnel, the way `<Island>` hangs off a
+    // `<Lake>`: repeated children, each one a solid of its own.
+    for child in &node.children {
+        if child.tag.eq_ignore_ascii_case("chamber") {
+            spec.chambers.push(parse_cave_chamber(child, off, ctx)?);
+        } else if child.tag.eq_ignore_ascii_case("shaft") {
+            spec.shafts.push(parse_cave_shaft(child, off, ctx)?);
+        } else {
+            ctx.warnings.push(format!(
+                "{ctx_tag}: ignored child <{}> (expected <Chamber> or <Shaft>)",
+                child.tag
+            ));
+        }
+    }
     if spec.path.len() < 2 {
         bail!("{ctx_tag}: a cave needs a `path` with at least 2 points (x z pairs)");
     }
-    if spec.radius <= 0.0 || !spec.radius.is_finite() {
-        bail!("{ctx_tag}: radius must be > 0 (got {r})", r = spec.radius);
+    let (r_min, r_max) = (spec.radius_min(), spec.radius_max());
+    if r_min <= 0.0 || !r_min.is_finite() || !r_max.is_finite() {
+        bail!("{ctx_tag}: radius must be > 0 (got {r_min})");
+    }
+    if spec.mouth_flare <= 0.0 || !spec.mouth_flare.is_finite() {
+        bail!(
+            "{ctx_tag}: mouth-flare must be > 0 (got {f})",
+            f = spec.mouth_flare
+        );
+    }
+    if spec.mouth_fraction <= 0.0 || spec.mouth_fraction > 0.5 {
+        bail!(
+            "{ctx_tag}: mouth-fraction must be in (0, 0.5] (got {f})",
+            f = spec.mouth_fraction
+        );
     }
     // A tunnel shallower than its own radius is a trench, not a cave: it would
     // breach the surface along its whole length and leave no roof.
-    if spec.depth < spec.radius {
+    if spec.depth < r_max {
         ctx.warnings.push(format!(
-            "{ctx_tag}: depth {d} is under the radius {r} — the tunnel breaches the surface along \
-             its length instead of having a roof",
-            d = spec.depth,
-            r = spec.radius
+            "{ctx_tag}: depth {d} is under the radius {r_max} — the tunnel breaches the surface \
+             along its length instead of having a roof",
+            d = spec.depth
         ));
     }
     Ok(EntitySpec {
@@ -2802,6 +2862,75 @@ fn finish_cave(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> {
         kind: EntityKind::Cave { spec },
         children: Vec::new(),
     })
+}
+
+/// `<Chamber>` inside a `<Cave>` — a room hollowed out on the tunnel's line.
+fn parse_cave_chamber(
+    node: &XmlNode,
+    off: Vec2,
+    ctx: &mut ParseCtx,
+) -> Result<crate::terrain::voxel::cave::CaveChamberSpec> {
+    let mut spec = crate::terrain::voxel::cave::CaveChamberSpec::default();
+    let mut authored_at = false;
+    for (key, value) in &node.attrs {
+        let key = key.to_ascii_lowercase();
+        let kctx = format!("<Chamber> {key}");
+        match key.as_str() {
+            "name" => spec.name = Some(value.clone()),
+            "at" => {
+                spec.at = offset_point(values::parse_vec2(value, &kctx)?, off);
+                authored_at = true;
+            }
+            "radius" => spec.radius = values::parse_f32(value, &kctx)?,
+            "height" => spec.height = values::parse_f32(value, &kctx)?,
+            "depth" => spec.depth = Some(values::parse_f32(value, &kctx)?),
+            other => ctx
+                .warnings
+                .push(format!("<Chamber>: ignored attribute `{other}`")),
+        }
+    }
+    if !authored_at {
+        bail!("<Chamber>: `at` with an \"x z\" position is required");
+    }
+    for (key, size) in [("radius", spec.radius), ("height", spec.height)] {
+        if size <= 0.0 || !size.is_finite() {
+            bail!("<Chamber>: {key} must be > 0 (got {size})");
+        }
+    }
+    Ok(spec)
+}
+
+/// `<Shaft>` inside a `<Cave>` — a chimney from the tunnel up to daylight.
+fn parse_cave_shaft(
+    node: &XmlNode,
+    off: Vec2,
+    ctx: &mut ParseCtx,
+) -> Result<crate::terrain::voxel::cave::CaveShaftSpec> {
+    let mut spec = crate::terrain::voxel::cave::CaveShaftSpec::default();
+    let mut authored_at = false;
+    for (key, value) in &node.attrs {
+        let key = key.to_ascii_lowercase();
+        let kctx = format!("<Shaft> {key}");
+        match key.as_str() {
+            "name" => spec.name = Some(value.clone()),
+            "at" => {
+                spec.at = offset_point(values::parse_vec2(value, &kctx)?, off);
+                authored_at = true;
+            }
+            "radius" => spec.radius = values::parse_f32(value, &kctx)?,
+            "depth" => spec.depth = Some(values::parse_f32(value, &kctx)?),
+            other => ctx
+                .warnings
+                .push(format!("<Shaft>: ignored attribute `{other}`")),
+        }
+    }
+    if !authored_at {
+        bail!("<Shaft>: `at` with an \"x z\" position is required");
+    }
+    if spec.radius <= 0.0 || !spec.radius.is_finite() {
+        bail!("<Shaft>: radius must be > 0 (got {r})", r = spec.radius);
+    }
+    Ok(spec)
 }
 
 /// `<Arch>` — a free-standing rock portal (`src/terrain/voxel/arch.rs`).
@@ -2827,28 +2956,58 @@ fn finish_arch(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> {
                 spec.at = offset_point(values::parse_vec2(&value, &kctx)?, off);
                 authored_at = true;
             }
-            "width" | "span" => spec.span = values::parse_f32(&value, &kctx)?,
+            "path" => spec.path = offset_path(values::parse_vec2_list(&value, &kctx)?, off),
+            "width" | "span" => spec.span = Some(values::parse_f32(&value, &kctx)?),
             "height" => spec.height = values::parse_f32(&value, &kctx)?,
             "thickness" => spec.thickness = values::parse_f32(&value, &kctx)?,
             "depth" => spec.depth = values::parse_f32(&value, &kctx)?,
             "yaw" => spec.yaw = values::parse_f32(&value, &kctx)?,
+            "spans" => spec.spans = values::parse_u32(&value, &kctx)?,
+            "profile" => {
+                spec.profile = ArchProfile::parse(&value).ok_or_else(|| {
+                    anyhow!(
+                        "{kctx}: unknown profile `{value}` (expected one of: {})",
+                        ArchProfile::NAMES
+                    )
+                })?
+            }
             other => ctx
                 .warnings
                 .push(format!("{ctx_tag}: ignored attribute `{other}`")),
         }
     }
-    if !authored_at {
-        bail!("{ctx_tag}: `at` with an \"x z\" position is required");
+    let has_path = spec.path.len() >= 2;
+    if authored_at && has_path {
+        bail!("{ctx_tag}: use either `at` (one portal) or `path` (feet on their own ground), not both");
     }
-    for (key, size) in [("width", spec.span), ("height", spec.height)] {
+    if !authored_at && !has_path {
+        bail!("{ctx_tag}: needs `at` with an \"x z\" position, or a `path` of at least 2 points");
+    }
+    if !spec.path.is_empty() && !has_path {
+        bail!("{ctx_tag}: a `path` needs at least 2 points (x z pairs)");
+    }
+    if let Some(span) = spec.span {
+        if span <= 0.0 || !span.is_finite() {
+            bail!("{ctx_tag}: width must be > 0 (got {span})");
+        }
+    }
+    for (key, size) in [
+        ("height", spec.height),
+        ("thickness", spec.thickness),
+        ("depth", spec.depth),
+    ] {
         if size <= 0.0 || !size.is_finite() {
             bail!("{ctx_tag}: {key} must be > 0 (got {size})");
         }
     }
-    for (key, size) in [("thickness", spec.thickness), ("depth", spec.depth)] {
-        if size <= 0.0 || !size.is_finite() {
-            bail!("{ctx_tag}: {key} must be > 0 (got {size})");
-        }
+    if spec.spans == 0 {
+        bail!("{ctx_tag}: spans must be >= 1");
+    }
+    if spec.spans > 1 && !has_path {
+        bail!("{ctx_tag}: `spans` needs a `path` to spread the openings along");
+    }
+    if !spec.yaw.is_finite() {
+        bail!("{ctx_tag}: yaw must be a finite number");
     }
     Ok(EntitySpec {
         name: common.name,
@@ -2858,6 +3017,189 @@ fn finish_arch(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> {
         physics: common.physics,
         destructible: common.destructible,
         kind: EntityKind::Arch { spec },
+        children: Vec::new(),
+    })
+}
+
+/// `<Bridge>` — a crossing you can walk on (`src/terrain/voxel/bridge.rs`).
+///
+/// The volumetric counterpart of `<Road profile="bridge">`: that one draws a
+/// ribbon and nothing more, this one puts the deck in the voxel field, where
+/// the column trimesh picks it up as collider for free.
+fn finish_bridge(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> {
+    let (common, rest) = parse_common(node, ctx)?;
+    warn_children(node, ctx);
+    let ctx_tag = format!("<{}>", node.tag);
+    let off = terrain_offset(&common, node, ctx);
+    let mut spec = BridgeSpec {
+        name: common.name.clone(),
+        ..BridgeSpec::default()
+    };
+    for (key, value) in rest {
+        let kctx = format!("{ctx_tag} {key}");
+        match key.as_str() {
+            "path" => spec.path = offset_path(values::parse_vec2_list(&value, &kctx)?, off),
+            "width" => spec.width = values::parse_f32(&value, &kctx)?,
+            "rise" => spec.rise = values::parse_f32(&value, &kctx)?,
+            "thickness" => spec.thickness = values::parse_f32(&value, &kctx)?,
+            "spans" => spec.spans = Some(values::parse_u32(&value, &kctx)?),
+            "pier-width" => spec.pier_width = values::parse_f32(&value, &kctx)?,
+            "parapet" => spec.parapet = values::parse_f32(&value, &kctx)?,
+            "clearance" => spec.clearance = values::parse_f32(&value, &kctx)?,
+            "style" => {
+                spec.style = BridgeStyle::parse(&value).ok_or_else(|| {
+                    anyhow!(
+                        "{kctx}: unknown style `{value}` (expected one of: {})",
+                        BridgeStyle::NAMES
+                    )
+                })?
+            }
+            other => ctx
+                .warnings
+                .push(format!("{ctx_tag}: ignored attribute `{other}`")),
+        }
+    }
+    if spec.path.len() < 2 {
+        bail!("{ctx_tag}: a bridge needs a `path` with at least 2 points (x z pairs)");
+    }
+    for (key, size) in [("width", spec.width), ("thickness", spec.thickness)] {
+        if size <= 0.0 || !size.is_finite() {
+            bail!("{ctx_tag}: {key} must be > 0 (got {size})");
+        }
+    }
+    if !spec.rise.is_finite() {
+        bail!("{ctx_tag}: rise must be a finite number (got {r})", r = spec.rise);
+    }
+    if spec.spans == Some(0) {
+        bail!("{ctx_tag}: spans must be >= 1 (use style=\"natural\" for a bridge with no piers)");
+    }
+    if spec.pier_width <= 0.0 || !spec.pier_width.is_finite() {
+        bail!(
+            "{ctx_tag}: pier-width must be > 0 (got {w})",
+            w = spec.pier_width
+        );
+    }
+    // A slab thinner than two LOD0 cells vanishes at distance: the mesher has
+    // nothing to hang a surface on, so both the deck and its collider blink out
+    // as soon as the column coarsens. The default terrain cell is 1 m.
+    if spec.thickness < 2.0 {
+        ctx.warnings.push(format!(
+            "{ctx_tag}: thickness {t} is under two LOD0 cells — the deck thins out at distance; \
+             2 m or more keeps it solid at every level",
+            t = spec.thickness
+        ));
+    }
+    if spec.style == BridgeStyle::Natural && spec.spans.is_some() {
+        ctx.warnings.push(format!(
+            "{ctx_tag}: `spans` has no meaning for style=\"natural\" — a rock span has no arcades"
+        ));
+    }
+    Ok(EntitySpec {
+        name: common.name,
+        tag: common.tag,
+        script: common.script,
+        transform: common.transform,
+        physics: common.physics,
+        destructible: common.destructible,
+        kind: EntityKind::Bridge { spec },
+        children: Vec::new(),
+    })
+}
+
+/// `<RockFeatures>` — seeds arches, caves and rock spans over a region
+/// (`src/terrain/voxel/scatter.rs`).
+///
+/// The tag does not describe a solid: it describes where to look for sites.
+/// At bootstrap it resolves into ordinary `<Arch>`/`<Cave>`/`<Bridge>` specs
+/// against the carved terrain, which is why `analyze` can only report the
+/// field and not its contents — the heightfield does not exist yet at parse
+/// time.
+fn finish_rock_features(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec> {
+    let (common, rest) = parse_common(node, ctx)?;
+    warn_children(node, ctx);
+    let ctx_tag = format!("<{}>", node.tag);
+    let off = terrain_offset(&common, node, ctx);
+    let mut spec = RockFeaturesSpec {
+        name: common.name.clone(),
+        ..RockFeaturesSpec::default()
+    };
+    let mut authored_region = false;
+    for (key, value) in rest {
+        let kctx = format!("{ctx_tag} {key}");
+        match key.as_str() {
+            "region" => {
+                let corners = values::parse_vec2_list(&value, &kctx)?;
+                if corners.len() != 2 {
+                    bail!(
+                        "{ctx_tag}: `region` needs two corners (\"minX minZ maxX maxZ\"), got {} \
+                         point(s)",
+                        corners.len()
+                    );
+                }
+                spec.min = offset_point(corners[0], off);
+                spec.max = offset_point(corners[1], off);
+                authored_region = true;
+            }
+            "seed" => spec.seed = values::parse_u64(&value, &kctx)?,
+            "arches" => spec.arches = values::parse_u32(&value, &kctx)?,
+            "caves" => spec.caves = values::parse_u32(&value, &kctx)?,
+            "bridges" => spec.bridges = values::parse_u32(&value, &kctx)?,
+            "min-slope" => spec.min_slope = values::parse_f32(&value, &kctx)?,
+            "max-slope" => spec.max_slope = values::parse_f32(&value, &kctx)?,
+            "min-drop" => spec.min_drop = values::parse_f32(&value, &kctx)?,
+            "spacing" => spec.spacing = values::parse_f32(&value, &kctx)?,
+            "clear-of-roads" => spec.clear_of_roads = values::parse_f32(&value, &kctx)?,
+            other => ctx
+                .warnings
+                .push(format!("{ctx_tag}: ignored attribute `{other}`")),
+        }
+    }
+    if !authored_region {
+        bail!("{ctx_tag}: `region` with \"minX minZ maxX maxZ\" is required");
+    }
+    if spec.min.x == spec.max.x || spec.min.y == spec.max.y {
+        bail!(
+            "{ctx_tag}: `region` has no area ({:?} to {:?})",
+            spec.min,
+            spec.max
+        );
+    }
+    if spec.spacing <= 0.0 || !spec.spacing.is_finite() {
+        bail!("{ctx_tag}: spacing must be > 0 (got {s})", s = spec.spacing);
+    }
+    if spec.min_slope > spec.max_slope {
+        bail!(
+            "{ctx_tag}: min-slope {lo} is above max-slope {hi} — no site can pass",
+            lo = spec.min_slope,
+            hi = spec.max_slope
+        );
+    }
+    if spec.requested() == 0 {
+        ctx.warnings.push(format!(
+            "{ctx_tag}: asks for no features — set `arches`, `caves` or `bridges`"
+        ));
+    }
+    // The lattice has one candidate per `spacing` cell, and seeded features
+    // keep a `spacing` gap from each other, so a region that small cannot
+    // hold what was asked for.
+    let cells = (((spec.max.x - spec.min.x) / spec.spacing).abs().floor()
+        * ((spec.max.y - spec.min.y) / spec.spacing).abs().floor()) as u32;
+    if spec.requested() > cells.max(1) {
+        ctx.warnings.push(format!(
+            "{ctx_tag}: asks for {n} features but the region only holds ~{cells} sites at \
+             spacing {s} — expect fewer",
+            n = spec.requested(),
+            s = spec.spacing
+        ));
+    }
+    Ok(EntitySpec {
+        name: common.name,
+        tag: common.tag,
+        script: common.script,
+        transform: common.transform,
+        physics: common.physics,
+        destructible: common.destructible,
+        kind: EntityKind::RockFeatures { spec },
         children: Vec::new(),
     })
 }
@@ -3142,6 +3484,11 @@ pub struct WorldSummary {
     pub caves: usize,
     /// `<Arch>` free-standing rock portals.
     pub arches: usize,
+    /// `<Bridge>` volumetric crossings.
+    pub bridges: usize,
+    /// `<RockFeatures>` seeding fields (not the features they resolve into —
+    /// that happens at bootstrap, which `analyze` never runs).
+    pub rock_fields: usize,
     pub roads: usize,
     pub road_networks: usize,
     /// `<GroundDecal>` draped ground patches.
@@ -3202,6 +3549,8 @@ impl WorldSummary {
             + self.cliffs
             + self.caves
             + self.arches
+            + self.bridges
+            + self.rock_fields
             + self.roads
             + self.road_networks
             + self.ground_decals
@@ -3277,6 +3626,8 @@ pub fn summarize(world: &ParsedWorld) -> WorldSummary {
                 EntityKind::Cliff { .. } => out.cliffs += 1,
                 EntityKind::Cave { .. } => out.caves += 1,
                 EntityKind::Arch { .. } => out.arches += 1,
+                EntityKind::Bridge { .. } => out.bridges += 1,
+                EntityKind::RockFeatures { .. } => out.rock_fields += 1,
                 EntityKind::Road { .. } => out.roads += 1,
                 EntityKind::RoadNetwork { .. } => out.road_networks += 1,
                 EntityKind::GltfScene { .. } => out.gltf_scenes += 1,
@@ -4160,6 +4511,14 @@ mod tests {
                     "Cave",
                     &[("path", "-20 0 20 0"), ("radius", "3"), ("depth", "10")],
                 ),
+                node(
+                    "Bridge",
+                    &[("path", "-20 8 20 8"), ("width", "6"), ("thickness", "2")],
+                ),
+                node(
+                    "RockFeatures",
+                    &[("region", "-50 -50 50 50"), ("arches", "2")],
+                ),
                 node("Road", &[]),
                 node("RoadNetwork", &[]),
                 node("GltfScene", &[("url", "/assets/meshes/x.glb")]),
@@ -4206,6 +4565,8 @@ mod tests {
             WorldSummary {
                 caves: 1,
                 arches: 0,
+                bridges: 1,
+                rock_fields: 1,
                 groups: 1,
                 primitives: 1,
                 point_lights: 1,
@@ -4239,7 +4600,7 @@ mod tests {
             }
         );
         assert_eq!(summary.entities(), 8);
-        assert_eq!(summary.ground_features(), 7);
+        assert_eq!(summary.ground_features(), 9);
     }
 
     // ----- terrain feature parsing -----
@@ -4432,6 +4793,9 @@ mod tests {
                 ("bank", "gorge"),
                 ("pool-spacing", "14"),
                 ("cascades", "0"),
+                ("waterfalls", "0"),
+                ("waterfall-min-drop", "5"),
+                ("waterfall-notch", "0"),
                 ("spring", "1"),
             ],
         ))
@@ -4444,6 +4808,9 @@ mod tests {
         assert!(spec.bank.is_voxel());
         assert_eq!(spec.pool_spacing, 14.0);
         assert!(!spec.cascades);
+        assert!(!spec.waterfalls);
+        assert_eq!(spec.waterfall_min_drop, 5.0);
+        assert!(!spec.waterfall_notch);
         assert!(spec.spring);
 
         let (spec, _) = parse_one(&node(

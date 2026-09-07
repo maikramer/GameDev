@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use bevy::asset::LoadState;
-use bevy::audio::{AudioPlayer, PlaybackSettings, Volume};
+
 use bevy::gltf::Gltf;
 use bevy::light::NotShadowCaster;
 use bevy::math::primitives::{Capsule3d, Cuboid, Cylinder, Plane3d, Sphere};
@@ -18,7 +18,10 @@ use crate::terrain::features::TerrainFeatures;
 use crate::terrain::roads::{RoadNetworkSpec, RoadSpec, SegmentSpec, WaySpec};
 use crate::terrain::spec::TerrainPadSpec;
 use crate::terrain::voxel::ArchSpec;
+use crate::terrain::voxel::BridgeSpec;
 use crate::terrain::voxel::CaveSpec;
+use crate::terrain::voxel::RockFeaturesSpec;
+use crate::terrain::voxel::cave::{CaveChamberSpec, CaveShaftSpec};
 use crate::terrain::water::{LakeSpec, RiverSpec};
 
 /// Marker for `<OrbitCamera>`: keeps its offset from a named target.
@@ -133,6 +136,8 @@ fn is_ground_feature(kind: &EntityKind) -> bool {
             | EntityKind::Cliff { .. }
             | EntityKind::Cave { .. }
             | EntityKind::Arch { .. }
+            | EntityKind::Bridge { .. }
+            | EntityKind::RockFeatures { .. }
             | EntityKind::Road { .. }
             | EntityKind::RoadNetwork { .. }
             | EntityKind::GroundDecal { .. }
@@ -202,9 +207,40 @@ fn collect_walk(specs: &[EntitySpec], offset: Vec2, out: &mut PendingTerrain) {
                 });
             }
             EntityKind::Cave { spec: cave } => {
+                // Rooms and chimneys ride the same group offset as the tunnel;
+                // shifting only the path would leave them behind in the world.
                 out.features.caves.push(CaveSpec {
                     path: cave.path.iter().map(|p| *p + offset).collect(),
+                    chambers: cave
+                        .chambers
+                        .iter()
+                        .map(|c| CaveChamberSpec {
+                            at: c.at + offset,
+                            ..c.clone()
+                        })
+                        .collect(),
+                    shafts: cave
+                        .shafts
+                        .iter()
+                        .map(|c| CaveShaftSpec {
+                            at: c.at + offset,
+                            ..c.clone()
+                        })
+                        .collect(),
                     ..cave.clone()
+                });
+            }
+            EntityKind::RockFeatures { spec: rocks } => {
+                out.features.rock_fields.push(RockFeaturesSpec {
+                    min: rocks.min + offset,
+                    max: rocks.max + offset,
+                    ..rocks.clone()
+                });
+            }
+            EntityKind::Bridge { spec: bridge } => {
+                out.features.bridges.push(BridgeSpec {
+                    path: bridge.path.iter().map(|p| *p + offset).collect(),
+                    ..bridge.clone()
                 });
             }
             EntityKind::Arch { spec: arch } => {
@@ -1072,14 +1108,18 @@ fn spawn_entity(
             }));
         }
         EntityKind::MusicLayer { layer, base_volume } => {
-            let url = format!("assets/audio/bgm/{layer}.ogg");
-            let handle = ctx.asset_server.load::<bevy::audio::AudioSource>(url);
+            // O playback é do backend kira — o `audio_loop_starter`
+            // (crate::music) arranca o loop no bus de música quando o
+            // componente pendente aparece; os buses do mixer aplicam-se ao
+            // vivo, no canal.
             entity.insert((
-                AudioPlayer(handle),
-                PlaybackSettings::LOOP.with_volume(Volume::Linear(0.0)),
                 crate::music::MusicLayerTag {
                     layer: layer.clone(),
                     base_volume: *base_volume,
+                },
+                crate::music::AudioLoopPending {
+                    url: format!("assets/audio/bgm/{layer}.ogg"),
+                    music: true,
                 },
             ));
         }
@@ -1138,6 +1178,8 @@ fn spawn_entity(
         | EntityKind::Cliff { .. }
         | EntityKind::Cave { .. }
         | EntityKind::Arch { .. }
+        | EntityKind::Bridge { .. }
+        | EntityKind::RockFeatures { .. }
         | EntityKind::Road { .. }
         | EntityKind::RoadNetwork { .. }
         | EntityKind::GroundDecal { .. }
