@@ -38,7 +38,9 @@ pub struct WorldBaseDir(pub Option<std::path::PathBuf>);
 /// Nome do ficheiro de save fallback (quando o mundo é desconhecido).
 pub const SAVE_FILENAME: &str = "simple-rpg.save.json";
 
-/// Caminho do save: `$HOME/.local/share/viber/<nome>` (fallback: cwd).
+/// Caminho do save: `~/.local/share/viber/<nome>` via [`dirs::home_dir`]
+/// (semântica `$HOME` exata — NÃO `XDG_DATA_HOME`, os saves históricos
+/// vivem aí; fallback: cwd).
 pub fn save_path() -> PathBuf {
     save_path_for(None)
 }
@@ -51,9 +53,9 @@ pub fn save_path_for(base_dir: Option<&std::path::Path>) -> PathBuf {
         .and_then(|dir| dir.file_name())
         .map(|world| format!("{}.save.json", world.to_string_lossy()))
         .unwrap_or_else(|| SAVE_FILENAME.to_string());
-    std::env::var_os("HOME")
+    dirs::home_dir()
         .map(|home| {
-            let dir = PathBuf::from(home).join(".local/share/viber");
+            let dir = home.join(".local/share/viber");
             let _ = std::fs::create_dir_all(&dir);
             dir.join(&name)
         })

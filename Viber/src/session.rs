@@ -107,13 +107,10 @@ impl SessionPaths {
     }
 }
 
-/// Raiz de cache: `XDG_CACHE_HOME` ou `~/.cache`.
+/// Raiz de cache: `XDG_CACHE_HOME` ou `~/.cache` ([`dirs::cache_dir`] —
+/// exatamente a resolução que vivia aqui à mão).
 fn cache_root() -> PathBuf {
-    if let Some(xdg) = std::env::var_os("XDG_CACHE_HOME") {
-        return PathBuf::from(xdg);
-    }
-    let home = std::env::var_os("HOME").unwrap_or_default();
-    PathBuf::from(home).join(".cache")
+    dirs::cache_dir().unwrap_or_else(|| PathBuf::from(".cache"))
 }
 
 /// Hash FNV-1a 64 — determinístico ENTRE processos (o `DefaultHasher` de

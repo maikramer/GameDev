@@ -18,6 +18,7 @@ use bevy::render::render_resource::{TextureDimension, TextureFormat};
 
 use super::spec::TerrainSpec;
 use super::splat::{Biome, BiomeField, BiomeWedge};
+use crate::rng::splitmix64;
 
 /// Metadados que o próprio ficheiro `.ahgt` declara sobre o mundo que
 /// descreve.
@@ -367,41 +368,10 @@ fn normalized_to_u16(v: f32) -> u16 {
     (v.clamp(0.0, 1.0) * u16::MAX as f32).round() as u16
 }
 
-/// Converts an IEEE 754 binary16 value to `f32` (no external crate).
-///
-/// Handles normals, subnormals, infinities and NaN by bit-reshuffling into
-/// the 32-bit layout.
+/// Converts an IEEE 754 binary16 value to `f32` — via a crate (`half`) em
+/// vez do reshuffle manual de bits que vivia aqui.
 fn half_to_f32(half: u16) -> f32 {
-    let sign = (u32::from(half >> 15) & 0x1) << 31;
-    let exponent = u32::from(half >> 10) & 0x1F;
-    let mantissa = u32::from(half & 0x3FF);
-    let bits = match exponent {
-        0 if mantissa == 0 => sign, // ±0
-        0 => {
-            // Subnormal: normalize so the leading 1 lands on the implicit bit.
-            let mut m = mantissa;
-            let mut e = (127 - 15) + 1;
-            while m & 0x400 == 0 {
-                m <<= 1;
-                e -= 1;
-            }
-            m &= 0x3FF;
-            sign | (e << 23) | (m << 13)
-        }
-        0x1F => sign | (0xFF << 23) | (mantissa << 13), // inf / NaN
-        e => sign | ((e + 127 - 15) << 23) | (mantissa << 13),
-    };
-    f32::from_bits(bits)
-}
-
-/// Splitmix64 finalizer — the only "RNG" in the procedural path (pure math,
-/// no crate, fully deterministic across platforms).
-fn splitmix64(state: &mut u64) -> u64 {
-    *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-    let mut z = *state;
-    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-    z ^ (z >> 31)
+    half::f16::from_bits(half).to_f32()
 }
 
 /// Lattice value in `[0, 1)` for one integer noise cell — hash of (seed, x, z).
