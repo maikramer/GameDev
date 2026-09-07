@@ -34,7 +34,11 @@
        margem NE da lagoa (-190,-16 r=24) — o início antigo (-184,0)
        caía dentro da água. -->
     <Road path="-160 1.7 -172 8 -190 20 -214 48 -244 76 -260 92" width="4" flatten="0" texture-scale="6" edge-feather="1.1" edge-noise="0.7" end-feather-start="1.5" end-feather-end="3" texture-url="/assets/textures/swamp_mud/albedo.ktx2" normal-map-url="/assets/textures/swamp_mud/normal.ktx2" />
-    <Road path="-220 -18 -200 -44 -188 -52" width="4" flatten="0" texture-scale="6" edge-feather="1.0" edge-noise="0.7" end-feather-start="1.5" end-feather-end="3" texture-url="/assets/textures/swamp_mud/albedo.ktx2" normal-map-url="/assets/textures/swamp_mud/normal.ktx2" />
+    <!-- Ramo sul → barco naufragado (-184,-52). O traçado antigo cortava a
+       corda SW da lagoa e o ponto médio (-200,-44) mergulhava 2 m na lâmina
+       orgânica (-190,-16 r=24, ±28%); o novo mantém TODO o traçado (e as
+       cordas entre estações) a ≥32.8 m do centro — worst-case 30.7 m. -->
+    <Road path="-222 -28 -207 -48 -188 -52" width="4" flatten="0" texture-scale="6" edge-feather="1.0" edge-noise="0.7" end-feather-start="1.5" end-feather-end="3" texture-url="/assets/textures/swamp_mud/albedo.ktx2" normal-map-url="/assets/textures/swamp_mud/normal.ktx2" />
     <!-- ============================================================
        SUL — Picos Gelados
        ============================================================ -->
@@ -50,8 +54,11 @@
     <Road path="290 -4 480 -180 760 -420 1100 -640 1300 -690 1450 -706" width="4" flatten="0" texture-scale="6" edge-feather="1.1" edge-noise="0.7" end-feather-start="1.5" end-feather-end="3" texture-url="/assets/textures/desert_sand/albedo.ktx2" normal-map-url="/assets/textures/desert_sand/normal.ktx2" />
     <!-- Oeste → Clareira Paradisíaca (-540,30). -->
     <Road path="-292 12 -400 30 -470 28 -506 30" width="4" flatten="0" texture-scale="6" edge-feather="1.1" edge-noise="0.7" end-feather-start="1.5" end-feather-end="3" texture-url="/assets/textures/swamp_mud/albedo.ktx2" normal-map-url="/assets/textures/swamp_mud/normal.ktx2" />
-    <!-- Sul → Mirante da Caldeira (-605,-725). -->
-    <Road path="-12 -286 -160 -420 -380 -600 -520 -690 -590 -720" width="4" flatten="0" texture-scale="6" edge-feather="1.0" edge-noise="0.5" end-feather-start="1.5" end-feather-end="3" texture-url="/assets/textures/mountain_stone/albedo.ktx2" normal-map-url="/assets/textures/mountain_stone/normal.ktx2" />
+    <!-- Sul → Mirante da Caldeira (-605,-725). O via (-96,-308) desvia o
+       trilho da banda do cliff picos-horizonte (width 16 → folga de 11 m;
+       a diagonal antiga cortava o creste a ~1.5 m) atravessando a sela
+       entre picos-gargela-oeste e picos-horizonte. -->
+    <Road path="-12 -286 -96 -308 -160 -420 -380 -600 -520 -690 -590 -720" width="4" flatten="0" texture-scale="6" edge-feather="1.0" edge-noise="0.5" end-feather-start="1.5" end-feather-end="3" texture-url="/assets/textures/mountain_stone/albedo.ktx2" normal-map-url="/assets/textures/mountain_stone/normal.ktx2" />
   </Group>
   <!-- FIM paths.trails -->
 </world>

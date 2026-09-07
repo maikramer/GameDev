@@ -118,6 +118,7 @@ ENGINE_AUDIO = [
     # loops ambientes
     "assets/audio/sfx/world/water_lake.ogg",
     "assets/audio/sfx/world/water_flow.ogg",
+    "assets/audio/sfx/world/water_waterfall.ogg",
     "assets/audio/sfx/world/footsteps_grass.ogg",
     "assets/audio/sfx/world/fire_crackle.ogg",
     # BGM por convenção `assets/audio/bgm/<layer>.ogg`

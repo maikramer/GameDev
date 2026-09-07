@@ -2,15 +2,15 @@
      recua quando não (gesto BOTW). Valores ligados à engine via binds; os
      estados liga/desliga são class-binds `nome:classe` (engine-driven, sem
      loop de Luau); a apresentação vive em ui/hud.css sobre o tema partilhado.
-     Reveals: vitals esbate com vida cheia (piso 0.35), purse só quando muda,
-     dock surge em combate (fantasma 0.12 fora), XP acende o valor 3 s. -->
+     Reveals: vitais esbate com vida cheia (piso 0.85 — nunca vidro), dock
+     surge em combate (fantasma 0.12 fora), XP acende o valor 3 s. -->
 <world>
   <UiStyle src="ui/theme.css" />
   <UiStyle src="ui/hud.css" />
 
   <UiRoot id="hud" script="ui/hud.lua">
-    <!-- ── VITAIS (topo-esq): fade com PISO — nunca some, esbate a 35% ── -->
-    <UiColumn class="anchor-vitals" bind="vitals.active" fade="0.5 0.9 0.35">
+    <!-- ── VITAIS + RECURSOS (topo-esq): fade com PISO — nunca vidro ── -->
+    <UiColumn class="anchor-vitals" bind="vitals.active" fade="0.5 0.9 0.85">
       <UiPanel id="vitals" class="hud-card vitals" bind="health.low:danger">
         <UiRow class="vitals-heading">
           <UiPanel class="level-badge" tooltip="Nível do viajante — o + marca talento por gastar">
@@ -44,14 +44,14 @@
         <UiSpacer />
         <UiText class="venom-hint">antídoto [2]</UiText>
       </UiPanel>
+      <!-- RECURSOS (vault): painel fixo com ícones — ouro/madeira/pedra
+           sempre no ecrã, valores ligados à engine. -->
+      <UiPanel id="purse" class="hud-card purse">
+        <UiRow class="resource" tooltip="Ouro"><UiIcon class="resource-icon" src="/assets/icons/hud_gold.png" /><UiText class="resource-label">OURO</UiText><UiSpacer /><UiText bind="gold">0</UiText></UiRow>
+        <UiRow class="resource" tooltip="Madeira"><UiIcon class="resource-icon" src="/assets/icons/hud_wood.png" /><UiText class="resource-label">MAD.</UiText><UiSpacer /><UiText bind="wood">0</UiText></UiRow>
+        <UiRow class="resource" tooltip="Pedra"><UiIcon class="resource-icon" src="/assets/icons/hud_stone.png" /><UiText class="resource-label">PEDRA</UiText><UiSpacer /><UiText bind="stone">0</UiText></UiRow>
+      </UiPanel>
     </UiColumn>
-
-    <!-- ── PURSE: ícones + só aparece 3,2 s depois de ouro/mad./pedra mudarem ── -->
-    <UiRow class="anchor-purse" bind="purse.recent" fade="0.35 0.7">
-      <UiRow class="resource" tooltip="Ouro"><UiIcon class="resource-icon" src="/assets/icons/hud_gold.png" /><UiText class="resource-label">OURO</UiText><UiText bind="gold">0</UiText></UiRow>
-      <UiRow class="resource" tooltip="Madeira"><UiIcon class="resource-icon" src="/assets/icons/hud_wood.png" /><UiText class="resource-label">MAD.</UiText><UiText bind="wood">0</UiText></UiRow>
-      <UiRow class="resource" tooltip="Pedra"><UiIcon class="resource-icon" src="/assets/icons/hud_stone.png" /><UiText class="resource-label">PEDRA</UiText><UiText bind="stone">0</UiText></UiRow>
-    </UiRow>
 
     <UiColumn class="anchor-journal">
       <UiButton id="open-journal" class="journal-button" tooltip="Abrir missões, mochila e opções">

@@ -16,7 +16,7 @@
 #hud .hud-label { font-size: 11; color: #baa987 }
 
 /* ── vitais: badge circular de nível + linhas de vida/XP ────────────
-   O card inteiro esbate a 35% com vida cheia fora de combate (fade com
+   O card inteiro esbate a 85% com vida cheia fora de combate (fade com
    piso no XML, bind `vitals.active`); o alerta e a barra quentes chegam
    pelo class-bind `health.low:danger`. */
 #hud .anchor-vitals { position: absolute; top: 18; left: 18; width: 284; max-width: 36vw; gap: 8 }
@@ -70,9 +70,11 @@
 #hud .venom .venom-label { font-size: 11; color: #a9d9ad }
 #hud .venom .venom-hint { font-size: 9; color: #7fa886 }
 
-/* ── purse: revela-se 3,2 s quando ouro/madeira/pedra mudam ──────── */
-#hud .anchor-purse { position: absolute; top: 148; left: 18; width: 284; max-width: 36vw; gap: 6 }
-#hud .resource { direction: row; align: center; gap: 6; padding: 5 8; background: #171d20e8; border: 1 #b7a47740; radius: 4 }
+/* ── purse: painel FIXO do vault — ouro/madeira/pedra sempre visíveis ──
+   Vive dentro de .anchor-vitals (abaixo do chip de veneno); o card dá a
+   moldura, cada linha é ícone + rótulo + valor (spacer empurra o nº). */
+#hud .purse { width: 100%; padding: 8 12; gap: 5 }
+#hud .resource { width: 100%; direction: row; align: center; gap: 6 }
 #hud .resource-icon { width: 17; height: 17 }
 #hud .resource uitext { font-size: 13; color: #e6c888 }
 #hud .resource .resource-label { font-size: 9; color: #c0beb3 }
@@ -155,7 +157,6 @@
 @media (max-width: 900) {
   #hud .anchor-dock { width: 426; max-width: 94vw; right: 3vw; bottom: 12 }
   #hud .anchor-clock { bottom: 298 }
-  #hud .anchor-purse { top: 132 }
   #hud .anchor-prompt { bottom: 124; justify: end; padding: 0 3vw }
   #hud .prompt-card { max-width: 57vw }
   #hud .anchor-target { top: 198 }
@@ -167,12 +168,12 @@
 @media (max-width: 600) {
   #hud uitext { font-size: 12 }
   #hud .anchor-vitals { left: 3vw; top: 12; max-width: 42vw }
-  #hud .anchor-purse { left: 3vw; top: 118; max-width: 42vw }
   #hud .anchor-journal { right: 3vw; top: 12; max-width: 40vw }
   #hud .hud-card { padding: 9; gap: 6 }
   #hud .level-badge { width: 36; height: 36; radius: 18 }
   #hud .level-badge-num { font-size: 15 }
-  #hud .resource { padding: 4; gap: 3 }
+  #hud .purse { padding: 6 9 }
+  #hud .resource { padding: 0; gap: 3 }
   #hud .resource-icon { width: 14; height: 14 }
   #hud .resource .resource-label { font-size: 8 }
   #hud .resource uitext { font-size: 10 }
