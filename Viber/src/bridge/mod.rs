@@ -63,6 +63,15 @@ impl BridgeShared {
     }
 }
 
+/// Identidade do mundo servido por esta engine — inserida no boot pelo `run`
+/// e devolvida no `viber.ping`. O cliente `viber debug --world` valida-a
+/// contra o `engine.json` para apanhar um registo stale (a porta passou a
+/// pertencer a outra engine — sem isto, comandos iam para o mundo errado).
+#[derive(Resource, Clone)]
+pub struct BridgeIdentity {
+    pub world: String,
+}
+
 /// Um pedido de screenshot em curso: o handler BRP enfileira, o sistema
 /// `Update` spawna a captura e o cliente faz polling de `viber.screenshot_status`.
 #[derive(Default)]
@@ -359,8 +368,13 @@ fn invalid(message: String) -> BrpError {
 
 // ---------------------------------------------------------------- métodos
 
-fn ping(_params: In<Option<Value>>, _world: &mut World) -> BrpResult {
-    Ok(json!({
+fn ping(_params: In<Option<Value>>, world: &mut World) -> BrpResult {
+    // Mundo servido — ausente em apps mínimas de teste (e em binários
+    // antigos), caso em que o cliente salta a validação de identidade.
+    let served = world
+        .get_resource::<BridgeIdentity>()
+        .map(|identity| identity.world.clone());
+    let mut pong = json!({
         "pong": true,
         "version": env!("CARGO_PKG_VERSION"),
         // Identidade do processo: o `session up` compara-a com o pid do filho
@@ -368,7 +382,11 @@ fn ping(_params: In<Option<Value>>, _world: &mut World) -> BrpResult {
         // porta livre, e sem isto o perdedor registava no engine.json a porta
         // da engine do vencedor.
         "pid": std::process::id(),
-    }))
+    });
+    if let Some(world_path) = served {
+        pong["world"] = json!(world_path);
+    }
+    Ok(pong)
 }
 
 fn screenshot_request(_params: In<Option<Value>>, world: &mut World) -> BrpResult {

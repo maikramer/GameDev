@@ -7,6 +7,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use bevy::app::PluginGroup;
 use bevy::ecs::schedule::IntoScheduleConfigs;
+use bevy_kira_audio::AudioApp;
 use clap::{CommandFactory, Parser, Subcommand};
 use serde_json::Value;
 
@@ -43,9 +44,12 @@ enum Command {
     Run {
         /// Path to the world XML file (default: world.xml or worlds/*.xml in the current directory)
         path: Option<PathBuf>,
-        /// Expose the debug bridge (BRP over HTTP; default port 15702)
-        #[arg(long, default_missing_value = "15702", num_args = 0..=1)]
-        bridge: Option<u16>,
+        /// Expose the debug bridge (BRP over HTTP). Sem valor, escolhe a
+        /// primeira porta LIVRE a partir de 15702 — duas engines de mundos
+        /// diferentes (ex.: agentes com worlds/qa-*.xml) deixam de disputar
+        /// a 15702. `--bridge 15702` fixa a porta explícita.
+        #[arg(long, num_args = 0..=1)]
+        bridge: Option<Option<u16>>,
         /// Build with the dev profile instead of release (faster to compile,
         /// several times slower to play — the engine is dominated by Bevy
         /// and Rapier, which only get fast when optimized)
@@ -68,6 +72,11 @@ enum Command {
     },
     /// Drive a running engine (`viber run --bridge`): screenshot, input, tree, logs
     Debug {
+        /// Mundo que identifica a engine alvo — forma curta, antes do
+        /// subcomando: `viber debug --world qa-pontes lua '…'`. As variantes
+        /// também aceitam `--world` depois, que ganha se ambas vierem.
+        #[arg(long)]
+        world: Option<PathBuf>,
         #[command(subcommand)]
         command: DebugCommand,
     },
@@ -84,6 +93,11 @@ enum DebugCommand {
     Probe {
         #[arg(long)]
         port: Option<u16>,
+        /// Mundo que identifica a engine alvo: caminho do XML, nome de
+        /// ficheiro ou stem (`qa-pontes`). Com várias engines vivas, `probe`
+        /// LISTA-as em vez de escolher uma ao acaso.
+        #[arg(long)]
+        world: Option<PathBuf>,
     },
     /// Capture a screenshot of the running window
     Screenshot {
@@ -91,6 +105,10 @@ enum DebugCommand {
         output: PathBuf,
         #[arg(long)]
         port: Option<u16>,
+        /// Mundo que identifica a engine alvo (caminho, nome de ficheiro ou
+        /// stem) — resolve a porta pelo engine.json da sessão desse mundo.
+        #[arg(long)]
+        world: Option<PathBuf>,
         #[arg(long, default_value_t = 10_000)]
         timeout_ms: u64,
     },
@@ -98,6 +116,10 @@ enum DebugCommand {
     Tree {
         #[arg(long)]
         port: Option<u16>,
+        /// Mundo que identifica a engine alvo (caminho, nome de ficheiro ou
+        /// stem) — resolve a porta pelo engine.json da sessão desse mundo.
+        #[arg(long)]
+        world: Option<PathBuf>,
         #[arg(long)]
         json: bool,
     },
@@ -105,6 +127,10 @@ enum DebugCommand {
     Logs {
         #[arg(long)]
         port: Option<u16>,
+        /// Mundo que identifica a engine alvo (caminho, nome de ficheiro ou
+        /// stem) — resolve a porta pelo engine.json da sessão desse mundo.
+        #[arg(long)]
+        world: Option<PathBuf>,
         #[arg(long, default_value_t = 100)]
         limit: usize,
         #[arg(long)]
@@ -119,6 +145,10 @@ enum DebugCommand {
     Prof {
         #[arg(long)]
         port: Option<u16>,
+        /// Mundo que identifica a engine alvo (caminho, nome de ficheiro ou
+        /// stem) — resolve a porta pelo engine.json da sessão desse mundo.
+        #[arg(long)]
+        world: Option<PathBuf>,
         #[arg(long)]
         json: bool,
         /// Number of samples to average. The engine's `fps` field is the
@@ -150,6 +180,10 @@ enum DebugCommand {
         file: Option<PathBuf>,
         #[arg(long)]
         port: Option<u16>,
+        /// Mundo que identifica a engine alvo (caminho, nome de ficheiro ou
+        /// stem) — resolve a porta pelo engine.json da sessão desse mundo.
+        #[arg(long)]
+        world: Option<PathBuf>,
         /// Imprime a resposta JSON completa (ok/result/applied/warnings)
         #[arg(long)]
         json: bool,
@@ -163,12 +197,20 @@ enum DebugCommand {
         shift: bool,
         #[arg(long)]
         port: Option<u16>,
+        /// Mundo que identifica a engine alvo (caminho, nome de ficheiro ou
+        /// stem) — resolve a porta pelo engine.json da sessão desse mundo.
+        #[arg(long)]
+        world: Option<PathBuf>,
     },
     /// Type a string as synthetic key events
     Text {
         text: String,
         #[arg(long)]
         port: Option<u16>,
+        /// Mundo que identifica a engine alvo (caminho, nome de ficheiro ou
+        /// stem) — resolve a porta pelo engine.json da sessão desse mundo.
+        #[arg(long)]
+        world: Option<PathBuf>,
     },
     /// Click at window coordinates (logical pixels)
     Click {
@@ -178,6 +220,10 @@ enum DebugCommand {
         button: String,
         #[arg(long)]
         port: Option<u16>,
+        /// Mundo que identifica a engine alvo (caminho, nome de ficheiro ou
+        /// stem) — resolve a porta pelo engine.json da sessão desse mundo.
+        #[arg(long)]
+        world: Option<PathBuf>,
     },
     /// Move the synthetic cursor
     Move {
@@ -185,6 +231,10 @@ enum DebugCommand {
         y: f32,
         #[arg(long)]
         port: Option<u16>,
+        /// Mundo que identifica a engine alvo (caminho, nome de ficheiro ou
+        /// stem) — resolve a porta pelo engine.json da sessão desse mundo.
+        #[arg(long)]
+        world: Option<PathBuf>,
     },
 }
 
@@ -391,7 +441,7 @@ fn analyze(path: &Path, strict: bool) -> Result<()> {
     );
     if summary.terrain > 0 || summary.ground_features() > 0 {
         println!(
-            "  terrain: heightfield {}, ground features {} (pads {}, lakes {}, rivers {}, cliffs {}, caves {}, arches {}, roads {} + networks {}, decals {})",
+            "  terrain: heightfield {}, ground features {} (pads {}, lakes {}, rivers {}, cliffs {}, caves {}, arches {}, bridges {}, rock fields {}, roads {} + networks {}, decals {})",
             summary.terrain,
             summary.ground_features(),
             summary.terrain_pads,
@@ -400,6 +450,8 @@ fn analyze(path: &Path, strict: bool) -> Result<()> {
             summary.cliffs,
             summary.caves,
             summary.arches,
+            summary.bridges,
+            summary.rock_fields,
             summary.roads,
             summary.road_networks,
             summary.ground_decals
@@ -589,8 +641,22 @@ fn run(path: &Path, bridge_port: Option<u16>) -> Result<()> {
         plugins = plugins.set(bridge::logs::log_plugin_with_bridge());
     }
     app.add_plugins(plugins);
+    // Áudio: backend kira (bevy_kira_audio) com buses tipados — o
+    // `AudioMixerSettings` (save/menu/XML) empurra volumes para os canais
+    // (crate::music::mixer_sync) e tudo o que está a tocar responde ao vivo.
+    // O bevy_audio/rodio do Bevy fica compilado mas sem players — nenhum
+    // som nasce por ele.
+    app.add_plugins(bevy_kira_audio::AudioPlugin);
+    app.add_audio_channel::<viber::music::MusicBus>();
+    app.add_audio_channel::<viber::music::SfxBus>();
     if let Some(port) = bridge_port {
         app.add_plugins(bridge::BridgePlugin { port });
+        // O ping passa a identificar o mundo servido — o `viber debug
+        // --world` valida-o contra o engine.json (registo stale → erro, não
+        // mutação do mundo errado).
+        app.insert_resource(bridge::BridgeIdentity {
+            world: path.display().to_string(),
+        });
         // Regista a engine no registo de sessões MESMO fora de `session up`:
         // assim qualquer `viber debug …` descobre a porta sozinho. Se já há
         // uma engine viva registada (sessão de outro agente), não mexe — o
@@ -614,7 +680,12 @@ fn run(path: &Path, bridge_port: Option<u16>) -> Result<()> {
                 log: String::new(),
             });
         }
-        eprintln!("viber: debug bridge at http://127.0.0.1:{port} (try `viber debug probe`)");
+        // O agente que lançou a engine lê esta linha: o caminho para APONTAR
+        // os seus `viber debug` a ESTA engine (e não à de outro agente).
+        eprintln!(
+            "viber: debug bridge at http://127.0.0.1:{port} — viber debug --world {} … (ou export VIBER_BRIDGE_PORT={port})",
+            path.display()
+        );
     }
     app.insert_resource(PendingWorld {
         world,
@@ -804,6 +875,8 @@ fn run(path: &Path, bridge_port: Option<u16>) -> Result<()> {
             hud::hud_prompt_update,
             hud::compass::hud_compass_update,
             timed(Group::Hud, hud::hud_minimap_update),
+            timed(Group::World, music::audio_loop_starter),
+            timed(Group::World, music::mixer_sync),
             timed(Group::World, music::music_driver),
             timed(Group::World, worldsys::daycycle_drive),
             timed(Group::World, worldsys::sun_drive),
@@ -855,6 +928,14 @@ fn dispatch(command: Command) -> Result<std::process::ExitCode> {
             no_cargo,
         } => {
             let world = resolve_world_path(path)?;
+            // `--bridge` sem valor escolhe porta livre ANTES da delegação —
+            // a porta impressa no arranque tem de ser a que a engine usa de
+            // facto (e a que o agente exporta/usa nos comandos debug).
+            let bridge = match bridge {
+                None => None,
+                Some(Some(port)) => Some(port),
+                Some(None) => Some(free_bridge_port(bridge::DEFAULT_BRIDGE_PORT)?),
+            };
             if !no_cargo {
                 if let Some(code) = delegate_run_to_cargo(&world, debug, bridge)? {
                     return Ok(std::process::ExitCode::from(code as u8));
@@ -869,7 +950,9 @@ fn dispatch(command: Command) -> Result<std::process::ExitCode> {
                 .map(|_| std::process::ExitCode::SUCCESS)
                 .with_context(|| format!("analyzing {}", world.display()))
         }),
-        Command::Debug { command } => run_debug(command).map(|_| std::process::ExitCode::SUCCESS),
+        Command::Debug { world, command } => {
+            run_debug(command, world).map(|_| std::process::ExitCode::SUCCESS)
+        }
         Command::Session { command } => run_session(command),
     }
 }
@@ -1610,24 +1693,49 @@ fn print_prof_samples(
     Ok(())
 }
 
-fn run_debug(command: DebugCommand) -> Result<()> {
+fn run_debug(command: DebugCommand, parent_world: Option<PathBuf>) -> Result<()> {
+    // O `--world` pode vir antes do subcomando (parent) ou depois (variante);
+    // a forma da variante ganha — é a mais próxima do comando.
+    fn merge_world<'a>(
+        world: &'a Option<PathBuf>,
+        parent: &'a Option<PathBuf>,
+    ) -> Option<&'a std::path::Path> {
+        world.as_deref().or(parent.as_deref())
+    }
     match command {
-        DebugCommand::Probe { port } => {
-            let client = BridgeClient::localhost(bridge::client::resolve_port(port));
-            let pong = client.probe()?;
-            println!("bridge OK em {}:{} — {pong}", client.host, client.port);
+        DebugCommand::Probe { port, world } => {
+            // O probe é a ferramenta de orientação: com várias engines vivas
+            // LISTA-as em vez de falhar (os restantes subcomandos falham —
+            // mutar a engine errada é pior do que nenhum comando).
+            match bridge::client::resolve_target(port, merge_world(&world, &parent_world))? {
+                bridge::client::TargetResolution::Port(port) => {
+                    let client = BridgeClient::localhost(port);
+                    let pong = client.probe()?;
+                    println!("bridge OK em {}:{} — {pong}", client.host, client.port);
+                }
+                bridge::client::TargetResolution::Ambiguous(engines) => {
+                    println!(
+                        "{} engines vivas — aponta a tua com --world/--port:",
+                        engines.len()
+                    );
+                    println!("{}", bridge::client::format_engines(&engines));
+                }
+            }
         }
         DebugCommand::Screenshot {
             output,
             port,
+            world,
             timeout_ms,
         } => {
-            let client = BridgeClient::localhost(bridge::client::resolve_port(port));
+            let port = bridge::client::resolve_port(port, merge_world(&world, &parent_world))?;
+            let client = BridgeClient::localhost(port);
             let source = client.screenshot_to_file(&output, timeout_ms)?;
             println!("✓ screenshot → {} (fonte: {source})", output.display());
         }
-        DebugCommand::Tree { port, json } => {
-            let client = BridgeClient::localhost(bridge::client::resolve_port(port));
+        DebugCommand::Tree { port, world, json } => {
+            let port = bridge::client::resolve_port(port, merge_world(&world, &parent_world))?;
+            let client = BridgeClient::localhost(port);
             let tree = client.tree()?;
             if json {
                 println!("{tree:#}");
@@ -1635,8 +1743,14 @@ fn run_debug(command: DebugCommand) -> Result<()> {
                 print_tree(&tree);
             }
         }
-        DebugCommand::Logs { port, limit, json } => {
-            let client = BridgeClient::localhost(bridge::client::resolve_port(port));
+        DebugCommand::Logs {
+            port,
+            world,
+            limit,
+            json,
+        } => {
+            let port = bridge::client::resolve_port(port, merge_world(&world, &parent_world))?;
+            let client = BridgeClient::localhost(port);
             let logs = client.logs(limit)?;
             if json {
                 println!("{logs:#}");
@@ -1646,13 +1760,15 @@ fn run_debug(command: DebugCommand) -> Result<()> {
         }
         DebugCommand::Prof {
             port,
+            world,
             json,
             samples,
             interval_ms,
             tab,
             export,
         } => {
-            let client = BridgeClient::localhost(bridge::client::resolve_port(port));
+            let port = bridge::client::resolve_port(port, merge_world(&world, &parent_world))?;
+            let client = BridgeClient::localhost(port);
             if let Some(path) = export {
                 let path = (!path.is_empty()).then(|| PathBuf::from(&path));
                 let result = client.prof_export(path.as_deref())?;
@@ -1689,26 +1805,38 @@ fn run_debug(command: DebugCommand) -> Result<()> {
             text,
             shift,
             port,
+            world,
         } => {
-            let client = BridgeClient::localhost(bridge::client::resolve_port(port));
+            let port = bridge::client::resolve_port(port, merge_world(&world, &parent_world))?;
+            let client = BridgeClient::localhost(port);
             client.key(&key, text, shift)?;
         }
-        DebugCommand::Text { text, port } => {
-            let client = BridgeClient::localhost(bridge::client::resolve_port(port));
+        DebugCommand::Text { text, port, world } => {
+            let port = bridge::client::resolve_port(port, merge_world(&world, &parent_world))?;
+            let client = BridgeClient::localhost(port);
             client.text(&text)?;
         }
-        DebugCommand::Click { x, y, button, port } => {
-            let client = BridgeClient::localhost(bridge::client::resolve_port(port));
+        DebugCommand::Click {
+            x,
+            y,
+            button,
+            port,
+            world,
+        } => {
+            let port = bridge::client::resolve_port(port, merge_world(&world, &parent_world))?;
+            let client = BridgeClient::localhost(port);
             client.click(x, y, &button)?;
         }
-        DebugCommand::Move { x, y, port } => {
-            let client = BridgeClient::localhost(bridge::client::resolve_port(port));
+        DebugCommand::Move { x, y, port, world } => {
+            let port = bridge::client::resolve_port(port, merge_world(&world, &parent_world))?;
+            let client = BridgeClient::localhost(port);
             client.move_cursor(x, y)?;
         }
         DebugCommand::Lua {
             code,
             file,
             port,
+            world,
             json,
         } => {
             let source = match (code, file) {
@@ -1720,7 +1848,8 @@ fn run_debug(command: DebugCommand) -> Result<()> {
                     return Ok(());
                 }
             };
-            let client = BridgeClient::localhost(bridge::client::resolve_port(port));
+            let port = bridge::client::resolve_port(port, merge_world(&world, &parent_world))?;
+            let client = BridgeClient::localhost(port);
             let response = client.lua(&source)?;
             let ok = response.get("ok").and_then(Value::as_bool).unwrap_or(false);
             if json {
@@ -1774,6 +1903,71 @@ fn main() -> std::process::ExitCode {
         Err(error) => {
             eprintln!("error: {error:#}");
             std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// As três formas de `--bridge`: ausente = sem bridge, nu = porta livre
+    /// (auto), com valor = fixa. É o contrato que evita duas engines a
+    /// disputar a 15702 quando dois agentes sobem mundos qa-*.xml em paralelo.
+    #[test]
+    fn test_run_bridge_flag_shapes() {
+        let none = Cli::try_parse_from(["viber", "run", "w.xml"]).expect("sem --bridge");
+        let bare = Cli::try_parse_from(["viber", "run", "w.xml", "--bridge"]).expect("--bridge nu");
+        let fixed =
+            Cli::try_parse_from(["viber", "run", "w.xml", "--bridge", "15999"]).expect("--bridge N");
+        match (none.command, bare.command, fixed.command) {
+            (
+                Some(Command::Run { bridge: a, .. }),
+                Some(Command::Run { bridge: b, .. }),
+                Some(Command::Run { bridge: c, .. }),
+            ) => {
+                assert_eq!(a, None, "sem flag");
+                assert_eq!(b, Some(None), "flag nu = auto");
+                assert_eq!(c, Some(Some(15_999)), "flag com valor = fixa");
+            }
+            _ => panic!("esperava três Command::Run"),
+        }
+    }
+
+    /// O `--world` do debug nas duas posições: antes do subcomando (forma
+    /// curta, a que os agentes escrevem naturalmente) e depois (na variante).
+    #[test]
+    fn test_debug_world_flag_positions() {
+        let before =
+            Cli::try_parse_from(["viber", "debug", "--world", "qa-pontes", "probe"]).expect("antes");
+        let after =
+            Cli::try_parse_from(["viber", "debug", "probe", "--world", "qa-pontes"]).expect("depois");
+        match (before.command, after.command) {
+            (
+                Some(Command::Debug {
+                    world: w1,
+                    command: sub1,
+                }),
+                Some(Command::Debug {
+                    world: w2,
+                    command: sub2,
+                }),
+            ) => {
+                assert_eq!(w1.as_deref(), Some(Path::new("qa-pontes")), "antes do subcomando");
+                assert_eq!(w2.as_deref(), None, "sem world no parent");
+                assert!(matches!(sub1, DebugCommand::Probe { .. }));
+                assert!(
+                    matches!(
+                        sub2,
+                        DebugCommand::Probe {
+                            world: Some(_),
+                            ..
+                        }
+                    ),
+                    "depois do subcomando"
+                );
+            }
+            _ => panic!("esperava dois Command::Debug"),
         }
     }
 }

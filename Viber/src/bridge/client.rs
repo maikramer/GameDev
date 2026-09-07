@@ -208,6 +208,18 @@ impl BridgeClient {
             .is_ok()
     }
 
+    /// Ping rápido que devolve o mundo servido (campo `world` do pong) —
+    /// None se o bridge não responder ou for um binário antigo sem o campo.
+    fn probe_world(&self) -> Option<String> {
+        self.call_timeout("viber.ping", json!({}), PROBE_TIMEOUT)
+            .ok()
+            .and_then(|pong| {
+                pong.get("world")
+                    .and_then(Value::as_str)
+                    .map(std::borrow::ToOwned::to_owned)
+            })
+    }
+
     pub fn tree(&self) -> Result<Value> {
         self.call("viber.tree", json!({}))
     }
@@ -407,31 +419,253 @@ fn normalize_mouse(raw: &str) -> String {
     }
 }
 
-/// Resolve a porta do bridge: flag CLI → env `VIBER_BRIDGE_PORT` → engine
-/// viva registada numa sessão → default.
-///
-/// O passo da sessão é o que faz `viber debug prof` funcionar sem ninguém
-/// exportar `VIBER_BRIDGE_PORT`: desde que `session up` passou a escolher a
-/// primeira porta livre, 15702 deixou de ser uma aposta segura. Uma única
-/// engine viva ganha; com várias, a que corre o mundo do diretório atual
-/// (senão, a de porta mais baixa, para ser determinístico).
-pub fn resolve_port(flag: Option<u16>) -> u16 {
+/// Uma engine viva conhecida pelo registo de sessões (`engine.json` + TCP a
+/// responder). Candidata da descoberta e alvo do `viber debug --world`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LiveEngine {
+    pub port: u16,
+    pub world: String,
+}
+
+/// Todas as engines registadas com a porta a responder a TCP. Sem probe HTTP
+/// — isso fica para a confirmação final (uma engine pendurada não deve
+/// bloquear o inventário).
+pub fn list_live_engines() -> Vec<LiveEngine> {
+    crate::session::SessionPaths::all()
+        .iter()
+        .filter_map(|(_, paths)| paths.engine_info())
+        .filter(|engine| port_alive(engine.port))
+        .map(|engine| LiveEngine {
+            port: engine.port,
+            world: engine.world,
+        })
+        .collect()
+}
+
+/// Candidatas à descoberta implícita, por ordem de preferência — ou as locais
+/// em conflito, quando há ≥2 debaixo do cwd (não há como adivinhar qual é a
+/// do chamador; escolher a de porta mais baixa mandava comandos para a engine
+/// de outro agente em silêncio).
+#[derive(Debug, PartialEq, Eq)]
+pub enum Candidates {
+    /// A sondar por esta ordem (locais primeiro; senão todas por porta).
+    Ordered(Vec<LiveEngine>),
+    /// As locais em conflito, ordenadas por porta.
+    AmbiguousLocals(Vec<LiveEngine>),
+}
+
+/// Escolha pura (sem I/O) — testável sem env nem sockets.
+fn pick_engines(cwd: Option<&Path>, engines: &[LiveEngine]) -> Candidates {
+    let rank = |engine: &LiveEngine| {
+        let local = cwd
+            .is_some_and(|cwd| Path::new(&engine.world).starts_with(cwd));
+        (!local, engine.port)
+    };
+    let mut local: Vec<LiveEngine> = Vec::new();
+    let mut remote: Vec<LiveEngine> = Vec::new();
+    for engine in engines {
+        if rank(engine).0 {
+            remote.push(engine.clone());
+        } else {
+            local.push(engine.clone());
+        }
+    }
+    local.sort_by_key(|engine| engine.port);
+    remote.sort_by_key(|engine| engine.port);
+    if local.len() >= 2 {
+        Candidates::AmbiguousLocals(local)
+    } else if local.len() == 1 {
+        Candidates::Ordered(local)
+    } else {
+        Candidates::Ordered(remote)
+    }
+}
+
+/// Lista `:porta — mundo`, uma engine por linha — corpo dos erros de
+/// ambiguidade/alvo inexistente e do `viber debug probe` orientado.
+pub fn format_engines(engines: &[LiveEngine]) -> String {
+    engines
+        .iter()
+        .map(|engine| format!("  :{} — {}", engine.port, engine.world))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn ambiguity_error(engines: &[LiveEngine]) -> anyhow::Error {
+    anyhow::anyhow!(
+        "{} engines vivas neste checkout — não sei qual é a tua:\n{}\naponta a tua: `viber debug --world <mundo.xml> …`, `--port N` ou `export VIBER_BRIDGE_PORT=N`",
+        engines.len(),
+        format_engines(engines)
+    )
+}
+
+/// Resultado da resolução do alvo de um comando `viber debug`.
+pub enum TargetResolution {
+    Port(u16),
+    /// Só na via implícita (sem `--port`/`--world`/env): há várias engines
+    /// locais — o chamador decide (o `probe` lista-as; os restantes falham).
+    Ambiguous(Vec<LiveEngine>),
+}
+
+/// Resolve o alvo sem falhar na ambiguidade — o `viber debug probe` usa isto
+/// para LISTAR as engines em vez de abortar. Ordem: `--port` → `--world` →
+/// env `VIBER_BRIDGE_PORT` → descoberta implícita → default.
+pub fn resolve_target(flag: Option<u16>, world: Option<&Path>) -> Result<TargetResolution> {
     if let Some(port) = flag {
-        return port;
+        return Ok(TargetResolution::Port(port));
+    }
+    if let Some(world) = world {
+        return resolve_world_port(world).map(TargetResolution::Port);
     }
     if let Ok(raw) = std::env::var("VIBER_BRIDGE_PORT") {
         match raw.parse::<u16>() {
-            Ok(port) => return port,
+            Ok(port) => return Ok(TargetResolution::Port(port)),
             // Um typo não pode cair noutra engine em silêncio (mutaria o
             // mundo errado) — avisa e segue para a descoberta.
             Err(_) => eprintln!("viber: VIBER_BRIDGE_PORT inválido: `{raw}` — a ignorar"),
         }
     }
-    if let Some((port, world)) = session_port() {
-        eprintln!("viber: bridge descoberto em :{port} (sessão: {world})");
-        return port;
+    let cwd = std::env::current_dir().ok();
+    match pick_engines(cwd.as_deref(), &list_live_engines()) {
+        Candidates::AmbiguousLocals(engines) => Ok(TargetResolution::Ambiguous(engines)),
+        Candidates::Ordered(candidates) => {
+            for engine in candidates {
+                if BridgeClient::localhost(engine.port).probe_quick() {
+                    eprintln!(
+                        "viber: bridge descoberto em :{} (sessão: {})",
+                        engine.port, engine.world
+                    );
+                    return Ok(TargetResolution::Port(engine.port));
+                }
+            }
+            Ok(TargetResolution::Port(super::DEFAULT_BRIDGE_PORT))
+        }
     }
-    super::DEFAULT_BRIDGE_PORT
+}
+
+/// Resolve a porta do bridge: flag CLI → flag `--world` → env
+/// `VIBER_BRIDGE_PORT` → engine viva registada numa sessão → default.
+///
+/// O passo da sessão é o que faz `viber debug prof` funcionar sem ninguém
+/// exportar `VIBER_BRIDGE_PORT`. Com ≥2 engines vivas debaixo do cwd, a
+/// escolha implícita é um ERRO — sem isto os comandos iam para a porta mais
+/// baixa, muitas vezes a engine de outro agente.
+pub fn resolve_port(flag: Option<u16>, world: Option<&Path>) -> Result<u16> {
+    match resolve_target(flag, world)? {
+        TargetResolution::Port(port) => Ok(port),
+        TargetResolution::Ambiguous(engines) => Err(ambiguity_error(&engines)),
+    }
+}
+
+/// Porta da engine que serve `query` — a via do `viber debug --world`.
+/// Primeiro o caminho exato (o slug da sessão é estável entre grafias de
+/// paths com symlinks porque o `for_world` canonicaliza antes de fazer
+/// hash); sem registo, casa por nome (ficheiro, stem ou sufixo de path) entre
+/// as engines vivas. Zero ou várias correspondências → erro com a lista.
+fn resolve_world_port(query: &Path) -> Result<u16> {
+    let canonical = std::fs::canonicalize(query)
+        .or_else(|_| std::path::absolute(query))
+        .unwrap_or_else(|_| query.to_path_buf());
+    let paths = crate::session::SessionPaths::for_world(&canonical);
+    if let Some(engine) = paths.engine_info() {
+        return confirm_engine(&engine);
+    }
+    let live = list_live_engines();
+    let matches: Vec<&LiveEngine> = live
+        .iter()
+        .filter(|engine| world_name_matches(query, &engine.world))
+        .collect();
+    match matches.len() {
+        1 => confirm_engine_engine(matches[0]),
+        0 => anyhow::bail!(
+            "nenhuma engine viva serve `{}` — engines vivas:\n{}\n(sobe uma com `viber run {q} --bridge` ou `viber session up --world {q}`)",
+            query.display(),
+            format_engines(&live),
+            q = query.display()
+        ),
+        _ => anyhow::bail!(
+            "`{}` casa {} engines vivas — sê mais específico:\n{}",
+            query.display(),
+            matches.len(),
+            format_engines(
+                &matches.into_iter().cloned().collect::<Vec<_>>()
+            )
+        ),
+    }
+}
+
+fn confirm_engine(engine: &crate::session::EngineInfo) -> Result<u16> {
+    confirm_engine_engine(&LiveEngine {
+        port: engine.port,
+        world: engine.world.clone(),
+    })
+}
+
+/// A porta existe e é MESMO a engine do mundo? Valida o `world` devolvido
+/// pelo ping contra o registo — apanha a porta roubada por uma engine mais
+/// recente com engine.json stale (mutaria o mundo errado).
+fn confirm_engine_engine(engine: &LiveEngine) -> Result<u16> {
+    if !port_alive(engine.port) {
+        anyhow::bail!(
+            "a engine de `{}` está registada na porta {} mas não responde — morreu? (`viber session list`)",
+            engine.world,
+            engine.port
+        );
+    }
+    let client = BridgeClient::localhost(engine.port);
+    if let Some(served) = client.probe_world() {
+        if !same_world(&served, &engine.world) {
+            anyhow::bail!(
+                "a porta {} é servida por `{}`, não por `{}` (registo stale — sobe a engine de novo)",
+                engine.port,
+                served,
+                engine.world
+            );
+        }
+    }
+    Ok(engine.port)
+}
+
+/// `query` identifica `world`? Caminho canónico igual, nome de ficheiro,
+/// stem (`qa-pontes` → `qa-pontes.xml`) ou sufixo por componentes
+/// (`worlds/qa-pontes.xml` dentro do path completo).
+fn world_name_matches(query: &Path, world: &str) -> bool {
+    if same_world(&query.to_string_lossy(), world) {
+        return true;
+    }
+    let Some(query_name) = query.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    let world_path = Path::new(world);
+    if world_path.ends_with(query) {
+        return true;
+    }
+    let Some(world_name) = world_path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    if query_name.eq_ignore_ascii_case(world_name) {
+        return true;
+    }
+    query.extension().is_none()
+        && world_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .is_some_and(|stem| query_name.eq_ignore_ascii_case(stem))
+}
+
+/// Grafias diferentes do mesmo mundo (symlinks, `..`) — compara canónico
+/// quando ambos resolvem; literal caso contrário.
+fn same_world(a: &str, b: &str) -> bool {
+    if a == b {
+        return true;
+    }
+    match (
+        std::fs::canonicalize(a),
+        std::fs::canonicalize(b),
+    ) {
+        (Ok(ca), Ok(cb)) => ca == cb,
+        _ => false,
+    }
 }
 
 /// TCP connect com timeout curto — descoberta não pode pagar os 2 s de
@@ -439,35 +673,6 @@ pub fn resolve_port(flag: Option<u16>) -> u16 {
 pub fn port_alive(port: u16) -> bool {
     let address = std::net::SocketAddr::from(([127, 0, 0, 1], port));
     std::net::TcpStream::connect_timeout(&address, std::time::Duration::from_millis(250)).is_ok()
-}
-
-/// Porta de uma engine de sessão que responde ao `ping`.
-/// Porta de uma engine viva registada no registo de sessões, com o mundo
-/// (para a mensagem de descoberta). Pré-filtra por TCP rápido e confirma
-/// com o probe HTTP pela ordem de preferência — a primeira que responde
-/// ganha (uma engine wedged não esconde as saudáveis).
-fn session_port() -> Option<(u16, String)> {
-    let cwd = std::env::current_dir().ok();
-    let mut live: Vec<(bool, u16, String)> = crate::session::SessionPaths::all()
-        .iter()
-        .filter_map(|(_, paths)| paths.engine_info())
-        .filter(|engine| port_alive(engine.port))
-        .map(|engine| {
-            // Preferir a engine cujo mundo está debaixo do cwd — num
-            // checkout com vários mundos é quase sempre a certa.
-            let local = cwd
-                .as_ref()
-                .is_some_and(|cwd| std::path::Path::new(&engine.world).starts_with(cwd));
-            (!local, engine.port, engine.world)
-        })
-        .collect();
-    live.sort();
-    for (_, port, world) in &live {
-        if BridgeClient::localhost(*port).probe_quick() {
-            return Some((*port, world.clone()));
-        }
-    }
-    None
 }
 
 #[cfg(test)]
@@ -488,6 +693,105 @@ mod tests {
             start.elapsed() < std::time::Duration::from_secs(1),
             "pre-check devia ser rápido, levou {:?}",
             start.elapsed()
+        );
+    }
+
+    fn engine(port: u16, world: &str) -> LiveEngine {
+        LiveEngine {
+            port,
+            world: world.to_string(),
+        }
+    }
+
+    #[test]
+    fn test_pick_two_locals_is_ambiguous() {
+        // O cenário do agente: dois mundos qa-*.xml do mesmo checkout, cada
+        // um na sua engine — escolher a de porta mais baixa era errar. A
+        // engine de FORA do cwd não participa na ambiguidade.
+        let engines = [
+            engine(15702, "/outro/mundo.xml"),
+            engine(15703, "/repo/worlds/qa-pontes.xml"),
+            engine(15704, "/repo/worlds/qa-sky.xml"),
+        ];
+        let cwd = Path::new("/repo");
+        assert_eq!(
+            pick_engines(Some(cwd), &engines),
+            Candidates::AmbiguousLocals(vec![
+                engine(15703, "/repo/worlds/qa-pontes.xml"),
+                engine(15704, "/repo/worlds/qa-sky.xml"),
+            ])
+        );
+    }
+
+    #[test]
+    fn test_pick_single_local_wins_over_remotes() {
+        let engines = [
+            engine(15702, "/outro/mundo.xml"),
+            engine(15709, "/repo/world.xml"),
+        ];
+        assert_eq!(
+            pick_engines(Some(Path::new("/repo")), &engines),
+            Candidates::Ordered(vec![engine(15709, "/repo/world.xml")])
+        );
+    }
+
+    #[test]
+    fn test_pick_no_locals_uses_lowest_port() {
+        let engines = [
+            engine(15705, "/a.xml"),
+            engine(15703, "/b.xml"),
+        ];
+        // Sem cwd conhecido, tudo é remoto — ordem determinística por porta.
+        assert_eq!(
+            pick_engines(None, &engines),
+            Candidates::Ordered(vec![engine(15703, "/b.xml"), engine(15705, "/a.xml")])
+        );
+    }
+
+    #[test]
+    fn test_pick_no_engines() {
+        assert_eq!(pick_engines(Some(Path::new("/repo")), &[]), Candidates::Ordered(vec![]));
+    }
+
+    #[test]
+    fn test_world_name_matches() {
+        let world = "/repo/worlds/qa-pontes.xml";
+        assert!(world_name_matches(Path::new(world), world), "igual literal");
+        assert!(
+            world_name_matches(Path::new("qa-pontes"), world),
+            "stem sem extensão"
+        );
+        assert!(
+            world_name_matches(Path::new("qa-pontes.xml"), world),
+            "nome de ficheiro"
+        );
+        assert!(
+            world_name_matches(Path::new("worlds/qa-pontes.xml"), world),
+            "sufixo por componentes"
+        );
+        assert!(
+            !world_name_matches(Path::new("qa-sky"), world),
+            "outro mundo"
+        );
+        assert!(
+            !world_name_matches(Path::new("pontes"), world),
+            "substring não conta"
+        );
+        assert!(
+            !world_name_matches(Path::new("qa-pontes.xml.bak"), world),
+            "extensão diferente"
+        );
+    }
+
+    #[test]
+    fn test_format_engines_lists_port_and_world() {
+        let text = format_engines(&[
+            engine(15702, "/repo/world.xml"),
+            engine(15705, "/repo/worlds/qa-pontes.xml"),
+        ]);
+        assert_eq!(
+            text,
+            "  :15702 — /repo/world.xml\n  :15705 — /repo/worlds/qa-pontes.xml"
         );
     }
 }

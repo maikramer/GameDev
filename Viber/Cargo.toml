@@ -51,6 +51,10 @@ meshopt = "0.6"
 # vizinhas sem saias. Deps de runtime minúsculas (`flagset`, `num`,
 # `transvoxel-data`): sem Bevy, sem nalgebra.
 transvoxel = "2"
+dirs = "6"
+half = "2"
+notify = "8"
+bevy_kira_audio = { version = "0.26", features = ["ogg"] }
 
 [dev-dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }

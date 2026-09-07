@@ -710,3 +710,34 @@ fn test_bridge_lua_bulk_profiling() {
     assert_eq!(response["ok"], serde_json::json!(true));
     assert_eq!(response["result"], serde_json::json!(true));
 }
+
+/// Porta própria — os testes do bridge correm em paralelo no mesmo binário.
+const IDENTITY_TEST_PORT: u16 = 35707;
+
+/// O `viber.ping` identifica o mundo servido quando a engine tem
+/// `BridgeIdentity` (inserida pelo `run`) — é o que o `viber debug --world`
+/// valida contra o engine.json para apanhar registos stale.
+#[test]
+fn test_ping_reports_world_identity() {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins)
+        .add_plugins(bevy::input::InputPlugin)
+        .add_plugins(BridgePlugin {
+            port: IDENTITY_TEST_PORT,
+        })
+        .insert_resource(BridgeIdentity {
+            world: "/repo/worlds/qa-pontes.xml".into(),
+        });
+    app.add_message::<CursorMoved>();
+    app.update();
+
+    let pong = settle(
+        &mut app,
+        call_async_on(IDENTITY_TEST_PORT, METHOD_PING, serde_json::json!({})),
+    );
+    assert_eq!(pong["pong"], serde_json::json!(true));
+    assert_eq!(
+        pong["world"],
+        serde_json::json!("/repo/worlds/qa-pontes.xml")
+    );
+}

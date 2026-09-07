@@ -26,6 +26,8 @@ use bevy::ecs::system::In;
 use bevy::math::primitives::{Cuboid, Sphere};
 use bevy::prelude::*;
 use bevy_rapier3d::prelude::{Collider, RapierContextSimulation, RigidBody};
+
+use crate::terrain::TerrainChunkMaterial;
 use mlua::{FromLua, Lua, Table, Value};
 use serde::Deserialize;
 use serde_json::{Value as Json, json};
@@ -222,6 +224,27 @@ pub struct DebugView {
     pub physics: Option<PhysicsInfo>,
     /// Agregados do mundo inteiro (sem cap do snapshot).
     pub stats: WorldStats,
+    /// Chão ao vivo: tuning de splat + pele das paredes do primeiro chunk
+    /// (snapshot de `viber.debug.ground()`).
+    pub ground: Option<GroundInfo>,
+}
+
+/// Estado do chão ao vivo (`viber.debug.ground{...}`): o tuning de splat
+/// acumula entre chamadas — cada uma só passa o que muda.
+#[derive(Resource, Debug, Clone, Copy, Default)]
+struct GroundState {
+    tuning: crate::terrain::splat::SplatTuning,
+}
+
+/// Snapshot do chão ao vivo (leitura de `viber.debug.ground()`).
+#[derive(Debug, Clone, Copy)]
+pub struct GroundInfo {
+    pub tuning: crate::terrain::splat::SplatTuning,
+    /// `walls_a` do primeiro chunk: tri_slope, tri_soft, strata_spacing,
+    /// strata_strength.
+    pub walls_a: [f32; 4],
+    /// `walls_b`: rock_darken, streaks, moss, livre.
+    pub walls_b: [f32; 4],
 }
 
 /// Fila de escritas enfileiradas pelas closures `viber.debug.*`, drenada
@@ -284,6 +307,111 @@ pub enum DebugOp {
         width: f32,
         height: f32,
     },
+    /// Sol AO VIVO (`viber.debug.sun{...}`): yaw/pitch rodam a
+    /// DirectionalLight da cena E a direção publicada no shader do terreno
+    /// (o chão tem sol próprio no uniform); illuminance/shadows tocam o
+    /// componente.
+    Sun {
+        yaw: Option<f32>,
+        pitch: Option<f32>,
+        illuminance: Option<f32>,
+        shadows: Option<bool>,
+    },
+    /// Chão AO VIVO (`viber.debug.ground{...}`): pele das paredes nos
+    /// materiais de chunk (moss/streaks/rock_darken/tri_slope/tri_soft/
+    /// strata_strength) + rebake dos splats com tuning novo
+    /// (patchiness/gravel/dirt/forest/shore_width).
+    Ground {
+        moss: Option<f32>,
+        vale_soft: Option<f32>,
+        streaks: Option<f32>,
+        rock_darken: Option<f32>,
+        tri_slope: Option<f32>,
+        tri_soft: Option<f32>,
+        strata_strength: Option<f32>,
+        patchiness: Option<f32>,
+        gravel: Option<f32>,
+        dirt: Option<f32>,
+        forest: Option<f32>,
+        shore_width: Option<f32>,
+    },
+}
+
+/// Opções de `viber.debug.sun{...}` (tabela; campos ausentes = sem mudança).
+#[derive(Default)]
+pub struct SunOpts {
+    pub yaw: Option<f32>,
+    pub pitch: Option<f32>,
+    pub illuminance: Option<f32>,
+    pub shadows: Option<bool>,
+}
+
+impl FromLua for SunOpts {
+    fn from_lua(value: Value, _lua: &Lua) -> mlua::Result<Self> {
+        match value {
+            Value::Nil => Ok(Self::default()),
+            Value::Table(t) => Ok(Self {
+                yaw: t.get("yaw")?,
+                pitch: t.get("pitch")?,
+                illuminance: t.get("illuminance")?,
+                shadows: t.get("shadows")?,
+            }),
+            other => Err(mlua::Error::FromLuaConversionError {
+                from: other.type_name(),
+                to: "sun opts {yaw=?, pitch=?, illuminance=?, shadows=?}".into(),
+                message: None,
+            }),
+        }
+    }
+}
+
+/// Opções de `viber.debug.ground{...}` (tabela; campos ausentes = sem
+/// mudança).
+#[derive(Default)]
+pub struct GroundOpts {
+    pub moss: Option<f32>,
+    pub vale_soft: Option<f32>,
+    pub streaks: Option<f32>,
+    pub rock_darken: Option<f32>,
+    pub tri_slope: Option<f32>,
+    pub tri_soft: Option<f32>,
+    pub strata_strength: Option<f32>,
+    pub patchiness: Option<f32>,
+    pub gravel: Option<f32>,
+    pub dirt: Option<f32>,
+    pub forest: Option<f32>,
+    pub shore_width: Option<f32>,
+}
+
+impl FromLua for GroundOpts {
+    fn from_lua(value: Value, _lua: &Lua) -> mlua::Result<Self> {
+        match value {
+            Value::Nil => Err(mlua::Error::runtime(
+                "ground{}: passa pelo menos um campo (moss, vale_soft, streaks, rock_darken, \
+                 tri_slope, tri_soft, strata_strength, patchiness, gravel, dirt, forest, \
+                 shore_width)",
+            )),
+            Value::Table(t) => Ok(Self {
+                moss: t.get("moss")?,
+                vale_soft: t.get("vale_soft")?,
+                streaks: t.get("streaks")?,
+                rock_darken: t.get("rock_darken")?,
+                tri_slope: t.get("tri_slope")?,
+                tri_soft: t.get("tri_soft")?,
+                strata_strength: t.get("strata_strength")?,
+                patchiness: t.get("patchiness")?,
+                gravel: t.get("gravel")?,
+                dirt: t.get("dirt")?,
+                forest: t.get("forest")?,
+                shore_width: t.get("shore_width")?,
+            }),
+            other => Err(mlua::Error::FromLuaConversionError {
+                from: other.type_name(),
+                to: "ground opts {moss=?, vale_soft=?, streaks=?, …}".into(),
+                message: None,
+            }),
+        }
+    }
 }
 
 /// Opções opcionais de `viber.debug.set_camera{...}`.
@@ -346,6 +474,40 @@ fn build_view(world: &mut World) -> DebugView {
         .map(|b| b.0)
         .unwrap_or_else(|| world.resource::<Time<Virtual>>().relative_speed());
     let prof = crate::profiler::snapshot(world);
+    // Sem GroundState (nunca chamado) mostra os DEFAULTS — o getter nunca é
+    // nil num mundo com terreno.
+    let ground = {
+        let (walls_a, walls_b) = world
+            .get_resource::<Assets<TerrainChunkMaterial>>()
+            .and_then(|assets| assets.iter().next())
+            .map(|(_, m)| {
+                (
+                    [
+                        m.params.walls_a.x,
+                        m.params.walls_a.y,
+                        m.params.walls_a.z,
+                        m.params.walls_a.w,
+                    ],
+                    [
+                        m.params.walls_b.x,
+                        m.params.walls_b.y,
+                        m.params.walls_b.z,
+                        m.params.walls_b.w,
+                    ],
+                )
+            })
+            .unwrap_or(([0.0; 4], [0.0; 4]));
+        let tuning = world
+            .get_resource::<GroundState>()
+            .map(|s| s.tuning)
+            .unwrap_or_default();
+        let has_terrain = world.get_resource::<crate::terrain::runtime::TerrainRuntime>().is_some();
+        has_terrain.then_some(GroundInfo {
+            tuning,
+            walls_a,
+            walls_b,
+        })
+    };
     let camera = world.iter_entities().find_map(|e| {
         let cam = e.get::<OrbitCamera>()?;
         Some(CameraInfo {
@@ -610,6 +772,7 @@ fn build_view(world: &mut World) -> DebugView {
         prof,
         physics,
         stats,
+        ground,
     }
 }
 
@@ -1512,6 +1675,71 @@ fn ensure_debug_api(lua: &Lua) -> mlua::Result<()> {
             push(lua, DebugOp::SetWindow { width, height })
         })?,
     )?;
+    api.set(
+        "sun",
+        lua.create_function(|lua, opts: SunOpts| {
+            push(
+                lua,
+                DebugOp::Sun {
+                    yaw: opts.yaw,
+                    pitch: opts.pitch,
+                    illuminance: opts.illuminance,
+                    shadows: opts.shadows,
+                },
+            )
+        })?,
+    )?;
+    api.set(
+        "ground",
+        lua.create_function(|lua, opts: GroundOpts| {
+            push(
+                lua,
+                DebugOp::Ground {
+                    moss: opts.moss,
+                    vale_soft: opts.vale_soft,
+                    streaks: opts.streaks,
+                    rock_darken: opts.rock_darken,
+                    tri_slope: opts.tri_slope,
+                    tri_soft: opts.tri_soft,
+                    strata_strength: opts.strata_strength,
+                    patchiness: opts.patchiness,
+                    gravel: opts.gravel,
+                    dirt: opts.dirt,
+                    forest: opts.forest,
+                    shore_width: opts.shore_width,
+                },
+            )
+        })?,
+    )?;
+    api.set(
+        "ground_state",
+        lua.create_function(|lua, ()| {
+            let view = lua
+                .app_data_ref::<DebugView>()
+                .ok_or_else(|| mlua::Error::runtime("sem snapshot — só dentro de viber.lua"))?;
+            let Some(g) = view.ground else {
+                return Ok(Value::Nil);
+            };
+            Ok(json_to_lua(
+                lua,
+                &json!({
+                    "patchiness": g.tuning.patchiness,
+                    "gravel_shoulder": g.tuning.gravel_shoulder,
+                    "vale_soft": g.tuning.vale_soft,
+                    "dirt": g.tuning.dirt_density,
+                    "forest": g.tuning.forest_density,
+                    "shore_width": g.tuning.shore_width,
+                    "tri_slope": g.walls_a[0],
+                    "tri_soft": g.walls_a[1],
+                    "strata_spacing": g.walls_a[2],
+                    "strata_strength": g.walls_a[3],
+                    "rock_darken": g.walls_b[0],
+                    "streaks": g.walls_b[1],
+                    "moss": g.walls_b[2],
+                }),
+            )?)
+        })?,
+    )?;
 
     // ── Leituras extra (snapshot) ───────────────────────────────────────
     api.set(
@@ -1685,6 +1913,36 @@ fn op_non_finite(op: &DebugOp) -> Option<&'static str> {
         DebugOp::SetClock(minute) if !minute.is_finite() => Some("set_clock"),
         DebugOp::SetWindow { width, height } if !width.is_finite() || !height.is_finite() => {
             Some("set_window")
+        }
+        DebugOp::Sun {
+            yaw,
+            pitch,
+            illuminance,
+            ..
+        } if yaw.is_some_and(|v| !v.is_finite())
+            || pitch.is_some_and(|v| !v.is_finite())
+            || illuminance.is_some_and(|v| !v.is_finite()) =>
+        {
+            Some("sun")
+        }
+        DebugOp::Ground {
+            moss,
+            vale_soft,
+            streaks,
+            rock_darken,
+            tri_slope,
+            tri_soft,
+            strata_strength,
+            patchiness,
+            gravel,
+            dirt,
+            forest,
+            shore_width,
+        } if [moss, vale_soft, streaks, rock_darken, tri_slope, tri_soft, strata_strength, patchiness, gravel, dirt, forest, shore_width]
+            .into_iter()
+            .any(|v| v.is_some_and(|x| !x.is_finite())) =>
+        {
+            Some("ground")
         }
         DebugOp::SpawnMarker { pos, size, .. } if !finite3(*pos) || !finite3(*size) => {
             Some("spawn_marker")
@@ -1963,6 +2221,158 @@ fn apply_one(world: &mut World, op: DebugOp, warnings: &mut Vec<String>) -> bool
                     false
                 }
             }
+        }
+        DebugOp::Sun {
+            yaw,
+            pitch,
+            illuminance,
+            shadows,
+        } => {
+            // Direção ATUAL do sol (para defaults quando só um ângulo vem):
+            // a posição do sol no céu = -direção de viagem.
+            let light = world
+                .iter_entities()
+                .find(|e| e.get::<DirectionalLight>().is_some())
+                .map(|e| e.id());
+            let (mut sun_yaw, mut sun_pitch) = (0.0_f32, 45.0_f32);
+            if let Some(id) = light
+                && let Some(t) = world.get::<Transform>(id)
+            {
+                let travel = t.rotation * Vec3::NEG_Z;
+                let pos = -travel;
+                sun_pitch = pos.y.asin().to_degrees();
+                sun_yaw = pos.z.atan2(pos.x).to_degrees();
+            }
+            if let Some(v) = yaw {
+                sun_yaw = v;
+            }
+            if let Some(v) = pitch {
+                sun_pitch = v;
+            }
+            let (yaw_r, pitch_r) = (sun_yaw.to_radians(), sun_pitch.clamp(-89.0, 89.0).to_radians());
+            // Posição do sol no céu (azimute a partir de +X, altura = pitch)
+            // → direção de VIAGEM = -posição.
+            let pos = Vec3::new(
+                yaw_r.cos() * pitch_r.cos(),
+                pitch_r.sin(),
+                yaw_r.sin() * pitch_r.cos(),
+            );
+            let travel = -pos;
+            // O TERRENO tem sol próprio (uniform `sun_dir` dos chunks) — sem
+            // publicar aqui, rodar a luz da cena não mudava um píxel de chão.
+            if let Some(mut assets) = world.get_resource_mut::<Assets<TerrainChunkMaterial>>() {
+                for (_, mat) in assets.iter_mut() {
+                    mat.params.sun_dir = Vec4::new(travel.x, travel.y, travel.z, 1.0);
+                }
+            }
+            let Some(light) = light else {
+                warnings
+                    .push("sun: sem DirectionalLight no mundo — só o sol do terreno mudou".into());
+                return true;
+            };
+            if yaw.is_some() || pitch.is_some() {
+                if let Some(mut transform) = world.get_mut::<Transform>(light) {
+                    transform.rotation =
+                        Quat::from_rotation_arc(Vec3::NEG_Z, travel.normalize_or_zero());
+                }
+            }
+            if let Some(mut light) = world.get_mut::<DirectionalLight>(light) {
+                if let Some(v) = illuminance {
+                    light.illuminance = v.max(0.0);
+                }
+                if let Some(v) = shadows {
+                    light.shadow_maps_enabled = v;
+                }
+            }
+            true
+        }
+        DebugOp::Ground {
+            moss,
+            vale_soft,
+            streaks,
+            rock_darken,
+            tri_slope,
+            tri_soft,
+            strata_strength,
+            patchiness,
+            gravel,
+            dirt,
+            forest,
+            shore_width,
+        } => {
+            // 1) Pele das paredes: TODOS os materiais de chunk partilham os
+            //    valores (a mesa de estilo é global).
+            if moss.is_some()
+                || streaks.is_some()
+                || rock_darken.is_some()
+                || tri_slope.is_some()
+                || tri_soft.is_some()
+                || strata_strength.is_some()
+            {
+                if let Some(mut assets) = world.get_resource_mut::<Assets<TerrainChunkMaterial>>() {
+                    for (_, mat) in assets.iter_mut() {
+                        if let Some(v) = tri_slope {
+                            mat.params.walls_a.x = v.clamp(0.0, 1.0);
+                        }
+                        if let Some(v) = tri_soft {
+                            mat.params.walls_a.y = v.clamp(0.01, 1.0);
+                        }
+                        if let Some(v) = strata_strength {
+                            mat.params.walls_a.w = v.clamp(0.0, 1.0);
+                        }
+                        if let Some(v) = rock_darken {
+                            mat.params.walls_b.x = v.clamp(0.0, 2.0);
+                        }
+                        if let Some(v) = streaks {
+                            mat.params.walls_b.y = v.clamp(0.0, 1.0);
+                        }
+                        if let Some(v) = moss {
+                            mat.params.walls_b.z = v.clamp(0.0, 1.0);
+                        }
+                    }
+                }
+            }
+            // 2) Splat: acumula o tuning (cada chamada passa só o que muda)
+            //    e re-cozinha os planos sobre a grid retida.
+            let mut tuning = world
+                .get_resource::<GroundState>()
+                .map(|s| s.tuning)
+                .unwrap_or_default();
+            if let Some(v) = patchiness {
+                tuning.patchiness = v.clamp(0.0, 3.0);
+            }
+            if let Some(v) = gravel {
+                tuning.gravel_shoulder = v.clamp(0.005, 0.3);
+            }
+            if let Some(v) = dirt {
+                tuning.dirt_density = v.clamp(0.0, 2.0);
+            }
+            if let Some(v) = forest {
+                tuning.forest_density = v.clamp(0.0, 2.0);
+            }
+            if let Some(v) = shore_width {
+                tuning.shore_width = Some(v.clamp(0.5, 40.0));
+            }
+            if let Some(v) = vale_soft {
+                tuning.vale_soft = v.clamp(0.0, 1.0);
+            }
+            let rebaked = crate::terrain::runtime::rebake_chunk_splats(world, tuning);
+            world.insert_resource(GroundState { tuning });
+            if rebaked == 0
+                && (patchiness.is_some()
+                    || gravel.is_some()
+                    || dirt.is_some()
+                    || forest.is_some()
+                    || shore_width.is_some()
+                    || vale_soft.is_some())
+            {
+                warnings.push(
+                    "ground: splats não re-cozidos (sem terreno com `layers`?) — só as paredes \
+                     (se pedidas) se aplicaram"
+                        .into(),
+                );
+            }
+            true
         }
         DebugOp::SetWindow { width, height } => {
             // Redimensiona a janela primária. O bevy_winit sincroniza o winit
