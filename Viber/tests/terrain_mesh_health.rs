@@ -61,6 +61,7 @@ fn build_all_boxes(
                 lod0_cell,
                 0,
                 bevy::math::UVec2::new(cx, cz),
+                [viber::terrain::voxel::spawn::NO_NEIGHBOUR; 4],
             );
             for b in &boxes {
                 if let Some(data) = build_box_mesh(spec, grid, &field, b) {

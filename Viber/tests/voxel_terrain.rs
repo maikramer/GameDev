@@ -14,6 +14,7 @@ use viber::terrain::voxel::{
     Bounds3, ChunkClass, VOXEL_CHUNK_CELLS, VoxelChunkParams, VoxelField, VoxelMod,
     build_voxel_mesh,
 };
+use viber::terrain::voxel::transvoxel_mesh::sliver_area2_floor;
 use viber::xml;
 
 use std::path::Path;
@@ -202,8 +203,7 @@ fn test_the_tunnel_actually_meshes_into_geometry() {
                 tint: spec.chunk_tint(),
                 max_height: spec.max_height,
                 uses_layer_material: true,
-                seal_faces: [false; 4],
-                seal_depth: 0.0,
+                transitions: [false; 4],
             };
             let density = |p: Vec3| field.density(&grid, p);
             if let Some(data) = build_voxel_mesh(&density, &params) {
@@ -266,8 +266,7 @@ fn test_two_runs_of_the_same_world_are_byte_identical() {
         tint: spec.chunk_tint(),
         max_height: spec.max_height,
         uses_layer_material: true,
-        seal_faces: [false; 4],
-        seal_depth: 0.0,
+        transitions: [false; 4],
     };
     let mesh_a =
         build_voxel_mesh(&|p| field_a.density(&grid_a, p), &params).expect("chunk meshes (a)");
@@ -303,26 +302,34 @@ fn test_the_tunnel_mesh_has_no_degenerate_triangles() {
         tint: spec.chunk_tint(),
         max_height: spec.max_height,
         uses_layer_material: true,
-        seal_faces: [false; 4],
-        seal_depth: 0.0,
+        transitions: [false; 4],
     };
     let data = build_voxel_mesh(&|p| field.density(&grid, p), &params).expect("chunk meshes");
     assert!(data.indices.len() >= 3);
-    // Area^2 of every triangle must clear a 1 mm² floor: surface nets emits
-    // quads between distinct lattice points, so a zero-area triangle means a
-    // collapsed quad or a bad corner order.
+    // Marching cubes emite SLIVERS onde a isosuperfície passa rente a um canto
+    // do lattice — dois vértices interpolados quase coincidentes. Não são
+    // removíveis sem furar a malha (partilham arestas com triângulos bons), e
+    // não se veem. O que tem de continuar verdade é que são uma MINORIA: um
+    // mesher partido produz slivers às centenas de por cento, não a 1 %.
+    let floor = sliver_area2_floor(voxel_size);
+    let total = data.indices.len() / 3;
+    let mut slivers = 0usize;
     for tri in data.indices.chunks_exact(3) {
         let (a, b, c) = (
             Vec3::from(data.positions[tri[0] as usize]),
             Vec3::from(data.positions[tri[1] as usize]),
             Vec3::from(data.positions[tri[2] as usize]),
         );
-        let area2 = (b - a).cross(c - a).length_squared();
-        assert!(
-            area2 > 1e-6,
-            "degenerate triangle {tri:?} (area² = {area2})"
-        );
+        if (b - a).cross(c - a).length_squared() <= floor {
+            slivers += 1;
+        }
     }
+    let fraction = slivers as f32 / total as f32;
+    assert!(
+        fraction < 0.05,
+        "{slivers}/{total} triângulos são slivers ({:.1} %) — o mesher degradou",
+        fraction * 100.0
+    );
 }
 
 #[test]
@@ -361,8 +368,7 @@ fn test_a_fully_interior_tunnel_chunk_is_watertight() {
                     tint: spec.chunk_tint(),
                     max_height: spec.max_height,
                     uses_layer_material: true,
-                    seal_faces: [false; 4],
-                    seal_depth: 0.0,
+                    transitions: [false; 4],
                 };
                 let Some(data) = build_voxel_mesh(&|p| field.density(&grid, p), &params) else {
                     continue;
@@ -487,8 +493,7 @@ fn test_folded_cliff_walls_have_no_holes_and_bounded_flips() {
                     tint: spec.chunk_tint(),
                     max_height: spec.max_height,
                     uses_layer_material: true,
-                    seal_faces: [false; 4],
-                    seal_depth: 0.0,
+                    transitions: [false; 4],
                 };
                 let Some(data) = build_voxel_mesh(&|p| field.density(&grid, p), &params) else {
                     continue;

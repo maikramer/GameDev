@@ -42,6 +42,14 @@ pub struct TerrainChunk {
     pub lod: u8,
     /// LOD of the mesh currently attached (rebuild output).
     pub built_lod: u8,
+    /// LOD dos 4 vizinhos (`[-X, +X, -Z, +Z]`) na altura em que as caixas
+    /// desta coluna foram meshadas.
+    ///
+    /// As faces de transição do transvoxel são geometria: mudar o LOD de uma
+    /// coluna muda o mesh das QUATRO vizinhas. Sem guardar com que vizinhança
+    /// se construiu, a costura ficava selada contra um LOD que já não existe —
+    /// um buraco que nada voltava a fechar.
+    pub built_neighbours: [u8; 4],
 }
 
 /// Per-terrain tracking state for the LOD plugin.
@@ -168,6 +176,7 @@ fn adopt_chunks(
                 coords,
                 lod: 0,
                 built_lod: 0,
+                built_neighbours: [super::voxel::spawn::NO_NEIGHBOUR; 4],
             });
         }
     }
@@ -189,13 +198,15 @@ const VOXEL_MAX_MESH_BUILDS_PER_FRAME: u32 = 4;
 #[derive(Component)]
 struct ColumnBuild {
     target: u8,
+    /// Vizinhança com que as caixas `staged` estão a ser meshadas.
+    neighbours: [u8; 4],
     staged: Vec<Entity>,
     remaining: Vec<super::voxel::VoxelBoxSpec>,
 }
 
 /// Per-frame LOD pass over VOXEL columns: same select/hysteresis/budget/cull
 /// machinery as the heightfield pass, but a "rebuild" swaps a whole stack of
-/// surface-nets boxes, staged hidden under the frame budget.
+/// caixas transvoxel, staged hidden under the frame budget.
 #[allow(clippy::too_many_arguments)]
 fn update_voxel_columns(
     mut state: ResMut<ChunkLodState>,
@@ -266,7 +277,47 @@ fn update_voxel_columns(
         )
     };
 
-    // 1. Cull + re-select + construção staged.
+    let rows = (spec.world_size / edge).ceil().max(1.0) as u32;
+    let clamp_coord = |axis: f32| -> u32 {
+        (((axis - render_distance + half) / edge).floor().max(0.0) as u32).min(rows - 1)
+    };
+    let clamp_hi = |axis: f32| -> u32 {
+        (((axis + render_distance + half) / edge).floor().max(0.0) as u32).min(rows - 1)
+    };
+    let min_cx = clamp_coord(cam_xz.x);
+    let max_cx = clamp_hi(cam_xz.x);
+    let min_cz = clamp_coord(cam_xz.y);
+    let max_cz = clamp_hi(cam_xz.y);
+
+    // 1. Campo de LOD de toda a janela visível, ANTES de tocar em nada.
+    //
+    // As faces de transição do transvoxel são geometria da coluna GROSSEIRA
+    // virada ao vizinho fino: decidir o LOD coluna a coluna, dentro do mesmo
+    // loop que já as reconstrói, dava a cada uma uma vizinhança diferente da
+    // que a vizinha via. Um passe de leitura primeiro, o clamp 2:1 a seguir, e
+    // só depois a construção — assim os dois lados de cada costura concordam.
+    // Colunas ainda por nascer entram com o LOD cru: a vizinha ao lado tem de
+    // ver o LOD que ela VAI ter, não a ausência dela.
+    let mut lod_field = LodField::new(rows);
+    for cz in min_cz..=max_cz {
+        for cx in min_cx..=max_cx {
+            let coords = UVec2::new(cx, cz);
+            let dist = center_of(coords).distance(cam_xz);
+            if chunk_aabb_distance(dist, edge) > render_distance {
+                continue;
+            }
+            let lod = match state.chunks.get(&coords).and_then(|e| columns.get(*e).ok()) {
+                Some((_, chunk, _)) => {
+                    select_lod(dist, spec.lod_distance(), chunk.built_lod, max_lod, margin)
+                }
+                None => raw_lod(dist, spec.lod_distance(), max_lod),
+            };
+            lod_field.set(coords, lod);
+        }
+    }
+    lod_field.clamp_two_to_one(max_lod);
+
+    // 2. Cull + re-select + construção staged.
     for (entity, mut chunk, mut build) in columns.iter_mut() {
         let dist = center_of(chunk.coords).distance(cam_xz);
         if chunk_aabb_distance(dist, edge) > render_distance {
@@ -275,18 +326,25 @@ fn update_voxel_columns(
             commands.entity(entity).despawn();
             continue;
         }
-        chunk.lod = select_lod(dist, spec.lod_distance(), chunk.built_lod, max_lod, margin);
+        chunk.lod = lod_field
+            .get(chunk.coords)
+            .unwrap_or_else(|| select_lod(dist, spec.lod_distance(), chunk.built_lod, max_lod, margin));
+        let neighbours = lod_field.neighbours(chunk.coords);
+        // Reconstruir também quando SÓ a vizinhança mudou: o LOD é o mesmo, as
+        // faces de transição não.
+        let stale = chunk.lod != chunk.built_lod || neighbours != chunk.built_neighbours;
         match build.as_mut() {
             // O alvo mudou a meio da construção: as staged (escondidas)
             // morrem e a fila recomputa para o novo alvo.
-            Some(b) if b.target != chunk.lod => {
+            Some(b) if b.target != chunk.lod || b.neighbours != neighbours => {
                 for e in b.staged.drain(..) {
                     commands.entity(e).despawn();
                 }
                 b.remaining = super::voxel::column_boxes(
-                    spec, grid, voxel, edge, lod0_cell, chunk.lod, chunk.coords,
+                    spec, grid, voxel, edge, lod0_cell, chunk.lod, chunk.coords, neighbours,
                 );
                 b.target = chunk.lod;
+                b.neighbours = neighbours;
                 state.pending = true;
             }
             Some(b) => {
@@ -335,15 +393,17 @@ fn update_voxel_columns(
                         commands.entity(*e).insert(Visibility::Inherited);
                     }
                     chunk.built_lod = b.target;
+                    chunk.built_neighbours = b.neighbours;
                     commands.entity(entity).remove::<ColumnBuild>();
                 }
             }
-            None if chunk.lod != chunk.built_lod => {
+            None if stale => {
                 let remaining = super::voxel::column_boxes(
-                    spec, grid, voxel, edge, lod0_cell, chunk.lod, chunk.coords,
+                    spec, grid, voxel, edge, lod0_cell, chunk.lod, chunk.coords, neighbours,
                 );
                 commands.entity(entity).insert(ColumnBuild {
                     target: chunk.lod,
+                    neighbours,
                     staged: Vec::new(),
                     remaining,
                 });
@@ -366,17 +426,6 @@ fn update_voxel_columns(
     if published.as_ref().and_then(|p| p.layer.as_ref()).is_none() && standard.is_none() {
         return;
     }
-    let rows = (spec.world_size / edge).ceil().max(1.0) as u32;
-    let clamp_coord = |axis: f32| -> u32 {
-        (((axis - render_distance + half) / edge).floor().max(0.0) as u32).min(rows - 1)
-    };
-    let clamp_hi = |axis: f32| -> u32 {
-        (((axis + render_distance + half) / edge).floor().max(0.0) as u32).min(rows - 1)
-    };
-    let min_cx = clamp_coord(cam_xz.x);
-    let max_cx = clamp_hi(cam_xz.x);
-    let min_cz = clamp_coord(cam_xz.y);
-    let max_cz = clamp_hi(cam_xz.y);
     for cz in min_cz..=max_cz {
         for cx in min_cx..=max_cx {
             if budget == 0 {
@@ -405,9 +454,12 @@ fn update_voxel_columns(
             // frame: um chão a meio é pior do que ultrapassar o orçamento
             // uma vez; o `saturating_sub` limita a uma coluna destes por
             // frame.
-            let lod = raw_lod(dist, spec.lod_distance(), max_lod);
+            let lod = lod_field
+                .get(coords)
+                .unwrap_or_else(|| raw_lod(dist, spec.lod_distance(), max_lod));
+            let neighbours = lod_field.neighbours(coords);
             let column_boxes = super::voxel::column_boxes(
-                spec, grid, voxel, edge, lod0_cell, lod, coords,
+                spec, grid, voxel, edge, lod0_cell, lod, coords, neighbours,
             );
             budget = budget.saturating_sub(column_boxes.len() as u32);
             let (entity, built) = super::voxel::spawn_column(
@@ -421,6 +473,7 @@ fn update_voxel_columns(
                 grid,
                 voxel,
                 spec,
+                neighbours,
             );
             if built > 0 {
                 state.chunks.insert(coords, entity);
@@ -438,6 +491,99 @@ fn update_voxel_columns(
 /// raio de render.
 fn chunk_aabb_distance(dist_center: f32, edge: f32) -> f32 {
     (dist_center - edge * 0.5).max(0.0)
+}
+
+/// LOD de cada coluna da grelha, já com o clamp 2:1 aplicado.
+///
+/// O transvoxel só sabe construir uma ponte de **um** nível: uma face de
+/// transição remalha a fiada exterior a meia escala, e nada mais. O `raw_lod`
+/// sozinho quase chega — as bandas de LOD dobram de largura e duas colunas
+/// vizinhas distam no máximo `edge·√2` — mas a histerese e o respawn deixam
+/// uma coluna atrasada o suficiente para abrir um degrau de dois níveis. Esse
+/// degrau seria um buraco no chão, não uma costura.
+///
+/// Por isso a regra do **quadtree restrito**: baixar (afinar) até nenhuma
+/// coluna diferir mais de um nível dos seus quatro vizinhos. O relaxamento só
+/// AFINA, portanto termina sempre.
+#[derive(Debug, Clone)]
+pub(crate) struct LodField {
+    rows: u32,
+    /// `None` = coluna fora do raio de render: não desenha nada e não
+    /// restringe ninguém.
+    lods: Vec<Option<u8>>,
+}
+
+impl LodField {
+    pub(crate) fn new(rows: u32) -> Self {
+        Self {
+            rows,
+            lods: vec![None; (rows as usize).saturating_mul(rows as usize)],
+        }
+    }
+
+    fn index(&self, coords: UVec2) -> Option<usize> {
+        if coords.x >= self.rows || coords.y >= self.rows {
+            return None;
+        }
+        Some(coords.y as usize * self.rows as usize + coords.x as usize)
+    }
+
+    pub(crate) fn set(&mut self, coords: UVec2, lod: u8) {
+        if let Some(i) = self.index(coords) {
+            self.lods[i] = Some(lod);
+        }
+    }
+
+    pub(crate) fn get(&self, coords: UVec2) -> Option<u8> {
+        self.index(coords).and_then(|i| self.lods[i])
+    }
+
+    /// LODs dos quatro vizinhos em `[-X, +X, -Z, +Z]`, com
+    /// [`super::voxel::spawn::NO_NEIGHBOUR`] onde não há coluna.
+    pub(crate) fn neighbours(&self, coords: UVec2) -> [u8; 4] {
+        let none = super::voxel::spawn::NO_NEIGHBOUR;
+        let at = |x: i64, z: i64| -> u8 {
+            if x < 0 || z < 0 {
+                return none;
+            }
+            self.get(UVec2::new(x as u32, z as u32)).unwrap_or(none)
+        };
+        let (x, z) = (i64::from(coords.x), i64::from(coords.y));
+        [
+            at(x - 1, z),
+            at(x + 1, z),
+            at(x, z - 1),
+            at(x, z + 1),
+        ]
+    }
+
+    /// Quadtree restrito: nenhuma coluna mais de um nível acima do vizinho
+    /// mais fino. Só afina, logo converge; o teto de passes é o número de
+    /// níveis (uma cadeia mais longa que isso não existe).
+    pub(crate) fn clamp_two_to_one(&mut self, max_lod: u8) {
+        for _ in 0..=max_lod {
+            let mut changed = false;
+            for z in 0..self.rows {
+                for x in 0..self.rows {
+                    let coords = UVec2::new(x, z);
+                    let Some(lod) = self.get(coords) else { continue };
+                    let finest = self
+                        .neighbours(coords)
+                        .into_iter()
+                        .filter(|n| *n != super::voxel::spawn::NO_NEIGHBOUR)
+                        .min();
+                    let Some(finest) = finest else { continue };
+                    if lod > finest.saturating_add(1) {
+                        self.set(coords, finest + 1);
+                        changed = true;
+                    }
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+    }
 }
 
 /// LOD cru para uma distância — o esquema plano `2^lod` de
@@ -537,6 +683,94 @@ mod tests {
     use super::*;
     use crate::terrain::brush::BrushGrid;
     use crate::terrain::heightmap::HeightMapU16;
+    use crate::terrain::voxel::spawn::NO_NEIGHBOUR;
+
+    // ── LodField: o clamp 2:1 que o transvoxel exige ───────────────────────
+
+    #[test]
+    fn test_the_lod_field_reports_missing_neighbours_as_absent() {
+        let mut f = LodField::new(3);
+        f.set(UVec2::new(1, 1), 2);
+        // Coluna sozinha no meio: os 4 vizinhos não existem.
+        assert_eq!(f.neighbours(UVec2::new(1, 1)), [NO_NEIGHBOUR; 4]);
+        // Canto (0,0): −X e −Z estão fora da grelha, sem underflow. Os
+        // vizinhos são os 4 ORTOGONAIS — (1,1) é diagonal e não conta.
+        f.set(UVec2::new(0, 0), 1);
+        f.set(UVec2::new(1, 0), 3);
+        f.set(UVec2::new(0, 1), 2);
+        assert_eq!(
+            f.neighbours(UVec2::new(0, 0)),
+            [NO_NEIGHBOUR, 3, NO_NEIGHBOUR, 2]
+        );
+        // Fora da grelha não é lido nem escrito.
+        f.set(UVec2::new(9, 9), 0);
+        assert_eq!(f.get(UVec2::new(9, 9)), None);
+    }
+
+    #[test]
+    fn test_the_clamp_never_leaves_a_two_level_step() {
+        // Fila 0,4: sem clamp era um degrau de 4 níveis — o transvoxel só
+        // sabe fazer a ponte de UM.
+        let mut f = LodField::new(5);
+        for x in 0..5u32 {
+            f.set(UVec2::new(x, 0), if x == 0 { 0 } else { 4 });
+        }
+        f.clamp_two_to_one(4);
+        let row: Vec<u8> = (0..5).map(|x| f.get(UVec2::new(x, 0)).unwrap()).collect();
+        assert_eq!(row, vec![0, 1, 2, 3, 4], "a cascata tem de subir de 1 em 1");
+        for x in 0..4u32 {
+            let a = f.get(UVec2::new(x, 0)).unwrap() as i32;
+            let b = f.get(UVec2::new(x + 1, 0)).unwrap() as i32;
+            assert!((a - b).abs() <= 1, "degrau de {} níveis em x={x}", (a - b).abs());
+        }
+    }
+
+    #[test]
+    fn test_the_clamp_only_refines_and_leaves_a_legal_field_alone() {
+        let mut f = LodField::new(4);
+        for z in 0..4u32 {
+            for x in 0..4u32 {
+                f.set(UVec2::new(x, z), (x.min(z)) as u8);
+            }
+        }
+        let before: Vec<Option<u8>> = (0..16)
+            .map(|i| f.get(UVec2::new(i % 4, i / 4)))
+            .collect();
+        f.clamp_two_to_one(3);
+        let after: Vec<Option<u8>> = (0..16)
+            .map(|i| f.get(UVec2::new(i % 4, i / 4)))
+            .collect();
+        assert_eq!(before, after, "um campo já legal não pode mexer-se");
+    }
+
+    #[test]
+    fn test_the_clamp_converges_on_the_worst_cascade() {
+        // Uma única coluna fina no canto de uma grelha toda grossa: o pior
+        // caso de propagação. Com o teto de passes = max_lod tem de estabilizar.
+        let rows = 8u32;
+        let mut f = LodField::new(rows);
+        for z in 0..rows {
+            for x in 0..rows {
+                f.set(UVec2::new(x, z), 4);
+            }
+        }
+        f.set(UVec2::new(0, 0), 0);
+        f.clamp_two_to_one(4);
+        for z in 0..rows {
+            for x in 0..rows {
+                let lod = f.get(UVec2::new(x, z)).unwrap() as i32;
+                for n in f.neighbours(UVec2::new(x, z)) {
+                    if n == NO_NEIGHBOUR {
+                        continue;
+                    }
+                    assert!(
+                        (lod - n as i32).abs() <= 1,
+                        "({x},{z}) lod {lod} contra vizinho {n}"
+                    );
+                }
+            }
+        }
+    }
 
     fn spec() -> TerrainSpec {
         TerrainSpec {
@@ -611,6 +845,7 @@ mod tests {
                             coords: UVec2::new(cx, cz),
                             lod: 0,
                             built_lod: 0,
+                            built_neighbours: [0; 4],
                         },
                     ))
                     .id();
@@ -785,6 +1020,7 @@ mod tests {
                             coords: UVec2::new(cx, cz),
                             lod: 0,
                             built_lod: 0,
+                            built_neighbours: [0; 4],
                         },
                     ))
                     .id();

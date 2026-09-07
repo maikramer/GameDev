@@ -46,6 +46,11 @@ mlua = { version = "0.10", features = ["luau", "vendored", "send"] }
 # texto apenas: sem `image-data` (não pagar codecs) e com Wayland.
 arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
 meshopt = "0.6"
+# Transvoxel (Eric Lengyel): marching cubes COM células de transição entre
+# blocos de resolução diferente — é o que fecha a costura entre colunas de LOD
+# vizinhas sem saias. Deps de runtime minúsculas (`flagset`, `num`,
+# `transvoxel-data`): sem Bevy, sem nalgebra.
+transvoxel = "2"
 
 [dev-dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }

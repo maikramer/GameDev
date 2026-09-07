@@ -1,7 +1,7 @@
 //! Buffer types and the height/slope tint shared by the voxel pipeline.
 //!
-//! O terreno é 100% volumétrico: o mesher é o surface nets de
-//! [`super::voxel::surface_nets`], e o que aqui sobrevive é a infraestrutura
+//! O terreno é 100% volumétrico: o mesher é o transvoxel de
+//! [`super::voxel::transvoxel_mesh`], e o que aqui sobrevive é a infraestrutura
 //! comum — [`HeightField`] (o termo-base que o [`super::voxel::VoxelField`]
 //! lê), [`ChunkMeshData`] (buffers que o pipeline voxel consome) e o tint de
 //! altura/inclinação em vertex colors ([`tint_vertex_color`], o caminho

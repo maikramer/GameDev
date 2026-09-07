@@ -16,7 +16,8 @@
 //! * [`index::ModIndex`] answers *does anything 3D touch this column?* in O(1),
 //!   which is what keeps the cost proportional to the authored area instead of
 //!   to the world.
-//! * [`surface_nets`] meshes the chunks that need it.
+//! * [`transvoxel_mesh`] meshes the chunks that need it — marching cubes
+//!   com células de transição, que é o que fecha a costura entre LODs.
 
 pub mod arch;
 pub mod cave;
@@ -26,7 +27,7 @@ pub mod index;
 pub mod mods;
 pub mod riverbank;
 pub mod spawn;
-pub mod surface_nets;
+pub mod transvoxel_mesh;
 
 pub use arch::ArchSpec;
 pub use cave::CaveSpec;
@@ -36,7 +37,9 @@ pub use index::{ChunkClass, ModIndex};
 pub use mods::{ArchMod, Bounds3, BoxMod, CapsuleMod, ModOp, VoxelMod};
 pub use spawn::{
     VoxelBoxSpec, VoxelChunk, VoxelLodShape, VoxelSpawnStats, build_box_mesh, column_boxes,
-    lod_shape, seal_depth, spawn_voxel_columns,
+    lod_shape, spawn_voxel_columns,
 };
 pub(crate) use spawn::{spawn_box_entity, spawn_column};
-pub use surface_nets::{VOXEL_CHUNK_CELLS, VoxelChunkParams, build_voxel_mesh};
+pub use transvoxel_mesh::{
+    VOXEL_CHUNK_CELLS, VoxelChunkParams, build_voxel_mesh, transition_sides,
+};

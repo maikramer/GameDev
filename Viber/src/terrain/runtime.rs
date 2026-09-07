@@ -327,7 +327,7 @@ impl TerrainRuntime {
     /// Height of the *rendered* surface at a world XZ position.
     ///
     /// A superfície desenhada É o nível zero do SDF em toda a coluna — o
-    /// surface nets segue o campo com precisão sub-voxel e o LOD só muda o
+    /// o mesher segue o campo com precisão sub-voxel e o LOD só muda o
     /// tamanho da célula — por isso o [`VoxelField::surface_top`]
     /// bisseccionado é a resposta, sempre. Queries que precisam do chão SOB
     /// um teto (interior de gruta, vão de arco) usam [`Self::surface_below`].
@@ -639,7 +639,7 @@ pub fn bootstrap(world: &mut World) {
     let voxel = VoxelField::new(voxel_mods, spec.world_size, spec.chunk_size);
 
     // Caminho 100% VOLUMÉTRICO: toda a grelha sai do campo voxel por
-    // surface nets, com ladder de LOD por coluna. O heightfield sobrevive só
+    // transvoxel, com ladder de LOD por coluna. O heightfield sobrevive só
     // como DADO (termo-base do SDF, carve de água/estradas, máscaras).
     let voxel_standard = {
         let handle = terrain_standard_material(

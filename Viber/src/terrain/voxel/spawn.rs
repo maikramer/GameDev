@@ -2,7 +2,7 @@
 //!
 //! No caminho 100% volumétrico CADA célula da grelha de chunks é uma COLUNA
 //! voxel: a entidade `TerrainChunk` (nome `chunk cz-cx`) é o pai de uma
-//! pilha de caixas [`VoxelChunk`] meshadas com surface nets. O ladder de
+//! pilha de caixas [`VoxelChunk`] meshadas com transvoxel. O ladder de
 //! LOD vive no `plugin.rs` (select + histerese + budget + cull); o que este
 //! módulo fornece é a geometria pura — [`lod_shape`] (tiled de caixas por
 //! LOD), [`column_boxes`] (quais caixas existem) e [`build_box_mesh`] (uma
@@ -16,7 +16,7 @@ use super::super::runtime::{ChunkLayerMap, ChunkMaterialHandle, to_bevy_mesh};
 use super::super::spec::TerrainSpec;
 use super::field::VoxelField;
 use super::mods::Bounds3;
-use super::surface_nets::{VOXEL_CHUNK_CELLS, VoxelChunkParams, build_voxel_mesh};
+use super::transvoxel_mesh::{VOXEL_CHUNK_CELLS, VoxelChunkParams, build_voxel_mesh};
 
 /// A meshed box of the voxel field.
 #[derive(Debug, Component)]
@@ -48,7 +48,7 @@ pub struct VoxelSpawnStats {
 //
 // O caminho 100% volumétrico trata CADA célula da grelha de chunks como uma
 // COLUNA voxel: o `TerrainChunk` deixa de ter mesh próprio e passa a ser o
-// pai de uma pilha de caixas surface-nets. O ladder reutiliza a semântica do
+// pai de uma pilha de caixas transvoxel. O ladder reutiliza a semântica do
 // heightfield (select + histerese + budget + cull no `plugin.rs`); o que
 // muda é o que um LOD constrói:
 
@@ -93,7 +93,7 @@ pub fn lod_shape(lod0_cell: f32, chunk_edge: f32, lod: u8) -> VoxelLodShape {
     VoxelLodShape { cells, per_edge: 1 }
 }
 
-/// Uma caixa surface-nets de uma coluna, pronta para meshar.
+/// Uma caixa transvoxel de uma coluna, pronta para meshar.
 #[derive(Debug, Clone, PartialEq)]
 pub struct VoxelBoxSpec {
     /// Coordenada da caixa na grelha lógica da coluna (nome/identidade).
@@ -106,22 +106,25 @@ pub struct VoxelBoxSpec {
     pub cells: usize,
     /// Aresta de uma célula em metros.
     pub voxel_size: f32,
-    /// Faces na fronteira da coluna a selar, `[-X, +X, -Z, +Z]`.
-    pub seal: [bool; 4],
+    /// Faces cujo vizinho está ao DOBRO da resolução desta caixa, em
+    /// `[-X, +X, -Z, +Z]` — as células de transição do transvoxel.
+    ///
+    /// Só ligam nas caixas da fronteira da coluna, e só quando a coluna
+    /// vizinha desse lado está num LOD mais FINO: quem gera as células de
+    /// transição é o bloco grosseiro.
+    pub transitions: [bool; 4],
 }
 
-/// Profundidade do selo de fronteira de coluna: a mesma conta do
-/// `runtime::volumetric_seal` — quatro células cobrem o pior desacordo do
-/// surface nets com o vizinho, piso de 2 m.
-pub fn seal_depth(voxel_size: f32) -> f32 {
-    (voxel_size.max(0.0) * 4.0).max(2.0)
-}
+/// LOD ausente na tabela de vizinhos (fora do mundo, ou coluna ainda por
+/// nascer): trata-se como "igual a mim", que não pede transição nenhuma.
+pub const NO_NEIGHBOUR: u8 = u8::MAX;
 
 /// As caixas que renderizam UMA coluna ao `lod` dado.
 ///
 /// A pilha vertical é o envelope do chunk: o intervalo de alturas da grelha
 /// (`range_over`, O(1)) mais o alcance dos mods — o resto é céu ou bedrock
 /// provados (`region_state`) e nunca chega a ser amostrado.
+#[allow(clippy::too_many_arguments)]
 pub fn column_boxes(
     spec: &TerrainSpec,
     grid: &BrushGrid,
@@ -130,6 +133,7 @@ pub fn column_boxes(
     lod0_cell: f32,
     lod: u8,
     coords: UVec2,
+    neighbour_lods: [u8; 4],
 ) -> Vec<VoxelBoxSpec> {
     let shape = lod_shape(lod0_cell, chunk_edge, lod);
     let extent = chunk_edge / shape.per_edge as f32;
@@ -145,6 +149,16 @@ pub fn column_boxes(
     let y_hi = gmax.max(mods_y.max.y) + 1.0;
     let iy0 = (y_lo / extent).floor() as i32;
     let iy1 = (y_hi / extent).ceil() as i32;
+
+    // Uma face pede transição quando o vizinho desse lado é mais FINO. O
+    // clamp 2:1 do `plugin.rs` garante que a diferença nunca passa de um
+    // nível, que é a única ponte que o transvoxel sabe construir.
+    let finer = [
+        neighbour_lods[0] != NO_NEIGHBOUR && neighbour_lods[0] < lod,
+        neighbour_lods[1] != NO_NEIGHBOUR && neighbour_lods[1] < lod,
+        neighbour_lods[2] != NO_NEIGHBOUR && neighbour_lods[2] < lod,
+        neighbour_lods[3] != NO_NEIGHBOUR && neighbour_lods[3] < lod,
+    ];
 
     let mut boxes = Vec::new();
     for iz in 0..shape.per_edge {
@@ -165,11 +179,11 @@ pub fn column_boxes(
                     extent,
                     cells: shape.cells,
                     voxel_size,
-                    seal: [
-                        ix == 0,
-                        ix == shape.per_edge - 1,
-                        iz == 0,
-                        iz == shape.per_edge - 1,
+                    transitions: [
+                        ix == 0 && finer[0],
+                        ix == shape.per_edge - 1 && finer[1],
+                        iz == 0 && finer[2],
+                        iz == shape.per_edge - 1 && finer[3],
                     ],
                 });
             }
@@ -178,7 +192,7 @@ pub fn column_boxes(
     boxes
 }
 
-/// Mesa UMA caixa da coluna (SDF → surface nets → buffers).
+/// Mesa UMA caixa da coluna (SDF → transvoxel → buffers).
 pub fn build_box_mesh(
     spec: &TerrainSpec,
     grid: &BrushGrid,
@@ -193,8 +207,7 @@ pub fn build_box_mesh(
         tint: spec.chunk_tint(),
         max_height: spec.max_height,
         uses_layer_material: !spec.layers.is_empty(),
-        seal_faces: b.seal,
-        seal_depth: seal_depth(b.voxel_size),
+        transitions: b.transitions,
     };
     let density = |p: Vec3| field.density(grid, p);
     build_voxel_mesh(&density, &params)
@@ -261,6 +274,7 @@ pub(crate) fn spawn_column(
     grid: &BrushGrid,
     field: &VoxelField,
     spec: &TerrainSpec,
+    neighbour_lods: [u8; 4],
 ) -> (Entity, usize) {
     let column = commands
         .spawn((
@@ -272,6 +286,7 @@ pub(crate) fn spawn_column(
                 coords,
                 lod,
                 built_lod: lod,
+                built_neighbours: neighbour_lods,
             },
         ))
         .id();
@@ -311,14 +326,22 @@ pub fn spawn_voxel_columns(
     let rows = (spec.world_size / edge).ceil().max(1.0) as u32;
     let half = spec.world_size * 0.5;
 
-    let mut commands = world.commands();
+    let center_of = |cx: u32, cz: u32| {
+        Vec2::new(
+            -half + cx as f32 * edge + edge * 0.5,
+            -half + cz as f32 * edge + edge * 0.5,
+        )
+    };
+
+    // Campo de LOD de toda a grelha antes de meshar a primeira caixa: as faces
+    // de transição de uma coluna dependem do LOD das quatro vizinhas, e o
+    // clamp 2:1 é o que garante que a diferença nunca passa do salto único que
+    // o transvoxel sabe fazer a ponte. Sem câmara (testes headless) tudo nasce
+    // em LOD 0 e o campo é uniforme.
+    let mut lod_field = super::super::plugin::LodField::new(rows);
     for cz in 0..rows {
         for cx in 0..rows {
-            let center = Vec2::new(
-                -half + cx as f32 * edge + edge * 0.5,
-                -half + cz as f32 * edge + edge * 0.5,
-            );
-            let distance = camera_xz.map(|cam| cam.distance(center));
+            let distance = camera_xz.map(|cam| cam.distance(center_of(cx, cz)));
             if let Some(distance) = distance
                 && distance > spec.effective_render_distance()
             {
@@ -327,8 +350,22 @@ pub fn spawn_voxel_columns(
             let lod = distance
                 .map(|d| super::super::plugin::raw_lod(d, spec.lod_distance(), max_lod))
                 .unwrap_or(0);
+            lod_field.set(UVec2::new(cx, cz), lod);
+        }
+    }
+    lod_field.clamp_two_to_one(max_lod);
+
+    let mut commands = world.commands();
+    for cz in 0..rows {
+        for cx in 0..rows {
             let coords = UVec2::new(cx, cz);
-            let boxes = column_boxes(spec, grid, field, edge, lod0_cell, lod, coords);
+            let Some(lod) = lod_field.get(coords) else {
+                continue;
+            };
+            let neighbours = lod_field.neighbours(coords);
+            let boxes = column_boxes(
+                spec, grid, field, edge, lod0_cell, lod, coords, neighbours,
+            );
             stats.chunks += 1;
             let material = layer_map
                 .and_then(|m| m.get(cx, cz).cloned())
@@ -345,6 +382,7 @@ pub fn spawn_voxel_columns(
                 grid,
                 field,
                 spec,
+                neighbours,
             );
             stats.meshed += built;
         }
@@ -426,7 +464,7 @@ mod tests {
             let field = shelf_field(world_size);
             let edge = 64.0_f32;
             let coords = UVec2::new(2, 1);
-            let boxes = column_boxes(&spec, &grid, &field, edge, 1.0, 0, coords);
+            let boxes = column_boxes(&spec, &grid, &field, edge, 1.0, 0, coords, [NO_NEIGHBOUR; 4]);
             assert!(!boxes.is_empty(), "world {world_size}: nothing planned");
 
             let half = world_size * 0.5;
@@ -455,7 +493,7 @@ mod tests {
         let grid = flat_grid(256.0, 10.0, 100.0);
         let spec = TerrainSpec::default();
         let field = VoxelField::flat(256.0, 64.0);
-        let boxes = column_boxes(&spec, &grid, &field, 64.0, 1.0, 0, UVec2::new(1, 1));
+        let boxes = column_boxes(&spec, &grid, &field, 64.0, 1.0, 0, UVec2::new(1, 1), [NO_NEIGHBOUR; 4]);
         assert!(!boxes.is_empty(), "flat ground must still be meshed");
         let mut meshed = 0;
         for b in &boxes {
@@ -493,7 +531,7 @@ mod tests {
             ModOp::Union,
         ));
         let field = VoxelField::new(vec![wall], 256.0, 64.0);
-        let boxes = column_boxes(&spec, &grid, &field, 64.0, 1.0, 0, UVec2::new(1, 1));
+        let boxes = column_boxes(&spec, &grid, &field, 64.0, 1.0, 0, UVec2::new(1, 1), [NO_NEIGHBOUR; 4]);
         assert!(!boxes.is_empty(), "the wall column must plan boxes");
         // Sem a prova seriam 2×2×(200/32) ≈ 26 caixas por coluna.
         assert!(
@@ -519,7 +557,7 @@ mod tests {
             open_ends: true,
         };
         let field = VoxelField::new(cave.build(&grid), 256.0, 64.0);
-        let boxes = column_boxes(&spec, &grid, &field, 64.0, 1.0, 0, UVec2::new(1, 1));
+        let boxes = column_boxes(&spec, &grid, &field, 64.0, 1.0, 0, UVec2::new(1, 1), [NO_NEIGHBOUR; 4]);
         let mut downward = 0usize;
         for b in &boxes {
             if let Some(data) = build_box_mesh(&spec, &grid, &field, b) {
@@ -536,29 +574,66 @@ mod tests {
         );
     }
 
-    /// As caixas na fronteira da coluna levam o selo da face externa; as
-    /// interiores não (as costuras internas fecham por coincidência).
+    /// Vizinhos ao MESMO LOD (ou ausentes) não pedem transição nenhuma: as
+    /// caixas alinham célula a célula e a costura fecha por coincidência.
     #[test]
-    fn test_seal_faces_mark_only_column_boundary_boxes() {
+    fn test_equal_neighbours_ask_for_no_transition() {
         let grid = flat_grid(256.0, 10.0, 100.0);
         let spec = TerrainSpec::default();
         let field = shelf_field(256.0);
-        let boxes = column_boxes(&spec, &grid, &field, 64.0, 1.0, 0, UVec2::new(1, 1));
+        for neighbours in [[NO_NEIGHBOUR; 4], [1u8; 4]] {
+            let boxes = column_boxes(
+                &spec, &grid, &field, 64.0, 1.0, 1, UVec2::new(1, 1), neighbours,
+            );
+            assert!(!boxes.is_empty());
+            for b in &boxes {
+                assert_eq!(b.transitions, [false; 4], "sem degrau de LOD: {b:?}");
+            }
+        }
+    }
+
+    /// Um vizinho mais FINO põe células de transição — e só na caixa que toca
+    /// essa face da coluna. Quem gera a ponte é o bloco grosseiro.
+    #[test]
+    fn test_only_the_boundary_box_facing_a_finer_neighbour_transitions() {
+        let grid = flat_grid(256.0, 10.0, 100.0);
+        let spec = TerrainSpec::default();
+        let field = shelf_field(256.0);
+        // Coluna a LOD 1 (1 caixa de 64 m por nível) com o vizinho −X a LOD 0.
+        let boxes = column_boxes(
+            &spec,
+            &grid,
+            &field,
+            64.0,
+            1.0,
+            1,
+            UVec2::new(1, 1),
+            [0, 1, 1, 1],
+        );
         assert!(!boxes.is_empty());
+        for b in &boxes {
+            assert_eq!(b.transitions, [true, false, false, false], "só −X: {b:?}");
+        }
+
+        // A LOD 0 a coluna tem 2×2 caixas: a fiada interior não toca a
+        // fronteira e nunca transiciona, mesmo com o vizinho declarado.
+        let boxes = column_boxes(
+            &spec,
+            &grid,
+            &field,
+            64.0,
+            1.0,
+            0,
+            UVec2::new(1, 1),
+            [0, 0, 0, 0],
+        );
         let half = 128.0_f32;
-        let x0 = -half + 64.0; // coluna (1,1)
-        let z0 = -half + 64.0;
-        let per_edge = 2; // LOD0: 2×2 caixas de 32 m
+        let x0 = -half + 64.0;
         for b in &boxes {
             let lx = ((b.origin.x - x0) / b.extent).round() as i32;
-            let lz = ((b.origin.z - z0) / b.extent).round() as i32;
-            assert_eq!(b.seal[0], lx == 0, "−X seal só na fronteira: {b:?}");
-            assert_eq!(b.seal[1], lx == per_edge - 1, "+X seal só na fronteira: {b:?}");
-            assert_eq!(b.seal[2], lz == 0, "−Z seal só na fronteira: {b:?}");
-            assert_eq!(b.seal[3], lz == per_edge - 1, "+Z seal só na fronteira: {b:?}");
+            // Vizinho ao MESMO LOD 0: nunca é mais fino do que nós.
+            assert!(!b.transitions[0], "vizinho igual não pede ponte: {b:?}");
+            let _ = lx;
         }
-        // O canto mínimo leva −X e −Z; o oposto leva +X e +Z.
-        assert!(boxes.iter().any(|b| b.seal[0] && b.seal[2]));
-        assert!(boxes.iter().any(|b| b.seal[1] && b.seal[3]));
     }
 }

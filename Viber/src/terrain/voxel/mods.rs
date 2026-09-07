@@ -119,7 +119,7 @@ pub enum ModOp {
 pub trait VoxelMod: Send + Sync + std::fmt::Debug {
     /// Signed distance in meters at a world point; negative inside the solid.
     ///
-    /// It does not have to be a metrically exact distance — surface nets only
+    /// It does not have to be a metrically exact distance — the mesher only
     /// needs the sign and a well-behaved zero crossing — but it must be
     /// continuous, and it must not lie about the sign inside [`Self::bounds`].
     fn distance(&self, p: Vec3) -> f32;

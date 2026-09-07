@@ -41,7 +41,10 @@ fn bench_voxel_box_build_per_lod() {
     for lod in 0..3u8 {
         let shape = lod_shape(1.0, edge, lod);
         let coords = bevy::math::UVec2::new(2, 2);
-        let boxes = column_boxes(&spec, &grid, &field, edge, 1.0, lod, coords);
+        let boxes = column_boxes(
+            &spec, &grid, &field, edge, 1.0, lod, coords,
+            [viber::terrain::voxel::spawn::NO_NEIGHBOUR; 4],
+        );
         assert!(!boxes.is_empty(), "lod {lod}: no boxes planned");
 
         // Warm-up (allocator, caches).

@@ -28,7 +28,7 @@
 //!
 //! Splitting per segment is not cosmetic. A whole-polyline mod would make
 //! every density sample walk every station: a 180 m wall is ~90 stations, and
-//! surface nets take ~39 k samples per chunk. Per-segment mods live in the
+//! the mesher takes ~39 k samples per chunk. Per-segment mods live in the
 //! index buckets, so a sample pays only for the few segments beside it.
 //!
 //! Determinism is preserved the same way the carve preserves it: every probe
