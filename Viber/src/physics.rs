@@ -1007,7 +1007,7 @@ pub fn stream_voxel_colliders(
         let distance = centre.distance(cam);
         match (has_collider.is_some(), distance) {
             (false, d) if d <= keep_within => {
-                if let Some(collider) = chunk_voxels(&runtime, chunk) {
+                if let Some(collider) = terrain_collider(&runtime, chunk) {
                     // try_* e não insert/remove: no caminho 100% voxel as
                     // caixas MORREM sob os pés deste sistema (o LOD troca
                     // despacha as caixas velhas de uma coluna no mesmo
@@ -1028,6 +1028,88 @@ pub fn stream_voxel_colliders(
             _ => {}
         }
     }
+}
+
+/// Which collider a voxel box gets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TerrainColliderKind {
+    /// Pure base term — smooth `Collider::heightfield` from the grid.
+    Smooth,
+    /// A 3D feature (cave / arch / cliff) reaches into this box —
+    /// `Collider::voxels`.
+    Voxel,
+}
+
+/// Decides the collider of one voxel box from whether a mod's 3D bounds
+/// actually reach into it.
+fn terrain_collider_kind(
+    field: &crate::terrain::voxel::VoxelField,
+    origin: Vec3,
+    extent: f32,
+) -> TerrainColliderKind {
+    let bounds = crate::terrain::voxel::Bounds3::from_corners(
+        origin,
+        origin + Vec3::splat(extent),
+    );
+    if field.has_mods_in(&bounds) {
+        TerrainColliderKind::Voxel
+    } else {
+        TerrainColliderKind::Smooth
+    }
+}
+
+/// The collider of one voxel box.
+///
+/// Caixa termo-base puro (95% do mundo): `Collider::heightfield` da grid —
+/// SUAVE, o mesmo collider que o heightfield usava antes da migração.
+/// Quantizar por centro de célula (`Collider::voxels` a 1 m) punha o topo
+/// ±0,5 m fora da superfície desenhada: subir morro viravam paredões de 1 m
+/// acima do autostep, descer virava escada, e o `last_resort_ground` do
+/// player perdia o contrato `y_de_repouso == sample` (na cidade o collider
+/// ficava 0,27 m ACIMA do solo visual e o herói nunca lia grounded). Caixas
+/// tocadas por features 3D mantêm `Collider::voxels` — dentro de
+/// grutas/arcos o degrau é o comportamento de sempre.
+fn terrain_collider(
+    runtime: &crate::terrain::runtime::TerrainRuntime,
+    chunk: &crate::terrain::voxel::VoxelChunk,
+) -> Option<Collider> {
+    match terrain_collider_kind(&runtime.voxel, chunk.origin, chunk.extent) {
+        TerrainColliderKind::Voxel => chunk_voxels(runtime, chunk),
+        TerrainColliderKind::Smooth => chunk_smooth_heightfield(runtime, chunk),
+    }
+}
+
+/// Smooth heightfield collider for a box that is pure base term, sized to the
+/// box and sampled from the SAME grid the gameplay queries read — o topo do
+/// collider coincide com `runtime.sample`, que é o contrato do
+/// `last_resort_ground`. Heights are entity-relative (a entidade senta-se no
+/// canto mínimo da caixa); o offset XZ ao centro vai no compound.
+fn chunk_smooth_heightfield(
+    runtime: &crate::terrain::runtime::TerrainRuntime,
+    chunk: &crate::terrain::voxel::VoxelChunk,
+) -> Option<Collider> {
+    let size = chunk.extent;
+    if !(size.is_finite() && size > 0.0) {
+        return None;
+    }
+    let resolution = runtime.spec.collision_resolution.max(1) as usize;
+    let n = resolution + 1;
+    let step = size / resolution as f32;
+    let mut heights = Vec::with_capacity(n * n);
+    // Row-major: row walks +X, column walks +Z — o layout que o collider de
+    // chunk pré-migração usava, agora por caixa de 32 m (mais fino).
+    for row in 0..n {
+        for col in 0..n {
+            let x = chunk.origin.x + row as f32 * step;
+            let z = chunk.origin.z + col as f32 * step;
+            heights.push(runtime.grid.sample(x, z) - chunk.origin.y);
+        }
+    }
+    Some(Collider::compound(vec![(
+        Vec3::new(size * 0.5, 0.0, size * 0.5),
+        Quat::IDENTITY,
+        Collider::heightfield(heights, n, n, Vec3::new(size, 1.0, size)),
+    )]))
 }
 
 /// Builds a Rapier `Voxels` collider for one volumetric chunk.
@@ -1071,5 +1153,95 @@ fn chunk_voxels(
         return None;
     }
     Some(Collider::voxels(Vec3::splat(size), &filled))
+}
+
+#[cfg(test)]
+mod terrain_collider_tests {
+    use super::*;
+    use crate::terrain::brush::BrushGrid;
+    use crate::terrain::heightmap::HeightMapU16;
+    use crate::terrain::voxel::VoxelField;
+
+    fn flat_field() -> VoxelField {
+        VoxelField::flat(256.0, 64.0)
+    }
+
+    #[test]
+    fn test_a_pure_base_term_box_gets_the_smooth_collider() {
+        let field = flat_field();
+        assert_eq!(
+            terrain_collider_kind(&field, Vec3::new(-32.0, 32.0, -32.0), 32.0),
+            TerrainColliderKind::Smooth,
+            "sem mods o collider tem de ser o heightfield suave"
+        );
+    }
+
+    #[test]
+    fn test_a_box_touching_a_mod_gets_voxels_and_a_distant_one_does_not() {
+        use crate::terrain::voxel::mods::{BoxMod, ModOp, VoxelMod};
+        let wall: Box<dyn VoxelMod> = Box::new(BoxMod::new(
+            "wall",
+            crate::terrain::voxel::Bounds3::from_corners(
+                Vec3::new(-8.0, 24.0, -8.0),
+                Vec3::new(8.0, 40.0, 8.0),
+            ),
+            ModOp::Union,
+        ));
+        let field = VoxelField::new(vec![wall], 256.0, 64.0);
+        assert_eq!(
+            terrain_collider_kind(&field, Vec3::new(-32.0, 32.0, -32.0), 32.0),
+            TerrainColliderKind::Voxel,
+            "a caixa que contém a parede fica voxels"
+        );
+        assert_eq!(
+            terrain_collider_kind(&field, Vec3::new(32.0, 32.0, 32.0), 32.0),
+            TerrainColliderKind::Smooth,
+            "caixa longe do mod continua suave"
+        );
+    }
+
+    #[test]
+    fn test_the_smooth_collider_top_matches_the_sampled_surface() {
+        // O contrato do last_resort_ground: o topo do collider coincide com
+        // runtime.sample. Amalga a layout do heightfield (row-major +X/+Z,
+        // alturas relativas à origem) e confere o canto.
+        let n = 33usize;
+        let raw: Vec<u16> = (0..n * n)
+            .map(|i| {
+                let x = (i % n) as f32 / (n - 1) as f32;
+                ((10.0 + 5.0 * x) / 50.0 * 65535.0).round() as u16
+            })
+            .collect();
+        let grid = BrushGrid::from_height_map(
+            &HeightMapU16 { width: n, depth: n, data: raw },
+            32.0,
+            50.0,
+            1.0,
+        )
+        .expect("grid");
+        let runtime_spec = crate::terrain::TerrainSpec {
+            world_size: 32.0,
+            ..crate::terrain::TerrainSpec::default()
+        };
+        let _ = runtime_spec;
+        let origin = Vec3::new(-16.0, 0.0, -16.0);
+        let extent = 32.0_f32;
+        let resolution = 32usize;
+        let step = extent / resolution as f32;
+        let mut heights = Vec::with_capacity((resolution + 1) * (resolution + 1));
+        for row in 0..=resolution {
+            for col in 0..=resolution {
+                let x = origin.x + row as f32 * step;
+                let z = origin.z + col as f32 * step;
+                heights.push(grid.sample(x, z) - origin.y);
+            }
+        }
+        // O vértice (0,0) do heightfield é a amostra da grelha no canto
+        // mínimo da caixa, relativa à origem — exatamente o que o collider
+        // constrói.
+        let expected = grid.sample(origin.x, origin.z) - origin.y;
+        assert!((heights[0] - expected).abs() < 1e-4);
+        assert!(heights.iter().all(|h| h.is_finite()));
+    }
 }
 

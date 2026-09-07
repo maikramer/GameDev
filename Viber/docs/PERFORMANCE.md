@@ -89,12 +89,29 @@ re-spawnaria o `AnimationPlayer` a meio de um clip.
 ### 4. `render-distance` do terreno cobria quase o mapa todo
 
 Sem `render-distance` autorada, `effective_render_distance()` devolve o raio
-que cabe `DEFAULT_RESIDENT_CHUNK_BUDGET` (2048) chunks — **1634 m** num mundo
-de 4 km com chunks de 64 m. O far plane da câmara é ~1000 m, portanto metade
-dos 2047 chunks eram entidades que nunca chegavam ao ecrã mas pagavam
+que cabe `DEFAULT_RESIDENT_CHUNK_BUDGET` (2048) colunas — **1634 m** num mundo
+de 4 km com colunas de 64 m. O far plane da câmara é ~1000 m, portanto metade
+das colunas eram entidades que nunca chegavam ao ecrã mas pagavam
 visibilidade, LOD e streaming de colliders todos os frames.
 
-`world.xml` passou a autorar `render-distance="950"` → **691 chunks**.
+`world.xml` passou a autorar `render-distance="950"` → **689 colunas voxel
+(900 caixas surface-nets)**.
+
+## Terreno 100% volumétrico (custos próprios)
+
+O terreno inteiro sai do campo voxel por surface nets, com ladder de LOD por
+coluna (célula 1→2→4 m). Custos medidos (`chunk_build_bench`, release):
+
+```
+caixa 32³ @1 m (LOD0): ~5,8 ms   ← budget de 4 caixas/frame no rebuild
+caixa 64³ @2 m (LOD1): ~7,2 ms
+caixa 16³ @4 m (LOD2): ~1,6 ms
+```
+
+No `simple-rpg` (4 km, QA pós-migração): boot spawna 689 colunas / 900 caixas,
+~89–103 fps de média — paridade com o ladder heightfield anterior. Os
+colliders de terreno são todos `Collider::voxels` das caixas, streamados num
+raio de 3 chunk-edges com histerese; `collision-resolution="0"` desliga-os.
 
 ## VRAM: as texturas eram PNG
 

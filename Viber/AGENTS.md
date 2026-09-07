@@ -325,9 +325,8 @@ são computadas no MESMO frame (quando o último template resolve), pela ordem
 do XML — a ocupação partilhada torna a ordem relevante, e o gate único mantém
 a promessa "mesma seed, mesmo mundo" (um template preso em Loading > 60 s é
 desistido com warn). Por instância: `max-slope-attempts` tentativas; cada
-candidato rejeitado queima uma. Altura = **superfície renderizada**
-(`TerrainRuntime::sample_mesh_surface`: o mesh desenha cordas lineares entre
-vértices LOD0 — a amostra analítica flutuava acima delas nas cristas).
+candidato rejeitado queima uma. Altura = **superfície desenhada** (`TerrainRuntime::sample_mesh_surface`: o
+zero do SDF, que é o que o surface nets renderiza).
 Com `align-to-terrain`, a rotação inclina o modelo para a normal amostrada
 por **matriz 3×3 ponderada** (`BrushGrid::sample_normal_matrix`, centro 6×,
 sondas a 1 texel — estabiliza o tilt e lê o declive real de ravinas) com
@@ -387,20 +386,30 @@ Atributos universais: `name`, `tag`, `script` (Luau — ver **Scripts Luau**),
 `src/physics.rs`.
 Sem câmara no mundo → auto-orbit lenta na origem.
 
-### Terreno (Fase 1)
+### Terreno (100% volumétrico)
 
-Port do `bevy_mesh_terrain` (MIT) corrigido + contratos do plugin terrain do
-VibeGame (sampler CPU único, skirts + frontier normals em vez de stitching,
-LOD com histerese, pads com falloff). O visual do chão tem dois caminhos: o
-tint LEGADO por altura/inclinação em vertex colors (sem WGSL) ou — quando o
-mundo declara `layers` — o BLEND de 13 texturas de solo do pool por splat map
-(`splat.rs` + `layer_material.rs` + `shaders/terrain_layers.wgsl`), que
-substitui o tint e pinta areia nas margens e o LEITO DE SEIXO (`pebbles`) nos
-fundos de lagos/rios.
+O terreno inteiro sai do **campo voxel** (`VoxelField`, SDF `p.y − altura ⊕
+mods`) por surface nets, em COLUNAS com ladder de LOD (célula 1→2→4 m,
+histerese, budget de caixas/frame, cull por `render-distance`). O heightmap
+(PNG/.ahgt/procedural) sobrevive como INPUT — termo-base do SDF e alvo do
+carve de pads/lagos/rios/estradas pelo brush engine; não há mesh nem collider
+heightfield. O visual do chão tem dois caminhos: o tint LEGADO por
+altura/inclinação em vertex colors (sem WGSL) ou — quando o mundo declara
+`layers` — o BLEND de 13 texturas de solo do pool por splat map (`splat.rs` +
+`layer_material.rs` + `shaders/terrain_chunk.wgsl`), que substitui o tint e
+pinta areia nas margens e o LEITO DE SEIXO (`pebbles`) nos fundos de
+lagos/rios.
 
 | Tag | Atributos próprios |
 |-----|--------------------|
-| `Terrain` | `heightmap` (PNG 8/16-bit ou `.ahgt` — decodificado em `heightmap.rs::from_ahgt`; ausente = procedural determinístico via `seed`), `world-size` (256), `max-height` (50), `chunk-size` (64), `resolution` (64 — verts/chunk edge), `levels` (3), `lod-distance-ratio` (2.0), `lod-hysteresis` (1.2), `render-distance` (sem default = tudo), `skirt-width` (0.015625), `skirt-depth` (1.0; `> 0` liga as saias ADAPTATIVAS — profundidade automática pelo vizinho, cap 6 m — o valor em si não define a profundidade), `height-smoothing` (1 = Catmull-Rom monotone; 0 = bilinear), `collision-resolution` (64; 0 desliga os colliders de terreno — consumido pela física em `physics.rs`), `cliff-angle` (50° — gatilho bruto da varrimento; 90 desliga), `cliff-min-area` (120 m²), `cliff-min-drop` (4 m), `cliff-min-extent` (8 m) — filtro REGIONAL: um componente de declive só é cliff se passar os três (mata declives espúrios), `cliff-streaks` (0.5 — escorrimentos verticais na pele da parede), `cliff-moss` (0.35 — musgo procedural nos ombros/ledges), `sharpen` (false), `sharpen-angle` (35°), `sharpen-seed` (0 = deriva de `seed`), `texture`/`texture-url`, `texture-tile-size` (0 = auto), `seed` (0), tint (caminho LEGADO): `base-color`, `color-low`, `color-mid`, `color-high`, `color-rock`, `snow-height`, `slope-threshold`, `slope-softness`, `height-blend-strength`; blend de camadas: `layers` (lista de ≤13 aliases do pool — `grass vale_grass dirt dirt_trail forest_floor gravel mountain_stone sand desert_sand snow_peak swamp_mud dirt_road pebbles` — ou caminhos de textura; o slot do leito carrega `pebbles` mesmo que o mundo não o liste), `shore-width` (5 m — faixa de areia fora da linha de água) — **BLOQUEADO na stack actual**: materiais custom com bindings de textura crasham o driver NV 595.84 (SIGSEGV em `vkCreatePipelineLayout`, ver abaixo), pelo que `layers` DEGRADA para o tint legado com um warn; o sistema por chunk liga-se com `VIBER_CHUNK_LAYERS=1` quando a stack o permitir |
+| `Terrain` | `heightmap` (PNG 8/16-bit ou `.ahgt` — decodificado em `heightmap.rs::from_ahgt`; ausente = procedural determinístico via `seed`), `world-size` (256), `max-height` (50), `chunk-size` (64), `resolution` (64 — a célula do LOD0 voxel é
+`chunk-size/resolution` = 1 m; o ladder duplica por nível), `levels` (3),
+`lod-distance-ratio` (2.0), `lod-hysteresis` (1.2), `render-distance` (sem
+default = budget de 2048 colunas), `height-smoothing` (1 = Catmull-Rom
+monotone; 0 = bilinear — suaviza a GRID de input), `collision-resolution`
+(64; a célula do collider voxel é `chunk-size/collision-resolution`; **0
+desliga os colliders de terreno**), `cliff-angle` (50° — gatilho da
+CliffMask/splat; 90 desliga), `cliff-min-area` (120 m²), `cliff-min-drop` (4 m), `cliff-min-extent` (8 m) — filtro REGIONAL: um componente de declive só é cliff se passar os três (mata declives espúrios), `cliff-streaks` (0.5 — escorrimentos verticais na pele da parede), `cliff-moss` (0.35 — musgo procedural nos ombros/ledges), `sharpen` (false), `sharpen-angle` (35°), `sharpen-seed` (0 = deriva de `seed`), `texture`/`texture-url`, `texture-tile-size` (0 = auto), `seed` (0), tint (caminho LEGADO): `base-color`, `color-low`, `color-mid`, `color-high`, `color-rock`, `snow-height`, `slope-threshold`, `slope-softness`, `height-blend-strength`; blend de camadas: `layers` (lista de ≤13 aliases do pool — `grass vale_grass dirt dirt_trail forest_floor gravel mountain_stone sand desert_sand snow_peak swamp_mud dirt_road pebbles` — ou caminhos de textura; o slot do leito carrega `pebbles` mesmo que o mundo não o liste), `shore-width` (5 m — faixa de areia fora da linha de água) — **BLOQUEADO na stack actual**: materiais custom com bindings de textura crasham o driver NV 595.84 (SIGSEGV em `vkCreatePipelineLayout`, ver abaixo), pelo que `layers` DEGRADA para o tint legado com um warn; o sistema por chunk liga-se com `VIBER_CHUNK_LAYERS=1` quando a stack o permitir |
 | — | **Material de chunk (r6, por trás de `VIBER_CHUNK_LAYERS=1`)**: o bootstrap gera UM material por chunk (`generate_chunk_splats` em `splat.rs`): as 4 texturas do pool com MAIOR peso agregado no chunk + um plano splat RGBA8 32² próprio (pesos renormalizados a somar 1; chunks de montanha carregam snow/stone, de pântano mud — áreas diferentes têm blends diferentes). Material próprio (`layer_material.rs`, NÃO ExtendedMaterial) com 4 layers+splat (bindings 0–9) + uniform de estilo/posicionamento (binding 10: tiles/tints/flats/roughs + origem/tamanho + layer de rocha para paredes triplanares) + day/night tint; shader `shaders/terrain_chunk.wgsl`. ⚠ **porquê o gate**: com bevy 0.19.1 + wgpu 29.0.4 + NV 595.84, QUALQUER material custom com `#[texture]` (1, 5 ou 17 bindings; extension OU material próprio; qualquer nº de binding) morre com SIGSEGV dentro de `libnvidia-gpucomp` ao criar o pipeline layout — o `StandardMaterial` e materiais só-`#[storage]` (céu) funcionam; isolado por bissect de mundos M0–M23 (2026-09-04). Falha de textura reponta o slot para a layer dominante (leito → gravel quando o chunk o carrega) |
 | `TerrainPad` | `at` (`"x z"`), `size` (`"w d"`), `falloff` (8), `corner-radius` (4), `height` (ausente = auto: amostra o centro e escreve de volta) |
 | `Lake` | `at`, `radius` (6), `depth` (1.5), `water-offset` (0.5), `color` (#2f7a9a), `opacity` (0.62 — lido pelo shader como escala de extinção da coluna), `ripple` (0.6 — amplitude das ondas, especializado como `CFG_WAVE_AMP` no `water.wgsl`; o maior dos lagos do mundo vence), `bank` (`soft` \| `beach` \| `cliff` \| `terraced` \| `gorge` \| `overhang` — `gorge`/`overhang` são VOXEL: anel de parede sólida na linha de água (`overhang` soca a base sob a lâmina; o carve preserva o banco natural), os restantes esculpem a rampa no heightfield), `rocks` (false — pedras de margem automáticas), `rocks-density` (0.12/m de linha de água), `rocks-scale-max` (1.4), filhos `<Island at="x z" radius height/>` (repetível — domo RAISE na bacia com praia; o espelho faz fade sobre ela). Carve: contorno orgânico (±28 %, harmónicos sin 2θ/3θ/5θ com fase por posição), rim = mínimo de 32 raios, taça `rim − depth·(1−t²)^1.5` até `radius·1.25`; espelho de água em `rim − water-offset` e termina EXATAMENTE na linha de água da taça |
@@ -421,8 +430,9 @@ fixos determinísticos (seed = posição do corpo; `src/terrain/shore_rocks.rs`)
 | `RoadNetwork` | `default-profile` (artery), `default-width` (4), `crossing-flare` (false — alarga ×1.45 perto de ways com grau ≥3), `flatten`, `flatten-falloff`, `flatten-window`, `flatten-max-grade`, `texture-url`, `texture-scale` (9) + filhos `Way id xz [width]` e `Segment a b [via] [width] [profile]` (1 estrada por segmento, width interpolada; `profile="bridge"` salta o carve e desenha deck plano; `bridge-url`/`bridge-lod*`/`bridge-native-span` aceites sem efeito até glTF) |
 
 **Ordem de carve (contrato do VibeGame, `features.rs`):** Pads → Lakes → Rivers →
-Cliffs (a parede existe quando a road faz o survey) → Roads (arteriais primeiro, **pontes por último**) → decals (visuais, leem o
-heightfield final) → discos de junção. Um disco de junção coberto por um
+Roads (arteriais primeiro, **pontes por último**) → decals (visuais, leem o
+heightfield final) → discos de junção. Cliffs NÃO carvam — são sólidos no
+campo voxel (`voxel/cliff.rs`), construídos depois do carve. Um disco de junção coberto por um
 `GroundDecal` é **suprimido**: empilhar os dois punha duas camadas de cobble
 com alpha a poucos centímetros uma da outra sobre os mesmos UVs world-space —
 os feathers somavam-se em costuras e o par brigava no depth. Estradas saltam núcleos de pads
@@ -435,11 +445,14 @@ senão o carve no-op). Nota: o `BrushGrid` de produção é deliberadamente
 a implementação com guard (`HeightSampler::apply_pads`) existe só para testes.
 
 Runtime: `TerrainFeaturesPlugin` (bootstrap one-shot: heightmap → carve
-pads→água→estradas → entidades de chunks/água/ribbons) + `TerrainPlugin` (LOD
-dinâmico por distância da câmara com histerese, rebuild com budget/frame, cull
-por `render-distance`). Queries de gameplay: `TerrainRuntime::sample /
-in_water / on_road` (recurso) + `WaterBody::contains / is_near / surface_y_at`
-(`avoid-water` / `near-water`) e `RoadPath::is_on_road / distance_to_road`.
+pads→água→estradas → mods voxel → COLUNAS voxel dentro do raio de render →
+água/ribbons) + `TerrainPlugin` (ladder de LOD por coluna: select com
+histerese, construção staged sob budget de CAIXAS/frame, swap atómico, cull
+por `render-distance`, respawn). Queries de gameplay: `TerrainRuntime::sample
+/ sample_mesh_surface / in_water / on_road` (recurso — as duas primeiras
+devolvem o TOPO do SDF, que é a superfície desenhada) +
+`WaterBody::contains / is_near / surface_y_at` (`avoid-water` /
+`near-water`) e `RoadPath::is_on_road / distance_to_road`.
 
 **Água animada** (`water_material.rs` + `shaders/water.wgsl`): lakes/rivers
 usam `ExtendedMaterial<StandardMaterial, WaterExtension>` — o fragment
@@ -519,7 +532,9 @@ spawner, default 45 m) o `on_update` nem corre. **Sem hot-reload** e sem hooks
 ## ROADMAP
 
 - **Fase 0 (✅):** parse/validate, includes, primitivas, luzes, `OrbitCamera`, `run`/`analyze`.
-- **Fase 1 (terreno ✅):** heightfield chunks + LOD + pads/água/estradas (`src/terrain/`).
+- **Fase 1 (terreno ✅):** heightfield chunks + LOD + pads/água/estradas
+  (`src/terrain/`); desde 2026-09-06 o terreno é **100% volumétrico**
+  (colunas voxel + surface nets, heightfield só como input/dado).
   `.ahgt` decodifica (header JSON + grid u16 deflate); sem ficheiro → procedural.
 - **Fase 2 (Luau ✅):** runtime mlua sandboxed + API `viber.*`/`viber.ui.*`
   (`docs/LUA_API.md`), profiler (F3/P) + bridge BRP; port do simple-rpg em
