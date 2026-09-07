@@ -1311,7 +1311,26 @@ impl bevy::app::Plugin for LuauScriptPlugin {
         // .chain() obriga on_add → update → on_remove dentro do mesmo frame
         // (um tuple simples não garante ordem no Bevy 0.19).
         app.add_message::<crate::feedback::AttackAlert>();
-        app.insert_resource(host).add_systems(
+        app.insert_resource(host);
+        // Hot-reload de scripts (VIBER_HOT_RELOAD=0 desliga): watcher sobre
+        // <world>/scripts/; a recarga corre antes do chain de scripts para o
+        // frame seguinte já usar o chunk novo. Watcher a falhar = warn e a
+        // engine segue SEM hot-reload (nunca é fatal).
+        if crate::hot_reload::enabled_from_env() {
+            match crate::hot_reload::HotReloadState::new(&self.scripts_dir) {
+                Ok(state) => {
+                    app.insert_resource(state);
+                    app.add_systems(
+                        Update,
+                        crate::hot_reload::hot_reload_poll.before(luau_on_add),
+                    );
+                }
+                Err(e) => {
+                    warn!("hot-reload desativado (watcher falhou: {e})");
+                }
+            }
+        }
+        app.add_systems(
             Update,
             (
                 luau_on_add,
