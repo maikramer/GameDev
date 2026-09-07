@@ -271,8 +271,10 @@ Anatomia:
   `viber.profiler.export`/`extra_toggle`. O JSON de `"all"` é O MESMO do
   botão COPIAR e do ficheiro — um só construtor (`full_snapshot`).
 
-Teclas: **P** (modal), **F5** (aba, Shift volta), **F12/Pause** (congelar),
-**`** (exportar), **PgUp/PgDn** (raio das próximas). Overlay mínimo **F3**
+Teclas: **P** (modal), abas por **clique** ou teclado nativo do modal
+(**`]`/`.`** próxima, **`[`/`,`** anterior, **1–5** saltam), **F12/Pause**
+(congelar), **`** (exportar), **PgUp/PgDn** (raio das próximas). A fonte da
+verdade das abas é o widget nativo; o driver espelha para a engine. Overlay mínimo **F3**
 mantém-se. `VIBER_PROF_LOG=1` liga o `LogDiagnosticsPlugin`.
 
 QA típico: `viber debug prof --tab física`, `viber debug prof --tab tudo

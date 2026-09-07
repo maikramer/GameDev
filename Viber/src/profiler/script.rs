@@ -209,34 +209,22 @@ pub fn run_profiler_cmd(world: &mut World, cmd: &str) -> String {
     }
 }
 
-/// Teclas engine-side do profiler: **F5** (±aba), **F12**/**Pause**
-/// (congelar), **Backquote** (exportar), **PageUp/PageDown** (raio). O **P**
-/// é do modal declarativo (`key="p"`). Corre mesmo com menus abertos — a
-/// janela do profiler É um menu, e as teclas têm de funcionar lá dentro.
+/// Teclas engine-side do profiler: **F12**/**Pause** (congelar),
+/// **Backquote** (exportar), **PageUp/PageDown** (raio). O **P** é do modal
+/// declarativo (`key="p"`) e as ABAS têm teclado nativo do modal
+/// (`]`/`.` próxima, `[`/`,` anterior, dígitos 1–5 saltam) — o driver Luau
+/// espelha a aba escolhida para a engine (fonte única: a UI). Corre mesmo
+/// com menus abertos — a janela do profiler É um menu.
 pub fn profiler_keys_system(world: &mut World) {
-    let (tab_next, tab_prev, freeze, export, radius_up, radius_down) = {
+    let (freeze, export, radius_up, radius_down) = {
         let keys = world.resource::<ButtonInput<KeyCode>>();
         (
-            keys.just_pressed(KeyCode::F5) && !keys.pressed(KeyCode::ShiftLeft),
-            keys.just_pressed(KeyCode::F5) && keys.pressed(KeyCode::ShiftLeft),
             keys.just_pressed(KeyCode::F12) || keys.just_pressed(KeyCode::Pause),
             keys.just_pressed(KeyCode::Backquote),
             keys.just_pressed(KeyCode::PageUp),
             keys.just_pressed(KeyCode::PageDown),
         )
     };
-    if tab_next {
-        let current = world.resource::<ProfilerState>().tab;
-        let next = (current + 1) % TABS.len();
-        let status = run_profiler_cmd(world, &format!("tab:{}", TABS[next]));
-        world.resource_mut::<ProfilerState>().status = status;
-    }
-    if tab_prev {
-        let current = world.resource::<ProfilerState>().tab;
-        let next = (current + TABS.len() - 1) % TABS.len();
-        let status = run_profiler_cmd(world, &format!("tab:{}", TABS[next]));
-        world.resource_mut::<ProfilerState>().status = status;
-    }
     if freeze {
         let status = run_profiler_cmd(world, "freeze");
         world.resource_mut::<ProfilerState>().status = status;

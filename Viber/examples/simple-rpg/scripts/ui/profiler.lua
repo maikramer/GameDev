@@ -13,6 +13,7 @@
 local CADENCE = 0.2
 local ACC = 1.0 -- >CADENCE: preenche no primeiro frame com o modal aberto
 local LAST_STATUS = nil -- só reescreve o rodapé quando muda
+local LAST_UI_TAB = nil -- detetor de mudança de aba (UI → engine)
 
 -- ── formatação ────────────────────────────────────────────────
 local function fmt_ms(v)
@@ -163,7 +164,10 @@ local function fill_active(snap)
   local state = snap.state or {}
   viber.ui.set_text("prof-fps", string.format("%.0f", systems.fps or 0))
 
-  local which = state.tab_name or "systems"
+  -- A aba REAL é a do widget nativo (o espelho state.tab_name chega com
+  -- até um ciclo de publish de atraso — usar o ui_tab evita preencher a
+  -- aba errada no frame da troca).
+  local which = ui_tab ~= "" and ui_tab or (state.tab_name or "systems")
   if which == "systems" then
     local frame = systems.frame_ms or {}
     viber.ui.set_text("prof-frame", fmt_ms(frame.avg))
@@ -225,12 +229,9 @@ end
 -- (O bug original: cliques consultados a cada 0,2 s morriam no drain por
 -- frame e a aba voltava a SISTEMAS no tick seguinte.)
 function on_update(dt)
-  -- Cliques → comandos (todos os frames).
-  if viber.ui.clicked("prof-tab-systems") then viber.profiler_cmd("tab:systems") end
-  if viber.ui.clicked("prof-tab-world") then viber.profiler_cmd("tab:world") end
-  if viber.ui.clicked("prof-tab-physics") then viber.profiler_cmd("tab:physics") end
-  if viber.ui.clicked("prof-tab-audio") then viber.profiler_cmd("tab:audio") end
-  if viber.ui.clicked("prof-tab-extras") then viber.profiler_cmd("tab:extras") end
+  -- Cliques → comandos (todos os frames). ABAS: o tab-group nativo trata o
+  -- clique sozinho — aqui só DETETAMOS a mudança e empurramos para a engine
+  -- (sem depender de clicked(), que vale só no frame do press).
   if viber.ui.clicked("prof-freeze") then viber.profiler_cmd("freeze") end
   if viber.ui.clicked("prof-reset") then viber.profiler_cmd("reset") end
   -- COPIAR/EXPORTAR existem em TODAS as abas (o JSON é sempre o completo;
@@ -252,12 +253,15 @@ function on_update(dt)
   end
   local state = snap.state or {}
 
-  -- Estado → UI, todos os frames (barato): F5 muda state.tab e o
-  -- select_tab aqui converge; congelação acende o quadro no próprio frame;
-  -- o status só reescreve quando muda (sem custo por frame).
+  -- Abas: FONTE ÚNICA = o widget nativo (tab-group). O utilizador clica ou
+  -- usa o teclado nativo do modal (]/. [ , dígitos); o driver só DETETA a
+  -- mudança e espelha para a engine (o snapshot passa a refletir a aba).
+  -- Sem force-back nenhum: dois sincronizadores a escrever a mesma aba
+  -- ping-pongam via publish atrasado.
   local ui_tab = viber.ui.tab("prof")
-  if state.tab_name and ui_tab ~= "" and ui_tab ~= state.tab_name then
-    viber.ui.select_tab("prof", state.tab_name)
+  if ui_tab ~= "" and ui_tab ~= LAST_UI_TAB then
+    LAST_UI_TAB = ui_tab
+    viber.profiler_cmd("tab:" .. ui_tab)
   end
   viber.ui.toggle_class("profiler-win", "frozen", state.frozen == true)
   viber.ui.toggle_class("prof-freeze", "armed", state.frozen == true)

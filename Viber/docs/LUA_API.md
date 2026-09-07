@@ -242,9 +242,11 @@ snapshot publicado pela engine, ações por fila aplicada pós-frame.
 | `viber.profiler()` | table ou nil | Snapshot completo (`tabs.systems/world/physics/audio` + `extras` + `state`); **nil com o modal fechado** — o driver nem acorda. Publicado a ~4 Hz pela engine. |
 | `viber.profiler_cmd(cmd)` | — | Enfileira ação: `"freeze"`, `"reset"`, `"export"` (ficheiro), `"copy"` (JSON completo → clipboard), `"tab:systems\|world\|physics\|audio\|extras"`, `"radius:±N"` (raio das próximas), `"extra:<id>"` (toggle: `colliders`, `grass`, `physics-pause`). |
 
-Teclas engine-side: **P** abre/fecha o modal (declarativo, `key="p"`), **F5**
-muda de aba, **F12**/**Pause** congela a aquisição, **`** exporta, **PgUp/PgDn**
-raio. A bridge lê o MESMO JSON: `viber debug prof --tab tudo` (ou o método
+Teclas: **P** abre/fecha o modal (declarativo, `key="p"`); abas por clique
+ou teclado nativo do modal (**`]`/`.`** próxima, **`[`/`,`** anterior,
+**1–5** saltam); **F12**/**Pause** congela a aquisição, **`** exporta,
+**PgUp/PgDn** raio. A UI é a fonte da verdade das abas — o driver espelha
+para a engine. A bridge lê o MESMO JSON: `viber debug prof --tab tudo` (ou o método
 `viber.profiler.tab {"tab": "all"}`) devolve exactamente o payload do
 COPIAR/ficheiro.
 

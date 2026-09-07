@@ -19,7 +19,7 @@
       <UiRow class="head">
         <UiColumn class="titles">
           <UiText class="title">PROFILER</UiText>
-          <UiText class="sub">P alterna · F5 aba · F12 congela · ` exporta · Pg± raio</UiText>
+          <UiText class="sub">P alterna · [ ] 1-5 abas · F12 congela · ` exporta · Pg± raio</UiText>
         </UiColumn>
         <UiSpacer />
         <UiColumn class="head-stat">
