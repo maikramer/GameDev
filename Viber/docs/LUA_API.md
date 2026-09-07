@@ -32,9 +32,12 @@ caminhos relativos a `scripts/` aceitam subpastas). Ver exemplos vivos em
   comandos** aplicados no fim do frame, depois de todos os `on_update` — sem
   acesso direto ao ECS. `move_towards`/`move_by` assentam o Y no terreno
   (amostra o heightfield) ao aplicar.
-- **Sem hot-reload:** o chunk fica em cache por path; uma entidade re-spawnada
-  reutiliza os globals existentes. Editar o `.lua` com a engine a correr não
-  recarrega (hot-reload é follow-up).
+- **Hot-reload:** o chunk fica em cache por path; uma entidade re-spawnada
+  reutiliza os globals existentes. Editar o `.lua` com a engine a correr
+  RECARREGA (2026-09-07, `src/hot_reload.rs`; `VIBER_HOT_RELOAD=0` desliga):
+  o chunk é recompilado e o top-level re-corre nas entidades ativas —
+  globals do script resetam (estado em `viber.state()` sobrevive, pois vive
+  fora do env). Erro de compilação = warn e o chunk antigo continua.
 
 Esqueleto típico:
 
@@ -82,7 +85,7 @@ end
 | `viber.player_position()` | `ok, x, y, z` | **4 valores**; `ok == false` quando não há player |
 | `viber.player_hp()` | `ok, cur, max` | snapshot do HP do herói no início do frame; `ok == false` sem player/vitals |
 | `viber.interacted(key)` | bool | tecla pressionada **neste frame** E player dentro do alcance de interação (3.5 m, ou o `range` de `set_interaction`). Teclas válidas: `"e" "j" "f" "q" "r" "space"` |
-| `viber.ground_below(x, y, z)` | number \| nil | a superfície sólida mais alta em ou abaixo de `y` nesta coluna XZ. Acima do mundo = o topo; **dentro de uma gruta = o piso da gruta**; sob um arco = o chão do vão. `nil` sem terreno sólido abaixo. É a query certa para criaturas em túneis — os snaps de `move_towards`/`move_by` continuam a usar o TOPO |
+| `viber.ground_below(x, y, z)` | number \| nil | a superfície sólida mais alta em ou abaixo de `y` nesta coluna XZ. Acima do mundo = o topo; **dentro de uma gruta = o piso da gruta**; sob um arco ou sob o tabuleiro de uma `<Bridge>` = o chão do vão. `nil` sem terreno sólido abaixo. É a query certa para criaturas em túneis — os snaps de `move_towards`/`move_by` continuam a usar o TOPO |
 
 ## Movimento & rotação
 
@@ -325,4 +328,22 @@ viber.debug.toast(msg)
 viber.debug.spawn_box(x, y, z, tamanho, "#rrggbb"?)   -- marker debug:box:N
 viber.debug.spawn_sphere(x, y, z, raio, "#rrggbb"?)   -- marker debug:sphere:N
 viber.debug.clear_markers()        -- remove todos os markers debug:*
+
+-- chão e sol AO VIVO (sem rebuild — os knobs acumulam entre chamadas)
+viber.debug.sun{yaw=?, pitch=?, illuminance=?, shadows=?}
+                                   -- roda a DirectionalLight E o sol do shader do
+                                   -- terreno (publica sun_dir nos chunks); yaw =
+                                   -- azimute em graus a partir de +X, pitch =
+                                   -- altura no céu (0 horizonte, 90 zênite)
+viber.debug.ground{moss=?, streaks=?, rock_darken=?, tri_slope=?, tri_soft=?,
+                   strata_strength=?, patchiness=?, gravel=?, dirt=?,
+                   forest=?, shore_width=?, vale_soft=?}
+                                   -- pele das paredes (moss/streaks/rock_darken/…)
+                                   -- + re-cozedura dos splats de chunk (patchiness =
+                                   -- manchas de terra/folhada, gravel = ombro de
+                                   -- cascalho em slope, dirt/forest = densidade 0–2,
+                                   -- shore_width = banda de areia em m;
+                                   -- vale_soft = 0 regiões de verde contrastadas
+                                   -- (as "manchas"), 1 tudo fundido num verde)
+viber.debug.ground_state()         -- valores correntes (tuning + paredes), nil sem terreno
 ```

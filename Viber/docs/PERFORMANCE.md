@@ -108,10 +108,32 @@ caixa 64³ @2 m (LOD1): ~7,2 ms
 caixa 16³ @4 m (LOD2): ~1,6 ms
 ```
 
+### O CSG das travessias sai de graça — depois de afinar o índice
+
+O `qa-pontes.xml` põe ~230 mods no campo (duas pontes, gruta com sala e
+chaminé, arco natural, viaduto e um campo `<RockFeatures>`). O custo por
+caixa vem do `VoxelField::density`, que percorre os candidatos do bucket com
+um teste de AABB por mod, ~39 k vezes por caixa de LOD0. Medido na coluna da
+ponte de pedra:
+
+```
+célula do ModIndex = chunk_size (64 m):  37,7 ms/caixa   ← 3,5× o campo vazio
+célula afinada (8 m neste mundo):         9,0 ms/caixa   ← paridade (7,1 sem mods)
+```
+
+Quarenta caixas de tabuleiro cabiam todas num bucket de 64 m, e cada amostra
+pagava as quarenta. `ModIndex::build` passou a afinar a célula quando há mods
+que cheguem (`REFINE_ABOVE_MODS`), com piso de 8 m e teto de 256 células por
+aresta de mundo — a grelha continua pequena num mundo de 4 km. O bench
+`bench_voxel_box_build_with_a_field_full_of_mods` falha acima de 30 ms/caixa
+em release, que é o alarme para o campo voltar a não podar.
+
 No `simple-rpg` (4 km, QA pós-migração): boot spawna 689 colunas / 900 caixas,
 ~89–103 fps de média — paridade com o ladder heightfield anterior. Os
-colliders de terreno são todos `Collider::voxels` das caixas, streamados num
-raio de 3 chunk-edges com histerese; `collision-resolution="0"` desliga-os.
+colliders de terreno são todos **trimesh por COLUNA** (`ColumnColliderBake`,
+`src/physics.rs`) assados dos mesmos triângulos que o transvoxel desenha,
+streamados num raio de 3 chunk-edges com histerese;
+`collision-resolution="0"` desliga-os.
 
 ## VRAM: as texturas eram PNG
 

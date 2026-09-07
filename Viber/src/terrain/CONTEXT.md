@@ -12,8 +12,10 @@ máscaras (CliffMask, splat, biomas).
 
 1. **Bootstrap one-shot** (`runtime.rs`): carrega/gera a heightmap → carve
    pads → água → estradas (pelo brush engine, com journal) → bandas de cliff
-   3D + `CliffMask` → sharpen opt-in → mods do campo voxel → spawna as
-   COLUNAS voxel dentro do raio de render, água e ribbons.
+   3D + `CliffMask` → sharpen opt-in → **`<RockFeatures>` resolve** (semeia
+   arcos/grutas/pontes contra o chão já carvado, e passa a specs normais) →
+   mods do campo voxel → spawna as COLUNAS voxel dentro do raio de render,
+   água e ribbons.
 2. **Runtime** (`plugin.rs`): ladder de LOD por coluna (célula 1→2→4 m,
    histerese + gate anti-thrash), construção staged sob budget de caixas por
    frame, cull por `render-distance`, respawn à aproximação.
@@ -28,8 +30,14 @@ máscaras (CliffMask, splat, biomas).
 
 Estável pós-migração (commit "remove o heightfield 2.5D"). QA vivo:
 simple-rpg 4 km a ~89–103 fps (689 colunas / 900 caixas), grutas/arcos do
-qa-voxel com `ground_below` a dar 2 spans. Bench: caixa LOD0 32³ ≈ 5,8 ms,
-LOD2 16³ ≈ 1,6 ms (`cargo test --release --test chunk_build_bench`).
+qa-voxel com `ground_below` a dar 2 spans. Travessias em `qa-pontes.xml`:
+`<Bridge>` (tabuleiro union — o collider da coluna traz o tabuleiro, ao
+contrário do ribbon de `<Road profile="bridge">`, que não tem collider
+nenhum e continua a não ter), `<Cave>` com `<Chamber>`/`<Shaft>` e raio por
+perfil, `<Arch path spans profile>` e `<RockFeatures>`. Bench: caixa LOD0
+32³ ≈ 5,8 ms, LOD2 16³ ≈ 1,6 ms; o segundo caso do bench mede o mesmo
+trabalho com o campo cheio de mods e falha acima de 60 ms/caixa
+(`cargo test --release --test chunk_build_bench`).
 
 Armadilha conhecida fora da pasta: o `AGENTS.md` da raiz documenta que
 larguras de estrada < 1.5 texéis viram no-op (promovidas por `min_effective`)

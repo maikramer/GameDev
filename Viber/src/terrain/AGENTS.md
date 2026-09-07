@@ -33,13 +33,13 @@ Contrato XML completo: `AGENTS.md` da raiz.
 | `brush.rs` | brush engine: modos blend/lower/raise, **journal por owner** (`pad:0`, `road:3`…) com revert para re-carve idempotente, `min_effective` (larguras < 1.5 texéis promovidas). O produção é deliberadamente **unguarded** |
 | `features.rs` | **ordem de carve:** Pads → Lakes → Rivers → Roads (arteriais primeiro, **pontes por último**); estradas saltam núcleos de pads e zonas de água. Cliffs não carvam — são sólidos voxel |
 | `cliffs.rs` | `CliffSpec` (parser) + **`CliffMask`** — scan de declive → abertura morfológica → BFS → filtro regional (área/queda/extent) → camadas core/dilatada + wall space (canal R). Consumidores: splat (pedra no core), relva/spawners (exclusão), shader (gate triplanar). `sharpen_terrain` (opt-in): terraceia rampas > `sharpen-angle` do campo FINAL dentro do core da máscara |
-| `water.rs` | `LakeSpec`/`RiverSpec` + `WaterBody` (queries `contains`/`is_near`/`surface_y_at`/`distance_to_waterline`); lake = contorno orgânico lower-only; river = Chaikin + prefixo-mínimo (água nunca sobe) |
+| `water.rs` | `LakeSpec`/`RiverSpec` + `WaterBody` (queries `contains`/`is_near`/`surface_y_at`/`distance_to_waterline`); lake = contorno orgânico lower-only; river = Chaikin + prefixo-mínimo (água nunca sobe). **Quedas**: o scan contíguo produz `CascadeInfo { lip, base, drop, waterfall, wall, top_y, bot_y }` — queda ≥ `waterfall_min_drop` é CACHOEIRA (cortina ×`WATERFALL_CURTAIN`, caldeirão ∝ queda); `river_cliff_crossings` cruza rio×cliff em specs (2D) e `carve_river_with_falls` conduz o perfil pelo cruzamento (hold a montante + queda garantida) |
 | `splat.rs` | **blend de solo** (`layers="…"`): gerador puro do splat map por chunk (top-4 slots), leito forçado a `pebbles`. Aliases → `/assets/textures/<alias>/albedo.ktx2` |
 | `layer_material.rs` | `TerrainChunkMaterial` bindless (4 texturas + splat por chunk), shader `chunk.wgsl` reescrito por mundo; `terrain_daynight_tint` |
 | `water_material.rs` / `water_fx.rs` | `WaterMaterial` (Beer–Lambert, fresnel, glint) + splash/esteira |
 | `roads.rs` | `RoadSpec`/`RoadNetworkSpec` + `RoadPath`; profiles, flatten com teto de grade, ribbons + discos de junção |
 | `decal.rs` | `GroundDecalSpec` + `ground_decal_mesh` — manchas de chão drapejadas, só visuais |
-| `voxel/` | **a forma 3D inteira.** `field.rs` (`VoxelField` SDF: `surface_top`/`surface_below`/`column`/`region_state`), `mods.rs` (trait `VoxelMod` + `BoxMod`/`CapsuleMod`/`ArchMod`), `index.rs` (`ModIndex` bucket XZ O(1)), `cliff.rs` (`<Cliff>` 3D — `CliffBand` + `profile_offset` negativo = undercut), `cave.rs` (`<Cave>` cápsulas subtractivas), `arch.rs` (`<Arch>` união com vão), `riverbank.rs` (margens gorge/overhang + nascente), `surface_nets.rs` (mesher dual com QEF-lite + seals de coluna), `spawn.rs` (`lod_shape`/`column_boxes`/`build_box_mesh`/spawn de colunas) |
+| `voxel/` | **a forma 3D inteira.** `field.rs` (`VoxelField` SDF: `surface_top`/`surface_below`/`column`/`region_state`), `mods.rs` (trait `VoxelMod` + primitivas `BoxMod`/`CapsuleMod`/`OrientedBoxMod`/`RoundConeMod`/`EllipsoidMod`/`ArchMod`, mais os helpers partilhados `yaw_local`/`box_distance`/`yawed_bounds`), `index.rs` (`ModIndex` bucket XZ O(1)), `cliff.rs` (`<Cliff>` 3D — `CliffBand` + `profile_offset` negativo = undercut), `cave.rs` (`<Cave>` cápsulas/cones subtractivos, `<Chamber>`, `<Shaft>`, perfil de raio por comprimento de arco), `arch.rs` (`<Arch>` união com vão; `at` ou `path`, `spans`, `profile=portal|natural`), `bridge.rs` (`<Bridge>` — travessia 100% aditiva: tabuleiro, pilares, intradorso e tímpano, ou span natural em cones), `scatter.rs` (`<RockFeatures>` — semeia arcos/grutas/pontes e resolve em specs normais), `riverbank.rs` (margens gorge/overhang + nascente + `wall_waterfalls` — anota quedas rio×cliff como `wall` e emite a fenda de spill no brow), `transvoxel_mesh.rs` (marching cubes com células de transição — costura de LOD sem saias), `spawn.rs` (`lod_shape`/`column_boxes`/`build_box_mesh`/spawn de colunas) |
 | `paths.rs` | `chaikin_smooth` / `resample` |
 | `mesh.rs` | infraestrutura partilhada: `HeightField` (termo-base), `ChunkMeshData`, `TintParams`/`tint_vertex_color` (tint legado + canais R/A de parede no caminho layers) |
 | `plugin.rs` | `TerrainPlugin`: ladder de COLUNAS voxel — adopt → select com histerese → construção staged sob budget de CAIXAS (4/frame) → swap atómico → cull por `render-distance` → respawn no LOD cru |
@@ -67,6 +67,36 @@ Contrato XML completo: `AGENTS.md` da raiz.
   herói. `stream_voxel_colliders` mantém add/repair/remove e publica
   `TerrainCollisionStatus` — o player só usa o chão analítico quando não há
   collider carregado; com chão carregado, o collider é a autoridade.
+- **Uma travessia é um sólido, não um ribbon.** `<Bridge>` vive no campo
+  voxel, portanto o trimesh da coluna traz o tabuleiro e o herói anda por
+  cima sem uma linha de código de colisão nova. `<Road profile="bridge">`
+  continua a ser só um decal em `deck_y` — desenhado, sem collider. Não
+  confundir os dois, e não "corrigir" o segundo com geometria: quem quer uma
+  ponte de estrada atravessável põe um `<Bridge>` por baixo do segmento.
+- **Uma travessia é ADITIVA, ponto.** Nenhum mod de `<Bridge>` é subtractivo,
+  e é por isso que nenhuma forma de ponte pode danificar o terreno que
+  atravessa. A construção óbvia — encher tudo sob o tabuleiro e subtrair as
+  arcadas — não sobrevive a um desfiladeiro em V: o vão atravessa a garganta,
+  as paredes da garganta sobem para dentro dele, e a subtração come a rocha
+  onde a ponte assenta. Pilares + intradorso + tímpano, tudo union.
+- **Um arco só abre onde há vão a abrir.** O troço de um span é o que tem o
+  tabuleiro mesmo livre do chão; dimensionar a abertura pelo comprimento do
+  tabuleiro punha arcadas no meio da margem em qualquer ponte mais longa que
+  a sua garganta. E a flecha vem primeiro, a nascença sai dela: nascer do topo
+  dos pilares soa certo e não é — as pontas do troço livre estão a folga zero,
+  e o arco saía plano.
+- **Perfis ao longo de um caminho keiam-se por COMPRIMENTO DE ARCO**, nunca
+  por índice de estação: o `resample` prega o ponto final autorado, portanto a
+  última estação é um toco e o índice desloca o meio de um `radius="2 6 2"` ou
+  o ápice da camber de uma ponte.
+- **`ModIndex` afina a célula sozinho** acima de `REFINE_ABOVE_MODS` mods
+  (piso 8 m, teto 256 células por aresta). Sem isso as ~40 caixas de um
+  tabuleiro caem todas num bucket de 64 m e cada uma das ~39 k amostras de
+  uma caixa LOD0 paga as quarenta — medido a 3,5× (`docs/PERFORMANCE.md`).
+- **`<RockFeatures>` resolve em specs normais**, no bootstrap, contra o chão
+  já carvado. Não é um tipo de sólido novo: se algo a jusante precisasse de
+  saber que uma gruta foi semeada em vez de escrita à mão, o desenho estava
+  errado.
 - Todo o mutate passa pelo brush engine com journal — carve tem de ser
   **idempotente**.
 - **Decals são só visuais** — `GroundDecal` nunca toca no heightfield.
@@ -118,13 +148,18 @@ Contrato XML completo: `AGENTS.md` da raiz.
 
 ## Desvios conhecidos vs VibeGame (documentados, não afetam o simple-rpg)
 
-Estações de road a 1 m (vs 0.35); sem berms/cross-slope; decks de ponte são
-ribbons planas (GLB chega com glTF).
+Estações de road a 1 m (vs 0.35); sem berms/cross-slope; decks de
+`<Road profile="bridge">` continuam ribbons planas sem collider (GLB chega
+com glTF). A travessia atravessável é a tag `<Bridge>`, que é sólido voxel —
+ligar o `profile="bridge"` a esse sólido fica por fazer, e é decisão
+deliberada.
 
 ## Verificar
 
 ```bash
 cd Viber && cargo test          # inclui tests/terrain_mesh_health.rs (voxel)
 cargo test --release --test chunk_build_bench -- --nocapture
-cargo run -- analyze worlds/terrain.xml   # mundo demo de terreno
+cargo run -- analyze worlds/terrain.xml    # mundo demo de terreno
+cargo run -- analyze worlds/qa-voxel.xml   # grutas, arcos, overhangs
+cargo run -- analyze worlds/qa-pontes.xml  # travessias, salas, viaduto, dispersão
 ```
