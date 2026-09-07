@@ -92,9 +92,9 @@ pub struct TerrainSpec {
     pub render_distance: Option<f32>,
     /// Height smoothing: `0.0` bilinear, `1.0` monotone Catmull-Rom.
     pub height_smoothing: f32,
-    /// Collider voxel resolution per chunk edge (collider cell =
-    /// `chunk_size / collision_resolution`, 1 m no default); `0` desliga
-    /// colliders de terreno.
+    /// Interruptor de colisão de terreno: `0` desliga os colliders; qualquer
+    /// outro valor liga. (Já NÃO define geometria: o collider é o trimesh
+    /// transvoxel da coluna ao passo do LOD — ver `physics.rs`.)
     pub collision_resolution: u32,
     /// Célula voxel do LOD 0: o passo LOD-0 é `chunk_size / resolution`
     /// arredondado a metros inteiros (o ladder voxel duplica por nível —

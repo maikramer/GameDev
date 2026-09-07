@@ -1,8 +1,9 @@
 # CONTEXT.md — src/terrain
 
 Sistema de terreno (100% volumétrico ✅): o `VoxelField` é a única fonte de
-geometria — toda a grelha de chunks renderiza por surface nets com ladder de
-LOD por coluna. O heightfield (PNG/.ahgt/procedural) sobrevive como INPUT:
+geometria — toda a grelha de chunks renderiza por transvoxel (células de
+transição de LOD) com ladder de LOD por coluna, e o collider de terreno é o
+trimesh dessa mesma superfície, um por coluna (`physics.rs`). O heightfield (PNG/.ahgt/procedural) sobrevive como INPUT:
 termo-base do SDF, alvo do carve de features declarativas (`Terrain`,
 `TerrainPad`, `Lake`, `River`, `Cliff`, `Road`, `RoadNetwork`) e base das
 máscaras (CliffMask, splat, biomas).
@@ -19,7 +20,9 @@ máscaras (CliffMask, splat, biomas).
 3. **Gameplay** lê sem tocar na mesh: `TerrainRuntime::sample /
    sample_mesh_surface / in_water / on_road` (recurso), `WaterBody`,
    `RoadPath` — é isto que o player, os spawners e os scripts usam. As
-   queries leem o SDF (surface nets segue o zero do campo), nunca a mesh.
+   queries leem o SDF (o transvoxel segue o zero do campo), nunca a mesh.
+   Regra dura: gameplay com Y conhecido usa `surface_below`; `grid.sample`
+   fora de `src/terrain/` é proibido.
 
 ## Estado
 

@@ -326,7 +326,7 @@ do XML — a ocupação partilhada torna a ordem relevante, e o gate único mant
 a promessa "mesma seed, mesmo mundo" (um template preso em Loading > 60 s é
 desistido com warn). Por instância: `max-slope-attempts` tentativas; cada
 candidato rejeitado queima uma. Altura = **superfície desenhada** (`TerrainRuntime::sample_mesh_surface`: o
-zero do SDF, que é o que o surface nets renderiza).
+zero do SDF, que é o que o transvoxel renderiza).
 Com `align-to-terrain`, a rotação inclina o modelo para a normal amostrada
 por **matriz 3×3 ponderada** (`BrushGrid::sample_normal_matrix`, centro 6×,
 sondas a 1 texel — estabiliza o tilt e lê o declive real de ravinas) com
@@ -389,7 +389,8 @@ Sem câmara no mundo → auto-orbit lenta na origem.
 ### Terreno (100% volumétrico)
 
 O terreno inteiro sai do **campo voxel** (`VoxelField`, SDF `p.y − altura ⊕
-mods`) por surface nets, em COLUNAS com ladder de LOD (célula 1→2→4 m,
+mods`) por transvoxel (marching cubes com células de transição — costura de
+LOD sem saias), em COLUNAS com ladder de LOD (célula 1→2→4 m,
 histerese, budget de caixas/frame, cull por `render-distance`). O heightmap
 (PNG/.ahgt/procedural) sobrevive como INPUT — termo-base do SDF e alvo do
 carve de pads/lagos/rios/estradas pelo brush engine; não há mesh nem collider
@@ -407,8 +408,7 @@ lagos/rios.
 `lod-distance-ratio` (2.0), `lod-hysteresis` (1.2), `render-distance` (sem
 default = budget de 2048 colunas), `height-smoothing` (1 = Catmull-Rom
 monotone; 0 = bilinear — suaviza a GRID de input), `collision-resolution`
-(64; a célula do collider voxel é `chunk-size/collision-resolution`; **0
-desliga os colliders de terreno**), `cliff-angle` (50° — gatilho da
+(64; interruptor — **0 desliga os colliders**; já não define geometria), `cliff-angle` (50° — gatilho da
 CliffMask/splat; 90 desliga), `cliff-min-area` (120 m²), `cliff-min-drop` (4 m), `cliff-min-extent` (8 m) — filtro REGIONAL: um componente de declive só é cliff se passar os três (mata declives espúrios), `cliff-streaks` (0.5 — escorrimentos verticais na pele da parede), `cliff-moss` (0.35 — musgo procedural nos ombros/ledges), `sharpen` (false), `sharpen-angle` (35°), `sharpen-seed` (0 = deriva de `seed`), `texture`/`texture-url`, `texture-tile-size` (0 = auto), `seed` (0), tint (caminho LEGADO): `base-color`, `color-low`, `color-mid`, `color-high`, `color-rock`, `snow-height`, `slope-threshold`, `slope-softness`, `height-blend-strength`; blend de camadas: `layers` (lista de ≤13 aliases do pool — `grass vale_grass dirt dirt_trail forest_floor gravel mountain_stone sand desert_sand snow_peak swamp_mud dirt_road pebbles` — ou caminhos de textura; o slot do leito carrega `pebbles` mesmo que o mundo não o liste), `shore-width` (5 m — faixa de areia fora da linha de água) — **BLOQUEADO na stack actual**: materiais custom com bindings de textura crasham o driver NV 595.84 (SIGSEGV em `vkCreatePipelineLayout`, ver abaixo), pelo que `layers` DEGRADA para o tint legado com um warn; o sistema por chunk liga-se com `VIBER_CHUNK_LAYERS=1` quando a stack o permitir |
 | — | **Material de chunk (r6, por trás de `VIBER_CHUNK_LAYERS=1`)**: o bootstrap gera UM material por chunk (`generate_chunk_splats` em `splat.rs`): as 4 texturas do pool com MAIOR peso agregado no chunk + um plano splat RGBA8 32² próprio (pesos renormalizados a somar 1; chunks de montanha carregam snow/stone, de pântano mud — áreas diferentes têm blends diferentes). Material próprio (`layer_material.rs`, NÃO ExtendedMaterial) com 4 layers+splat (bindings 0–9) + uniform de estilo/posicionamento (binding 10: tiles/tints/flats/roughs + origem/tamanho + layer de rocha para paredes triplanares) + day/night tint; shader `shaders/terrain_chunk.wgsl`. ⚠ **porquê o gate**: com bevy 0.19.1 + wgpu 29.0.4 + NV 595.84, QUALQUER material custom com `#[texture]` (1, 5 ou 17 bindings; extension OU material próprio; qualquer nº de binding) morre com SIGSEGV dentro de `libnvidia-gpucomp` ao criar o pipeline layout — o `StandardMaterial` e materiais só-`#[storage]` (céu) funcionam; isolado por bissect de mundos M0–M23 (2026-09-04). Falha de textura reponta o slot para a layer dominante (leito → gravel quando o chunk o carrega) |
 | `TerrainPad` | `at` (`"x z"`), `size` (`"w d"`), `falloff` (8), `corner-radius` (4), `height` (ausente = auto: amostra o centro e escreve de volta) |
@@ -422,7 +422,7 @@ distância à linha de água (fade 0–26 m, bus sfx, `src/ambient.rs`). As
 pedras de margem (`rocks="1"`) entram no pipeline de spawner como candidatos
 fixos determinísticos (seed = posição do corpo; `src/terrain/shore_rocks.rs`)
 — herdam occupancy partilhada, LOD ladder, colliders e `avoid-road`.
-| `Cliff` | `path` (`"x z x z …"` — linha de creste; a face pende do lado da queda), `width` (6, percurso horizontal da face), `height` (ausente = **auto**: a diferença natural entre creste e pé — a parede adapta-se ao lugar), `angle` (com `height` autoral deriva `width = height/tan(angle)`), `profile` (`vertical` \| `concave` \| `convex` \| `columnar` \| `terraced` \| `overhang` \| `arch`; columnar = colunas basálticas com cortes retos, fendas e brow dentado — a referência wargame; overhang = saliência que corta para trás por baixo da verga, abrigo com rocha por cima; arch = parede vertical com UM vão em arco furado no meio da banda — cápsula subtractiva na estação média, só abre se a queda local ≥ 3 m), `side` (`auto`/`left`/`right`), `noise` (0.15, ondulação da borda como fração de `width`), `gullies` (0 = off; 0.15–0.4 — ravinas de erosão one-sided na face, bútresses ficam na linha nominal), `notches` (0 = off; 0.1–0.3 — colos no creste como fração da queda LOCAL), `talus` (false — cone de detritos no pé, carve RAISE-only com `talus-angle` 36°; `run ≈ 0.55·queda/tan(ângulo)`, enterra até 35% da queda; o bitset `talus` entra na camada pública da máscara — splat pinta gravel, relva/spawners evitam), `seed` (0). **Sólido 3D no campo voxel — já NÃO é um carve** (`src/terrain/voxel/cliff.rs`). `vertical` é mesmo aprumado, `concave` tem UNDERCUT real (rocha por cima da cabeça), `convex` faz a sobrancelha exceder o próprio pé, `columnar` põe o offset de coluna em geometria. Colisão por `Collider::voxels`. Como a parede saiu da grid, um survey de estrada já não a lê — mantenha os cliffs afastados das artérias (o simple-rpg usa ~30 m). Banda one-side: o lado de cima NUNCA é tocado. Pele da parede (shader por chunk): estratos cromáticos (tint quente↔frio por banda + banco duro 1-em-4), meteorização vertical e AO de contacto lidos do WALL SPACE da máscara (canal R das vertex colors, 0=brow→1=pé), escorrimentos e musgo por noise — doseados por `cliff-streaks`/`cliff-moss`. Journal `cliff:i` (parede) + `cliff:i` (talus) |
+| `Cliff` | `path` (`"x z x z …"` — linha de creste; a face pende do lado da queda), `width` (6, percurso horizontal da face), `height` (ausente = **auto**: a diferença natural entre creste e pé — a parede adapta-se ao lugar), `angle` (com `height` autoral deriva `width = height/tan(angle)`), `profile` (`vertical` \| `concave` \| `convex` \| `columnar` \| `terraced` \| `overhang` \| `arch`; columnar = colunas basálticas com cortes retos, fendas e brow dentado — a referência wargame; overhang = saliência que corta para trás por baixo da verga, abrigo com rocha por cima; arch = parede vertical com UM vão em arco furado no meio da banda — cápsula subtractiva na estação média, só abre se a queda local ≥ 3 m), `side` (`auto`/`left`/`right`), `noise` (0.15, ondulação da borda como fração de `width`), `gullies` (0 = off; 0.15–0.4 — ravinas de erosão one-sided na face, bútresses ficam na linha nominal), `notches` (0 = off; 0.1–0.3 — colos no creste como fração da queda LOCAL), `talus` (false — cone de detritos no pé, carve RAISE-only com `talus-angle` 36°; `run ≈ 0.55·queda/tan(ângulo)`, enterra até 35% da queda; o bitset `talus` entra na camada pública da máscara — splat pinta gravel, relva/spawners evitam), `seed` (0). **Sólido 3D no campo voxel — já NÃO é um carve** (`src/terrain/voxel/cliff.rs`). `vertical` é mesmo aprumado, `concave` tem UNDERCUT real (rocha por cima da cabeça), `convex` faz a sobrancelha exceder o próprio pé, `columnar` põe o offset de coluna em geometria. Colisão pelo trimesh da coluna (ver **Colisão de terreno** abaixo). Como a parede saiu da grid, um survey de estrada já não a lê — mantenha os cliffs afastados das artérias (o simple-rpg usa ~30 m). Banda one-side: o lado de cima NUNCA é tocado. Pele da parede (shader por chunk): estratos cromáticos (tint quente↔frio por banda + banco duro 1-em-4), meteorização vertical e AO de contacto lidos do WALL SPACE da máscara (canal R das vertex colors, 0=brow→1=pé), escorrimentos e musgo por noise — doseados por `cliff-streaks`/`cliff-moss`. Journal `cliff:i` (parede) + `cliff:i` (talus) |
 | `Cave` | `path` (`"x z x z …"` — eixo do túnel em XZ), `radius` (3), `depth` (8 — profundidade do CENTRO do tubo abaixo da superfície), `open-ends` (true — a profundidade decresce a zero nas duas pontas, portanto o túnel rompe a encosta e a gruta tem bocas; a false fica selada). **NÃO é um carve** — nada é escrito no heightfield. É um encadeado de cápsulas subtractivas no campo voxel (`src/terrain/voxel/cave.rs`), a primeira feature que põe ROCHA POR CIMA da cabeça do jogador. Construída DEPOIS do carve, portanto um túnel sob uma estrada segue o leito da estrada como construído. `depth < radius` avisa (o tubo rompe ao longo de todo o comprimento em vez de ter tecto). Viber-only: o VibeGame salta a tag com aviso |
 | `Arch` | `at` (`"x z"`, obrigatório), `width`/`span` (8 — vão livre), `height` (6 — altura livre do vão na coroa), `thickness` (2.5 — espessura das pernas), `depth` (4 — fundura do bloco ao longo do eixo), `yaw` (0). Portal de rocha autónomo: UM sólido union no campo voxel (`src/terrain/voxel/arch.rs`) com vão em arco (caixa + coroa em cápsula), base assente em `sample(at) − 1`. A coluna no centro do vão tem DOIS spans sólidos — `column()` responde 2 e `viber.ground_below` põe o andador no chão, não na fita. Spawner/relva rejeitam a fita (`has_thin_roof`: laje suspensa < 4 m de espessura). Viber-only: o VibeGame salta a tag com aviso |
 | `Road` | `path` (≥2 pontos), `width` (2), `profile` (artery), `flatten` (true; `false` = trilho decal sem carve), `flatten-falloff` (8), `flatten-window` (56), `flatten-max-grade` (0.22), `flatten-shoulder` (0), `platform-sink` (0.12), `smoothing` (2), `closed` (false), `texture-url`, `texture-scale` (6), `edge-feather` (1.0); aceites sem efeito: `edge-noise`, `end-feather-start/end`, `normal-map-url` |
@@ -453,6 +453,22 @@ por `render-distance`, respawn). Queries de gameplay: `TerrainRuntime::sample
 devolvem o TOPO do SDF, que é a superfície desenhada) +
 `WaterBody::contains / is_near / surface_y_at` (`avoid-water` /
 `near-water`) e `RoadPath::is_on_road / distance_to_road`.
+
+**Colisão de terreno — uma só superfície (Fase 2/3 do plano voxel):** o
+collider É o mesh: UM trimesh por coluna (`physics.rs::ColumnColliderBake`),
+os MESMOS triângulos que o transvoxel desenha, assado no spawn da coluna e no
+swap atómico do LOD (mesh e collider trocam no mesmo frame), com
+`FIX_INTERNAL_EDGES` (pseudo-normais — sem ghost collision nas arestas
+internas). Vive na entidade da coluna. Banda de colisão
+`min(chunk_size × 3, lod_distance)` com PISO de LOD 0 dentro dela (âncora:
+herói, fallback câmara) — o chão tocável é sempre a geometria fina e nunca
+troca de LOD sob o herói. `stream_voxel_colliders` mantém add/repair/remove e
+publica `TerrainCollisionStatus` ("há chão carregado?"): o player só usa o
+chão analítico (`surface_below`) quando não há collider carregado; com chão
+carregado, o collider é a autoridade. **Regra dura:** gameplay com Y
+conhecido usa `surface_below` (sob um overhang o topo do mundo é TETO);
+`grid.sample` fora de `src/terrain/` é proibido (`collision-resolution` = só
+interruptor, `0` desliga). Teste: `tests/terrain_collision.rs`.
 
 **Água animada** (`water_material.rs` + `shaders/water.wgsl`): lakes/rivers
 usam `ExtendedMaterial<StandardMaterial, WaterExtension>` — o fragment
@@ -534,7 +550,7 @@ spawner, default 45 m) o `on_update` nem corre. **Sem hot-reload** e sem hooks
 - **Fase 0 (✅):** parse/validate, includes, primitivas, luzes, `OrbitCamera`, `run`/`analyze`.
 - **Fase 1 (terreno ✅):** heightfield chunks + LOD + pads/água/estradas
   (`src/terrain/`); desde 2026-09-06 o terreno é **100% volumétrico**
-  (colunas voxel + surface nets, heightfield só como input/dado).
+  (colunas voxel + transvoxel, heightfield só como input/dado).
   `.ahgt` decodifica (header JSON + grid u16 deflate); sem ficheiro → procedural.
 - **Fase 2 (Luau ✅):** runtime mlua sandboxed + API `viber.*`/`viber.ui.*`
   (`docs/LUA_API.md`), profiler (F3/P) + bridge BRP; port do simple-rpg em

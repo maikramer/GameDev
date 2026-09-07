@@ -589,13 +589,11 @@ mod tests {
 
     #[test]
     fn test_ground_probe_starts_above_the_controller_skin() {
-        // O herói em repouso assenta a SKIN do controller (0.02) acima do
-        // collider; a sonda do `surface_below` tem de começar em ar, senão
-        // lê o próprio pé como chão.
-        assert!(GROUND_PROBE > 0.02);
-        // …mas perto o suficiente para nunca atravessar um degrau legítimo
-        // entre a leitura e a sonda.
-        assert!(GROUND_PROBE < 0.2);
+        // O herói em repouso assenta a SKIN do controller (0.02, ver
+        // `hero_controller`) acima do collider; a sonda tem de começar em ar.
+        // Valores em jogo: GROUND_PROBE e a skin, à data deste teste.
+        let probe_ok = GROUND_PROBE > 0.02 && GROUND_PROBE < 0.2;
+        assert!(probe_ok, "GROUND_PROBE={GROUND_PROBE} saiu da janela (skin, degrau)");
     }
 
     #[test]

@@ -2,7 +2,8 @@
 
 Escopo: terreno **100% volumétrico** declarativo — heightfield como INPUT
 (termo-base do SDF), carve de features (pads/lagos/rios/estradas), colunas
-voxel com surface nets + ladder de LOD, colliders `Collider::voxels`.
+voxel meshados por **transvoxel** (marching cubes com células de transição
+de LOD) + ladder de LOD por coluna, collider trimesh POR COLUNA (`physics.rs`).
 Contrato XML completo: `AGENTS.md` da raiz.
 
 ## Modelo de dados (o contrato que define tudo)
@@ -16,7 +17,7 @@ Contrato XML completo: `AGENTS.md` da raiz.
   Mundos existentes mantêm a silhueta; o que morreu foi o heightfield como
   mesh/collider/LOD (2.5D), não como dado.
 - **A superfície desenhada É o zero do SDF.** `sample_mesh_surface` devolve
-  sempre `voxel.surface_top` (bisseccionado, ~0,12 mm); o surface nets segue
+  sempre `voxel.surface_top` (bisseccionado, ~0,12 mm); o transvoxel segue
   o campo a precisão sub-voxel, e o LOD só muda o tamanho da célula.
 - **`sample(x, z)` continua a ser a superfície MAIS ALTA** (o telhado do
   arco, não o lado de baixo). Quem precisa de estar por baixo chama
@@ -26,7 +27,7 @@ Contrato XML completo: `AGENTS.md` da raiz.
 
 | Ficheiro | Responsabilidade |
 |----------|------------------|
-| `spec.rs` | contrato XML: `TerrainSpec`, `TerrainPadSpec`, tint. `resolution` = célula do LOD0 voxel (`chunk_size/resolution`, 1 m no default); `collision-resolution` = resolução do collider voxel por chunk edge; `levels`/`lod-distance-ratio`/`lod-hysteresis`/`render-distance` alimentam o ladder de colunas |
+| `spec.rs` | contrato XML: `TerrainSpec`, `TerrainPadSpec`, tint. `resolution` = célula do LOD0 voxel (`chunk_size/resolution`, 1 m no default); `collision-resolution` = interruptor (`0` desliga os colliders; já não define geometria); `levels`/`lod-distance-ratio`/`lod-hysteresis`/`render-distance` alimentam o ladder de colunas |
 | `sampler.rs` | `HeightSampler` + guard `apply_pads` (só para testes) |
 | `heightmap.rs` | PNG 8/16-bit ou `.ahgt` (header JSON + grid u16 deflate); sem ficheiro → procedural determinístico via `seed` |
 | `brush.rs` | brush engine: modos blend/lower/raise, **journal por owner** (`pad:0`, `road:3`…) com revert para re-carve idempotente, `min_effective` (larguras < 1.5 texéis promovidas). O produção é deliberadamente **unguarded** |
@@ -55,15 +56,17 @@ Contrato XML completo: `AGENTS.md` da raiz.
   ativas, no bootstrap E nos rebuilds (desalinhados, caixas vizinhas
   discutem). Com `layers`, R das vertex colors = wall space e A = cliff
   factor; no legado, RGBA = tint integral (o StandardMaterial multiplica).
-- **Colliders por caixa, dois formatos** (`terrain_collider_kind`):
-  caixa termo-base puro → `Collider::heightfield` SUAVE da grid (o topo
-  coincide com `runtime.sample` — o contrato do `last_resort_ground` do
-  player; quantizar por centro de célula punha o topo ±0,5 m fora da
-  superfície desenhada: subir morro a saltos, descer em escada, o herói
-  nunca lia grounded na cidade); caixa tocada por um mod 3D (gruta/arco/
-  cliff) → `Collider::voxels`. Streaming `stream_voxel_colliders` com
-  try_insert/try_remove (o LOD despacha caixas no mesmo frame). Célula =
-  `chunk_size/collision-resolution`; `0` desliga tudo.
+- **O collider É a mesh: um trimesh por COLUNA** (`physics.rs::ColumnColliderBake`):
+  os triângulos são exatamente os que o transvoxel desenha — acumulados no
+  staging e assados no swap atómico do LOD (mesh e collider trocam no mesmo
+  frame), com `FIX_INTERNAL_EDGES` (pseudo-normais, sem ghost collision nas
+  arestas internas). Vive na entidade da coluna; `collision-resolution` é só
+  interruptor (`0` = sem colliders). Banda de colisão
+  `min(chunk×3, lod_distance)` com PISO de LOD 0 dentro dela (câmara OU
+  herói): o chão tocável é sempre geometria fina e nunca troca de LOD sob o
+  herói. `stream_voxel_colliders` mantém add/repair/remove e publica
+  `TerrainCollisionStatus` — o player só usa o chão analítico quando não há
+  collider carregado; com chão carregado, o collider é a autoridade.
 - Todo o mutate passa pelo brush engine com journal — carve tem de ser
   **idempotente**.
 - **Decals são só visuais** — `GroundDecal` nunca toca no heightfield.
