@@ -1,15 +1,15 @@
 //! Snapshot "Áudio" do profiler — o equivalente compacto do `AudioDebug`
 //! do VibeGame: buses do mixer (`AudioMixerSettings`), layers de BGM
-//! ([`crate::music::MusicLayerTag`]) e sinks activos (`PlaybackSettings` +
-//! `AudioSink`), com estados de pausa/mute/spatial/loop e volume efectivo
-//! (bus × layer × master).
+//! ([`crate::music::MusicLayerTag`]) e loops activos
+//! ([`crate::music::LoopInstance`] + [`crate::music::LoopVolume`]), com
+//! estado das instâncias kira e volume linear corrente.
 
 use serde::Serialize;
 
-use bevy::audio::{AudioSinkPlayback, PlaybackMode};
 use bevy::prelude::*;
+use bevy_kira_audio::PlaybackState;
 
-use crate::music::{AudioMixerSettings, MusicLayerTag};
+use crate::music::{AudioMixerSettings, LoopInstance, LoopVolume, MusicLayerTag};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct BusSnapshot {
@@ -52,12 +52,7 @@ pub struct AudioSnapshot {
     pub looping: usize,
 }
 
-/// Volume linear de um `bevy::audio::Volume` (0..=1).
-fn volume_linear(volume: &bevy::audio::Volume) -> f32 {
-    volume.to_linear()
-}
-
-/// Recolhe o snapshot de áudio (5 Hz — iterar sinks é barato).
+/// Recolhe o snapshot de áudio (5 Hz — iterar loops é barato).
 pub fn snapshot(world: &mut World) -> AudioSnapshot {
     let buses = world
         .get_resource::<AudioMixerSettings>()
@@ -74,21 +69,27 @@ pub fn snapshot(world: &mut World) -> AudioSnapshot {
 
     let mut layers = Vec::new();
     let mut sinks = Vec::new();
-    let (mut playing, mut paused, mut muted, mut spatial, mut looping) =
+    let (mut playing, mut paused, muted, spatial, mut looping) =
         (0usize, 0usize, 0usize, 0usize, 0usize);
 
+    // `world.query` precisa de &mut — criar ANTES de pegar no resource de
+    // instâncias (depois ambos são só leitura e coexistem). Sem o resource
+    // (apps mínimas sem kira), tudo lê como "a tocar" — os loops SÃO loops;
+    // o que interessa aqui é o volume.
     let mut q = world.query::<(
         Entity,
-        &PlaybackSettings,
-        Option<&AudioSink>,
+        &LoopInstance,
+        &LoopVolume,
         Option<&MusicLayerTag>,
         Option<&Name>,
     )>();
-    for (entity, settings, sink, layer, name) in q.iter(world) {
-        let is_paused = sink.map(|s| s.is_paused()).unwrap_or(settings.paused);
-        let is_muted = sink.map(|s| s.is_muted()).unwrap_or(settings.muted);
-        let is_looping = matches!(settings.mode, PlaybackMode::Loop);
-        let vol = volume_linear(&settings.volume);
+    let instances = world.get_resource::<Assets<bevy_kira_audio::AudioInstance>>();
+    for (entity, instance, volume, layer, name) in q.iter(world) {
+        let is_paused = instances
+            .and_then(|a| a.get(&instance.0))
+            .is_some_and(|i| matches!(i.state(), PlaybackState::Paused { .. }));
+        let is_muted = false; // mute vive no BUS agora (kira), não por-som
+        let vol = volume.0;
 
         if let Some(layer) = layer {
             layers.push(LayerSnapshot {
@@ -99,23 +100,12 @@ pub fn snapshot(world: &mut World) -> AudioSnapshot {
             });
         }
 
-        let (is_playing, is_counted_paused, is_counted_muted, is_spatial, is_looping_counted) =
-            classify_sink(is_paused, is_muted, settings.spatial, is_looping);
-        if is_playing {
+        if !is_paused {
             playing += 1;
-        }
-        if is_counted_paused {
+        } else {
             paused += 1;
         }
-        if is_counted_muted {
-            muted += 1;
-        }
-        if is_spatial {
-            spatial += 1;
-        }
-        if is_looping_counted {
-            looping += 1;
-        }
+        looping += 1; // tudo o que passa por audio_loop_starter é loop
 
         sinks.push(SinkSnapshot {
             entity: entity.to_bits(),
@@ -124,8 +114,8 @@ pub fn snapshot(world: &mut World) -> AudioSnapshot {
                 .unwrap_or_else(|| format!("#{}", entity.index())),
             paused: is_paused,
             muted: is_muted,
-            spatial: settings.spatial,
-            looping: is_looping,
+            spatial: false, // áudio espacial ainda não ligado no bus kira
+            looping: true,
             volume: vol,
             layer: layer.map(|l| l.layer.clone()),
         });
@@ -145,23 +135,6 @@ pub fn snapshot(world: &mut World) -> AudioSnapshot {
     }
 }
 
-/// Classifica um sink: `(playing, paused, muted, spatial, looping)` —
-/// "playing" = nem pausado nem muted (como o VibeGame conta active plays).
-fn classify_sink(
-    is_paused: bool,
-    is_muted: bool,
-    spatial: bool,
-    is_looping: bool,
-) -> (bool, bool, bool, bool, bool) {
-    (
-        !is_paused && !is_muted,
-        is_paused,
-        is_muted,
-        spatial,
-        is_looping,
-    )
-}
-
 /// Linhas de texto da janela para o tab Áudio.
 pub fn window_lines(snap: &AudioSnapshot) -> Vec<String> {
     let mut lines = Vec::new();
@@ -170,8 +143,8 @@ pub fn window_lines(snap: &AudioSnapshot) -> Vec<String> {
         snap.buses.master, snap.buses.music, snap.buses.sfx
     ));
     lines.push(format!(
-        "sinks  {} total · {} a tocar · {} pausados · {} muted · {} spatial · {} loop",
-        snap.total, snap.playing, snap.paused, snap.muted, snap.spatial, snap.looping
+        "loops  {} total · {} a tocar · {} pausados",
+        snap.total, snap.playing, snap.paused
     ));
     if snap.layers.is_empty() {
         lines.push("música (sem layers activos)".into());
@@ -192,10 +165,9 @@ pub fn window_lines(snap: &AudioSnapshot) -> Vec<String> {
     sorted.sort_by_key(|s| (s.paused, s.name.clone()));
     for sink in sorted.iter().take(12) {
         lines.push(format!(
-            "  {} {}{}{} v={:.2}{}",
+            "  {} {}{} v={:.2}{}",
             if sink.paused { "·" } else { "▶" },
             sink.name,
-            if sink.spatial { " 3d" } else { "" },
             if sink.looping { " ∞" } else { "" },
             sink.volume,
             sink.layer
@@ -218,64 +190,35 @@ pub fn json(snap: &AudioSnapshot) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy::audio::{PlaybackMode, PlaybackSettings, Volume};
-
-    fn settings(mode: PlaybackMode, paused: bool, muted: bool, spatial: bool) -> PlaybackSettings {
-        PlaybackSettings {
-            mode,
-            volume: Volume::Linear(0.7),
-            speed: 1.0,
-            paused,
-            muted,
-            spatial,
-            spatial_scale: None,
-            start_position: None,
-            duration: None,
-        }
-    }
 
     #[test]
-    fn test_volume_linear() {
-        assert_eq!(volume_linear(&Volume::Linear(0.5)), 0.5);
-        assert!((volume_linear(&Volume::Decibels(0.0)) - 1.0).abs() < 1e-4);
-    }
-
-    #[test]
-    fn test_classify_sink_playing_vs_paused() {
-        assert_eq!(
-            classify_sink(false, false, true, true),
-            (true, false, false, true, true)
-        );
-        assert_eq!(
-            classify_sink(true, false, false, false),
-            (false, true, false, false, false)
-        );
-        // muted não conta como playing
-        assert_eq!(
-            classify_sink(false, true, false, false),
-            (false, false, true, false, false)
-        );
-    }
-
-    #[test]
-    fn test_snapshot_from_world() {
+    fn test_snapshot_from_world_kira_loops() {
         let mut world = World::new();
         world.init_resource::<AudioMixerSettings>();
-        world.spawn((settings(PlaybackMode::Loop, false, false, false),));
-        world.spawn((settings(PlaybackMode::Once, true, false, true),));
+        // Layer BGM activa + loop de ambiente sem nome — sem instância kira
+        // real (não há backend no teste), o estado default é "a tocar".
+        world.spawn((
+            MusicLayerTag {
+                layer: "explore".to_string(),
+                base_volume: 0.18,
+            },
+            LoopInstance(Handle::default()),
+            LoopVolume(0.18),
+        ));
+        world.spawn((LoopInstance(Handle::default()), LoopVolume(0.3)));
 
         let snap = snapshot(&mut world);
         assert_eq!(snap.total, 2);
-        assert_eq!(snap.playing, 1, "o pausado não conta como a tocar");
-        assert_eq!(snap.paused, 1);
-        assert_eq!(snap.spatial, 1);
-        assert_eq!(snap.looping, 1);
-        assert!(snap.layers.is_empty());
+        assert_eq!(snap.playing, 2);
+        assert_eq!(snap.looping, 2);
+        assert_eq!(snap.layers.len(), 1, "a layer BGM aparece no snapshot");
         assert!(snap.buses.master > 0.0);
 
         let lines = window_lines(&snap);
         assert!(lines.iter().any(|l| l.contains("2 total")), "{lines:?}");
+        assert!(lines.iter().any(|l| l.contains("explore")), "{lines:?}");
         let json = json(&snap);
         assert_eq!(json["total"], 2, "{json}");
+        assert_eq!(json["layers"][0]["layer"], "explore", "{json}");
     }
 }

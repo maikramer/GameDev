@@ -17,6 +17,7 @@
 use std::collections::HashMap;
 
 use bevy::prelude::*;
+use bevy_kira_audio::AudioControl;
 
 use crate::animation::CharacterAnimator;
 use crate::luau::{LuaScriptRef, ScriptToast};
@@ -153,6 +154,7 @@ pub const SFX_CLIPS_ALL: &[SfxClip] = &[
 pub const AMBIENT_LOOP_FILES: &[&str] = &[
     "assets/audio/sfx/world/water_lake.ogg",
     "assets/audio/sfx/world/water_flow.ogg",
+    "assets/audio/sfx/world/water_waterfall.ogg",
 ];
 
 impl SfxClip {
@@ -253,6 +255,8 @@ impl Plugin for AmbientPlugin {
                     sfx_player_system,
                     setup_water_ambience,
                     water_ambience_driver,
+                    setup_waterfall_ambience,
+                    waterfall_ambience_driver,
                     // Chuva + lanterna (WS-A): a chuva lê a intensidade já
                     // rodada pelo scheduler. O MOVER+compensação corre antes
                     // do step dos emissores (main.rs) — as gotas compensam no
@@ -577,10 +581,12 @@ fn npc_gesture_system(
 // ── SFX ─────────────────────────────────────────────────────────────────
 
 /// Handles pré-carregados dos clips — um map `SfxClip → handle` construído
-/// de [`SFX_CLIPS_ALL`]; um clip novo no enum entra no preload sozinho.
+/// de [`SFX_CLIPS_ALL`]; um clip novo no enum entra no preload sozinho. O
+/// asset type é o [`bevy_kira_audio::AudioSource`] (decode symphonia), NÃO
+/// o `bevy_audio::AudioSource` do backend nativo.
 #[derive(Debug, Clone, Resource, Default)]
 pub struct SfxHandles {
-    clips: HashMap<SfxClip, Handle<AudioSource>>,
+    clips: HashMap<SfxClip, Handle<bevy_kira_audio::AudioSource>>,
 }
 
 impl SfxHandles {
@@ -595,7 +601,7 @@ impl SfxHandles {
         }
     }
 
-    pub fn get(&self, clip: SfxClip) -> Option<Handle<AudioSource>> {
+    pub fn get(&self, clip: SfxClip) -> Option<Handle<bevy_kira_audio::AudioSource>> {
         self.clips.get(&clip).cloned()
     }
 }
@@ -632,22 +638,26 @@ fn sfx_player_system(
     handles: Option<Res<SfxHandles>>,
     listeners: Query<&GlobalTransform, With<Camera3d>>,
     mixer: Option<Res<crate::music::AudioMixerSettings>>,
+    sfx: Option<Res<bevy_kira_audio::AudioChannel<crate::music::SfxBus>>>,
     mut rng: Local<u32>,
-    mut commands: Commands,
 ) {
-    let Some(handles) = handles else {
+    let (Some(handles), Some(sfx)) = (handles, sfx) else {
         return;
     };
-    let bus = mixer
-        .map(|m| (m.sfx * m.master).clamp(0.0, 1.0))
-        .unwrap_or(1.0);
-    if bus <= 0.0 {
-        return;
+    // Mudo total nem toca (o bus estaria a −60 dB na mesma — poupança de CPU).
+    if let Some(mixer) = mixer {
+        if (mixer.sfx * mixer.master) <= 0.0 {
+            return;
+        }
     }
     for event in events.read() {
         let Some(handle) = handles.get(event.clip) else {
             continue;
         };
+        // Atenuação por distância no momento do evento; os buses sfx×master
+        // são aplicados pelo kira (crate::music::mixer_sync) — um som a meio
+        // responde a mudanças de volume, coisa que o modelo antigo (bus
+        // multiplicado no spawn) não fazia.
         let volume = match event.position {
             Some(pos) => {
                 let distance = listeners
@@ -659,10 +669,9 @@ fn sfx_player_system(
             }
             None => 0.6,
         };
-        let mut playback =
-            PlaybackSettings::REMOVE.with_volume(bevy::audio::Volume::Linear(volume * bus));
-        playback.speed = pitch_jitter(event.clip, &mut rng);
-        commands.spawn((AudioPlayer(handle), playback));
+        sfx.play(handle)
+            .with_volume(crate::music::linear_to_db(volume))
+            .with_playback_rate(pitch_jitter(event.clip, &mut rng) as f64);
     }
 }
 
@@ -689,7 +698,6 @@ const WATER_MAX_GAIN: f32 = 0.5;
 /// Spawna UMA vez os dois loops quando o runtime do terreno existe.
 fn setup_water_ambience(
     mut commands: Commands,
-    server: Res<AssetServer>,
     runtime: Option<Res<crate::terrain::runtime::TerrainRuntime>>,
     spawned: Query<(), With<WaterAmbienceLoop>>,
 ) {
@@ -702,9 +710,10 @@ fn setup_water_ambience(
     ] {
         commands.spawn((
             WaterAmbienceLoop { river },
-            AudioPlayer::<bevy::audio::AudioSource>(server.load(file)),
-            // Volume 0 até o driver o levantar (junto da água).
-            PlaybackSettings::LOOP.with_volume(bevy::audio::Volume::Linear(0.0)),
+            crate::music::AudioLoopPending {
+                url: file.to_string(),
+                music: false,
+            },
         ));
     }
 }
@@ -714,8 +723,10 @@ fn water_ambience_driver(
     time: Res<Time>,
     runtime: Option<Res<crate::terrain::runtime::TerrainRuntime>>,
     players: Query<&GlobalTransform, With<crate::player::Player>>,
-    mixer: Option<Res<crate::music::AudioMixerSettings>>,
-    mut loops: Query<(&WaterAmbienceLoop, &mut PlaybackSettings)>,
+    mut loops: Query<
+        (&WaterAmbienceLoop, &crate::music::LoopInstance, &mut crate::music::LoopVolume),
+    >,
+    mut instances: ResMut<Assets<bevy_kira_audio::AudioInstance>>,
 ) {
     // `iter().next()` e não `single()`: ≥2 players não pode matar o áudio.
     let (Some(runtime), Some(player)) = (runtime, players.iter().next()) else {
@@ -733,25 +744,127 @@ fn water_ambience_driver(
         };
         best[slot] = best[slot].min(d);
     }
-    let bus = mixer
-        .map(|m| (m.sfx * m.master).clamp(0.0, 1.0))
-        .unwrap_or(1.0);
     let dt = time.delta_secs().clamp(0.0, 0.2);
-    for (tag, mut settings) in &mut loops {
+    for (tag, instance, mut volume) in &mut loops {
         let d = if tag.river { best[1] } else { best[0] };
         let falloff = (1.0 - d / WATER_AUDIBLE_RADIUS).clamp(0.0, 1.0);
-        // Curva quadrática — perto da água o som cresce depressa.
-        let target = bus * WATER_MAX_GAIN * falloff * falloff;
-        let current = settings.volume.to_linear();
-        let next = crate::music::fade_step(current, target, dt, 0.5);
-        if next != current {
-            settings.volume = bevy::audio::Volume::Linear(next);
+        // Curva quadrática — perto da água o som cresce depressa. O bus
+        // (sfx×master) é do canal kira, não entra aqui.
+        let target = WATER_MAX_GAIN * falloff * falloff;
+        let next = crate::music::fade_step(volume.0, target, dt, 0.5);
+        if next != volume.0 {
+            let Some(mut snd) = instances.get_mut(&instance.0) else {
+                continue;
+            };
+            snd.set_decibels(
+                crate::music::linear_to_db(next),
+                bevy_kira_audio::AudioTween::linear(std::time::Duration::from_millis(60)),
+            );
+            volume.0 = next;
+        }
+    }
+}
+
+// ── Cachoeiras (loops posicionais) ──────────────────────────────────────
+//
+// Diferente dos loops globais de água: UMA entidade por queda grande
+// (`WaterBody.cascades` com `waterfall`), volume por distância ao
+// caldeirão, raio audível e ganho crescendo com a queda — água grande
+// ouve-se de longe.
+
+/// Loop posicional de cachoeira (uma entidade por queda).
+#[derive(Debug, Component)]
+pub struct WaterfallLoop {
+    /// Base da queda (world XZ) — o caldeirão.
+    pub at: bevy::math::Vec2,
+    /// Queda (m) — escala o raio audível e o ganho.
+    pub drop: f32,
+}
+
+/// Distância (m) base além da qual a cachoeira está em silêncio; cresce
+/// `3 m` por metro de queda.
+const WATERFALL_AUDIBLE_RADIUS: f32 = 34.0;
+/// Ganho junto a uma queda de 3 m, antes dos buses do mixer (cresce com a
+/// queda, teto de segurança).
+const WATERFALL_MAX_GAIN: f32 = 0.55;
+
+/// Spawna UMA vez um loop por cachoeira registada no runtime do terreno.
+fn setup_waterfall_ambience(
+    mut commands: Commands,
+    runtime: Option<Res<crate::terrain::runtime::TerrainRuntime>>,
+    spawned: Query<(), With<WaterfallLoop>>,
+) {
+    let Some(runtime) = runtime else {
+        return;
+    };
+    if !spawned.is_empty() {
+        return;
+    }
+    for body in &runtime.water {
+        if body.kind != crate::terrain::WaterKind::River {
+            continue;
+        }
+        for c in &body.cascades {
+            if !c.waterfall {
+                continue;
+            }
+            let Some(st) = body.stations.get(c.base) else {
+                continue;
+            };
+            commands.spawn((
+                WaterfallLoop {
+                    at: *st,
+                    drop: c.drop,
+                },
+                crate::music::AudioLoopPending {
+                    url: "assets/audio/sfx/world/water_waterfall.ogg".to_string(),
+                    music: false,
+                },
+            ));
+        }
+    }
+}
+
+/// Move o volume de cada loop de cachoeira para o alvo da distância ao
+/// caldeirão (mesma curva quadrática dos loops globais de água).
+fn waterfall_ambience_driver(
+    time: Res<Time>,
+    players: Query<&GlobalTransform, With<crate::player::Player>>,
+    mut loops: Query<(&WaterfallLoop, &crate::music::LoopInstance, &mut crate::music::LoopVolume)>,
+    mut instances: ResMut<Assets<bevy_kira_audio::AudioInstance>>,
+) {
+    if loops.is_empty() {
+        return;
+    }
+    // `iter().next()` e não `single()`: ≥2 players não pode matar o áudio.
+    let Some(player) = players.iter().next() else {
+        return;
+    };
+    let pos = player.translation();
+    let dt = time.delta_secs().clamp(0.0, 0.2);
+    for (tag, instance, mut volume) in &mut loops {
+        let d = (bevy::math::Vec2::new(pos.x, pos.z) - tag.at).length();
+        let radius = WATERFALL_AUDIBLE_RADIUS + tag.drop * 3.0;
+        let falloff = (1.0 - d / radius).clamp(0.0, 1.0);
+        let gain = (WATERFALL_MAX_GAIN * (0.5 + tag.drop * 0.12)).min(0.95);
+        // Curva quadrática — perto da queda o som cresce depressa. O bus
+        // (sfx×master) é do canal kira, não entra aqui.
+        let target = gain * falloff * falloff;
+        let next = crate::music::fade_step(volume.0, target, dt, 0.5);
+        if next != volume.0 {
+            let Some(mut snd) = instances.get_mut(&instance.0) else {
+                continue;
+            };
+            snd.set_decibels(
+                crate::music::linear_to_db(next),
+                bevy_kira_audio::AudioTween::linear(std::time::Duration::from_millis(60)),
+            );
+            volume.0 = next;
         }
     }
 }
 
 // ── Chuva viva (WS-A) ───────────────────────────────────────────────────
-//
 // Três peças que partilham a intensidade CONTÍNUA do `<Weather>`:
 //
 // 1. **Emissor âncora** — UM emissor do preset `rain` (+12 m acima do herói)
@@ -932,7 +1045,6 @@ fn rain_ripple_spawner(
 /// Spawna UMA vez o loop de áudio da chuva (volume 0 até o driver o levantar).
 fn setup_rain_ambience(
     mut commands: Commands,
-    server: Res<AssetServer>,
     weather: Option<Res<crate::worldsys::WeatherState>>,
     spawned: Query<(), With<RainAmbienceLoop>>,
 ) {
@@ -941,10 +1053,10 @@ fn setup_rain_ambience(
     }
     commands.spawn((
         RainAmbienceLoop,
-        AudioPlayer::<bevy::audio::AudioSource>(
-            server.load("assets/audio/sfx/ambient/rain_loop.ogg"),
-        ),
-        PlaybackSettings::LOOP.with_volume(bevy::audio::Volume::Linear(0.0)),
+        crate::music::AudioLoopPending {
+            url: "assets/audio/sfx/ambient/rain_loop.ogg".to_string(),
+            music: false,
+        },
     ));
 }
 
@@ -952,23 +1064,30 @@ fn setup_rain_ambience(
 fn rain_ambience_driver(
     time: Res<Time>,
     weather: Option<Res<crate::worldsys::WeatherState>>,
-    mixer: Option<Res<crate::music::AudioMixerSettings>>,
-    mut loops: Query<&mut PlaybackSettings, With<RainAmbienceLoop>>,
+    mut loops: Query<
+        (&crate::music::LoopInstance, &mut crate::music::LoopVolume),
+        With<RainAmbienceLoop>,
+    >,
+    mut instances: ResMut<Assets<bevy_kira_audio::AudioInstance>>,
 ) {
     let Some(weather) = weather else {
         return;
     };
     let intensity = weather.rain.clamp(0.0, 1.0);
-    let bus = mixer
-        .map(|m| (m.sfx * m.master).clamp(0.0, 1.0))
-        .unwrap_or(1.0);
-    let target = bus * RAIN_MAX_GAIN * intensity;
+    // O bus (sfx×master) é do canal kira, não entra aqui.
+    let target = RAIN_MAX_GAIN * intensity;
     let dt = time.delta_secs().clamp(0.0, 0.2);
-    for mut settings in &mut loops {
-        let current = settings.volume.to_linear();
-        let next = crate::music::fade_step(current, target, dt, 0.35);
-        if next != current {
-            settings.volume = bevy::audio::Volume::Linear(next);
+    for (instance, mut volume) in &mut loops {
+        let next = crate::music::fade_step(volume.0, target, dt, 0.35);
+        if next != volume.0 {
+            let Some(mut snd) = instances.get_mut(&instance.0) else {
+                continue;
+            };
+            snd.set_decibels(
+                crate::music::linear_to_db(next),
+                bevy_kira_audio::AudioTween::linear(std::time::Duration::from_millis(60)),
+            );
+            volume.0 = next;
         }
     }
 }
