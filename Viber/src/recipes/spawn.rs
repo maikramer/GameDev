@@ -1368,8 +1368,17 @@ pub fn orbit_camera_follow(
         );
         cam.translation = target_pos + offset;
         // Never sink below the terrain surface (VibeGame minTerrainDistance).
+        // Piso SOB a câmara (Y conhecido): o enquadramento da intro sob um
+        // overhang não é empurrado para cima da rocha.
         if let Some(runtime) = runtime.as_deref() {
-            let min_y = runtime.sample(cam.translation.x, cam.translation.z) + 1.0;
+            let min_y = runtime
+                .surface_below(
+                    cam.translation.x,
+                    cam.translation.z,
+                    cam.translation.y + 0.5,
+                )
+                .unwrap_or(f32::NEG_INFINITY)
+                + 1.0;
             if cam.translation.y < min_y {
                 cam.translation.y = min_y;
             }

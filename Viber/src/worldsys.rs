@@ -411,8 +411,24 @@ fn seat_at(
     let Ok((_, mut transform)) = transforms.get_mut(entity) else {
         return;
     };
-    let ground = runtime.sample(x, z);
-    if transform.translation.y < ground - 0.25 {
+    // Levantar um static afundado até ao topo do SPAN em que ele está: um
+    // static correctamente pousado sob um overhang não é puxado através da
+    // rocha (o topo do mundo ali é teto), e um static enterrado sobe até à
+    // primeira superfície acima de si. Spans chegam top-down.
+    let y = transform.translation.y;
+    let spans = runtime.column(x, z);
+    let ground = spans
+        .iter()
+        .rev()
+        .map(|span| span.top)
+        .find(|&top| top <= y + 0.25)
+        .unwrap_or_else(|| {
+            spans
+                .first()
+                .map(|span| span.top)
+                .unwrap_or(f32::NEG_INFINITY)
+        });
+    if y < ground - 0.25 {
         transform.translation.y = ground;
     }
 }

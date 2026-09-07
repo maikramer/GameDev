@@ -1514,8 +1514,16 @@ pub fn luau_update(
                 if let Ok((_, _, Some(mut transform), _, _)) = scripts.get_mut(entity) {
                     let x = transform.translation.x + delta.x;
                     let z = transform.translation.z + delta.y;
+                    // Piso SOB a entidade (Y conhecido): um NPC movido por
+                    // script sob um overhang não salta para o topo do mundo.
                     let y = match terrain.as_ref() {
-                        Some(rt) => rt.sample(x, z),
+                        Some(rt) => rt
+                            .surface_below(
+                                x,
+                                z,
+                                transform.translation.y + crate::player::GROUND_PROBE,
+                            )
+                            .unwrap_or_else(|| rt.sample(x, z)),
                         None => transform.translation.y,
                     };
                     transform.translation = Vec3::new(x, y, z);

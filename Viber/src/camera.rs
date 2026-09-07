@@ -522,8 +522,18 @@ pub fn third_person_camera(
                         }
                         None => {
                             // Clear line of sight: still enforce the floor
-                            // above the terrain at the desired spot.
-                            let min_y = rt.sample(desired.x, desired.z) + cam.min_terrain_distance;
+                            // above the terrain at the desired spot. Piso SOB
+                            // a câmara (Y conhecido): sob um overhang o chão
+                            // é o de baixo — o topo da rocha é teto, não
+                            // minTerrainDistance.
+                            let min_y = rt
+                                .surface_below(
+                                    desired.x,
+                                    desired.z,
+                                    desired.y + crate::player::GROUND_PROBE,
+                                )
+                                .unwrap_or(f32::NEG_INFINITY)
+                                + cam.min_terrain_distance;
                             if desired.y < min_y {
                                 safe.y = min_y;
                             }

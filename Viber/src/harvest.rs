@@ -796,8 +796,17 @@ fn break_prop(
     } else {
         dir
     };
+    // Piso SOB o prop (Y conhecido): a árvore tomba do chão onde está, não
+    // do topo do mundo caso esteja sob um overhang.
     let ground_y = terrain
-        .map(|t| t.sample(prop_pos.x, prop_pos.z))
+        .map(|t| {
+            t.surface_below(
+                prop_pos.x,
+                prop_pos.z,
+                prop_pos.y + crate::player::GROUND_PROBE,
+            )
+            .unwrap_or_else(|| t.sample(prop_pos.x, prop_pos.z))
+        })
         .unwrap_or(prop_pos.y);
 
     let despawned = match data.break_style {
@@ -1155,7 +1164,13 @@ pub fn debris_chunk_system(
                 Quat::from_euler(EulerRot::XYZ, spin.x, spin.y, spin.z) * transform.rotation;
             let ground = terrain
                 .as_deref()
-                .map(|t| t.sample(transform.translation.x, transform.translation.z))
+                .and_then(|t| {
+                    t.surface_below(
+                        transform.translation.x,
+                        transform.translation.z,
+                        transform.translation.y + crate::player::GROUND_PROBE,
+                    )
+                })
                 .unwrap_or(piece.ground_hint);
             let rest_y = ground + piece.rest_half;
             if piece.vel.y < 0.0 && transform.translation.y <= rest_y {

@@ -290,14 +290,19 @@ pub fn enemy_ai(
                     Vec3::new(moved.x, transform.translation.y, moved.y),
                     world_limit,
                 );
-                // SUPERFÍCIE RENDERIZADA (paridade com spawners/knockback): o
-                // sample analítico flutua acima das cordas do mesh nas
-                // cristas — a criatura ficava "dentro" do chão desenhado.
-                transform.translation = Vec3::new(
-                    moved.x,
-                    runtime.sample_mesh_surface(moved.x, moved.z),
-                    moved.z,
-                );
+                // PISO SOB A CRIATURA (Y conhecido → surface_below): sob um
+                // cliff/arco fica SOB a rocha em vez de ser teletransportada
+                // para o topo do mundo. Enterrada (sonda dentro da rocha, ex.
+                // a subir uma parede) mantém a paridade antiga: superfície
+                // renderizada.
+                let y = runtime
+                    .surface_below(
+                        moved.x,
+                        moved.z,
+                        transform.translation.y + crate::player::GROUND_PROBE,
+                    )
+                    .unwrap_or_else(|| runtime.sample_mesh_surface(moved.x, moved.z));
+                transform.translation = Vec3::new(moved.x, y, moved.z);
                 transform.rotation = crate::player::facing_rotation(dir3);
             }
         } else if matches!(enemy.state, EnemyState::Chase) {
@@ -361,14 +366,22 @@ pub fn queue_creature_respawns(
     >,
 ) {
     for (enemy, transform, scene, animated) in &dead {
-        // Respawn na home (latchada no 1.º tick da IA); o Y assenta na
-        // superfície renderizada para não renascer enterrado/voando.
+        // Respawn na home (latchada no 1.º tick da IA); o Y assenta no piso
+        // SOB a altura atual (surface_below) — um respawn sob um overhang não
+        // renasce no topo do mundo.
         let home = enemy
             .home
             .unwrap_or(Vec2::new(transform.translation.x, transform.translation.z));
         let y = terrain
             .as_ref()
-            .map(|t| t.sample_mesh_surface(home.x, home.y))
+            .map(|t| {
+                t.surface_below(
+                    home.x,
+                    home.y,
+                    transform.translation.y + crate::player::GROUND_PROBE,
+                )
+                .unwrap_or_else(|| t.sample_mesh_surface(home.x, home.y))
+            })
             .unwrap_or(transform.translation.y);
         queue.0.push(RespawnEntry {
             position: Vec3::new(home.x, y, home.y),

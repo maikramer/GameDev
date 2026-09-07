@@ -120,12 +120,18 @@ fn knockback_system(
             }
         }
         if let Some(terrain) = terrain.as_deref() {
-            // SUPERFÍCIE RENDERIZADA (igual ao assentamento dos spawners): o
-            // `sample` analítico diverge do mesh perto de carves (lagoas,
-            // estradas, pads) — cada knockback sentava o atingido 1-2 m
-            // ABAIXO do chão desenhado e ele "afundava" no primeiro empurrão.
+            // Piso SOB o atingido (Y conhecido → surface_below): o knockback
+            // sob um cliff/arco fica SOB a rocha em vez de saltar para o
+            // topo. Sem piso conhecido (enterrado) mantém a paridade com os
+            // spawners: superfície renderizada.
             if player.is_none() {
-                transform.translation.y = terrain.sample_mesh_surface(x, z);
+                transform.translation.y = terrain
+                    .surface_below(
+                        x,
+                        z,
+                        transform.translation.y + crate::player::GROUND_PROBE,
+                    )
+                    .unwrap_or_else(|| terrain.sample_mesh_surface(x, z));
             }
         }
         transform.translation.x = x;

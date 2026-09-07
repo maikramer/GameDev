@@ -544,12 +544,16 @@ pub fn abilities_system(
         // dashava PARA TRÁS (mesma correção do melee, `combat::hero_forward`).
         let forward = crate::combat::hero_forward(global) * DASH_DISTANCE;
         let (x, z) = (pos.x + forward.x, pos.z + forward.z);
-        // SUPERFÍCIE RENDERIZADA (paridade com spawners/knockback): o sample
-        // analítico flutua acima das cordas do mesh nas cristas — o dash
-        // aterrava a "pairar" 1-2 m.
+        // PISO SOB O HERÓI (Y conhecido → surface_below): o dash sob um
+        // overhang não teleporta para cima da rocha; em campo aberto segue
+        // o relevo como antes. Enterrado (a atravessar uma parede) mantém a
+        // superfície renderizada — o dash continua a cruzar obstáculos.
         let y = terrain
             .as_ref()
-            .map(|t| t.sample_mesh_surface(x, z))
+            .map(|t| {
+                t.surface_below(x, z, pos.y + crate::player::GROUND_PROBE)
+                    .unwrap_or_else(|| t.sample_mesh_surface(x, z))
+            })
             .unwrap_or(pos.y);
         transform.translation = Vec3::new(x, y, z);
         commands.entity(entity).insert(Invulnerable {
@@ -806,9 +810,20 @@ fn bomb_step_system(
         transform.translation += bomb.velocity * dt;
         // Repouso no terreno: sem isto a bomba atravessava o chão em voo
         // parabólico e detonava enterrada (centro do AoE sob a superfície —
-        // inimigos à boca do crater ficavam fora do raio em 3D).
+        // inimigos à boca do crater ficavam fora do raio em 3D). Piso SOB a
+        // bomba (Y conhecido): uma bomba lançada sob um overhang repousa no
+        // chão de baixo, não no topo da rocha.
         if let Some(terrain) = terrain.as_ref() {
-            let ground = terrain.sample(transform.translation.x, transform.translation.z) + 0.18;
+            let floor = terrain
+                .surface_below(
+                    transform.translation.x,
+                    transform.translation.z,
+                    transform.translation.y + crate::player::GROUND_PROBE,
+                )
+                .unwrap_or_else(|| {
+                    terrain.sample(transform.translation.x, transform.translation.z)
+                });
+            let ground = floor + 0.18;
             if transform.translation.y < ground {
                 transform.translation.y = ground;
                 bomb.velocity.y = bomb.velocity.y.max(0.0);

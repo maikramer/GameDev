@@ -21,32 +21,14 @@ pub const GRAVITY: f32 = 60.0;
 /// (VibeGame `SIDE_MOVE_FACTOR`), so turning carves an arc instead of
 /// pivoting in place.
 pub const SIDE_MOVE_FACTOR: f32 = 0.6;
+/// Probe acima dos pés do herói ao perguntar `surface_below` pelo chão.
+///
+/// Tem de exceder a skin do character controller (0.02): um herói em repouso
+/// assenta a skin acima do collider, e a sonda tem de começar em AR.
+pub const GROUND_PROBE: f32 = 0.05;
 /// Camera yaw turn rate while steering with A/D (rad/s, VibeGame
 /// `CAMERA_TURN_SPEED`).
 pub const CAMERA_TURN_SPEED: f32 = 2.5;
-/// Jump input buffer window (VibeGame `INPUT_CONFIG.bufferWindow` = 100 ms).
-/// How far below the top surface the hero has to be before the heightfield
-/// fallback is treated as the wrong floor (meters).
-///
-/// A little slack so ordinary walking on the surface — where the controller
-/// and the sampled height disagree by centimetres — keeps its safety net.
-pub const GROUND_FALLBACK_SLACK: f32 = 1.5;
-
-/// The floor-of-last-resort height for a hero at `player_y`, given the
-/// topmost solid surface `top` at the hero's XZ.
-///
-/// Under an overhang or inside a cave `top` is the roof of the world, and
-/// snapping to it would fire the hero up through the rock. So the fallback
-/// only counts when the hero is at or above that top surface (within
-/// [`GROUND_FALLBACK_SLACK`]); anyone below it is under rock and gets
-/// `-inf` — no fallback — which leaves them to the voxel collider.
-pub fn last_resort_ground(player_y: f32, top: f32) -> f32 {
-    if player_y < top - GROUND_FALLBACK_SLACK {
-        f32::NEG_INFINITY
-    } else {
-        top
-    }
-}
 
 /// Terminal fall speed (m/s).
 ///
@@ -283,11 +265,13 @@ pub fn facing_slerp_factor(current: Quat, target: Quat, rotation_speed: f32, dt:
 /// buffer + coyote + cooldown. Ground snap via `TerrainRuntime`; walls stop
 /// the hero through the Rapier character controller.
 #[allow(clippy::type_complexity)]
+#[allow(clippy::too_many_arguments)]
 pub fn player_movement(
     keys: Res<ButtonInput<KeyCode>>,
     menus: Res<crate::menus::MenusOpen>,
     time: Res<Time>,
     runtime: Option<Res<TerrainRuntime>>,
+    collision: Option<Res<crate::physics::TerrainCollisionStatus>>,
     mut cameras: Query<&mut OrbitCamera>,
     mut sfx: MessageWriter<crate::ambient::SfxEvent>,
     mut players: Query<
@@ -319,6 +303,8 @@ pub fn player_movement(
     }
     let dt = time.delta_secs();
     let now = time.elapsed_secs();
+    // Há chão de collider carregado sob o herói? (streaming de colunas)
+    let terrain_ready = collision.is_some_and(|status| status.ready);
     let (w, s, a, d) = (
         keys.pressed(KeyCode::KeyW) || keys.pressed(KeyCode::ArrowUp),
         keys.pressed(KeyCode::KeyS) || keys.pressed(KeyCode::ArrowDown),
@@ -427,7 +413,18 @@ pub fn player_movement(
             player.vel_y = 0.0;
             player.grounded = true;
         }
-        let ground = last_resort_ground(transform.translation.y, top);
+        // O chão é a superfície SÓLIDA SOB o herói (o zero do SDF por baixo
+        // dos pés), não o topo do mundo — sob um overhang ou dentro de uma
+        // gruta o topo é teto, não chão. É só a rede de segurança de
+        // "sem collider carregado": com chão de collider debaixo do herói
+        // (`TerrainCollisionStatus.ready`), o collider é a autoridade.
+        let ground = runtime
+            .surface_below(
+                transform.translation.x,
+                transform.translation.z,
+                transform.translation.y + GROUND_PROBE,
+            )
+            .unwrap_or(f32::NEG_INFINITY);
 
         // Vertical integration. Falls faster than it rises feels right
         // (gravity is already twice the jump-fair value); see
@@ -446,16 +443,18 @@ pub fn player_movement(
             // instead of the transform being written straight through them.
             Some(controller) => {
                 controller.translation = Some(motion);
-                // `grounded` comes from the previous frame's resolution; the
-                // heightfield is the floor of last resort while the terrain
-                // colliders around the hero are still streaming in.
+                // Collider authority: `grounded` vem da resolução do Rapier
+                // contra o trimesh da coluna. O chão analítico só entra
+                // quando NÃO há chão de collider carregado (arranque,
+                // teleporte para coluna ainda por assar) — com chão carregado,
+                // não-grounded é airborne legítimo, não desculpa para snap.
                 let on_collider = output.is_some_and(|out| out.grounded);
                 if on_collider {
                     player.grounded = true;
                     if player.vel_y < 0.0 {
                         player.vel_y = 0.0;
                     }
-                } else if transform.translation.y <= ground {
+                } else if !terrain_ready && transform.translation.y <= ground {
                     transform.translation.y = ground;
                     player.vel_y = 0.0;
                     player.grounded = true;
@@ -589,22 +588,14 @@ mod tests {
     }
 
     #[test]
-    fn test_last_resort_ground_holds_the_surface() {
-        // Hero walking on the surface (sample and transform disagree a bit)
-        // keeps the safety net.
-        assert_eq!(last_resort_ground(12.3, 12.0), 12.0);
-        assert_eq!(last_resort_ground(12.0 - GROUND_FALLBACK_SLACK, 12.0), 12.0);
-    }
-
-    #[test]
-    fn test_last_resort_ground_never_snaps_anyone_under_rock() {
-        // Inside a cave / under an overhang: the top of the world is NOT a
-        // floor for this hero — no fallback, the voxel collider decides.
-        assert_eq!(last_resort_ground(2.0, 30.0), f32::NEG_INFINITY);
-        assert_eq!(
-            last_resort_ground(30.0 - GROUND_FALLBACK_SLACK - 0.01, 30.0),
-            f32::NEG_INFINITY
-        );
+    fn test_ground_probe_starts_above_the_controller_skin() {
+        // O herói em repouso assenta a SKIN do controller (0.02) acima do
+        // collider; a sonda do `surface_below` tem de começar em ar, senão
+        // lê o próprio pé como chão.
+        assert!(GROUND_PROBE > 0.02);
+        // …mas perto o suficiente para nunca atravessar um degrau legítimo
+        // entre a leitura e a sonda.
+        assert!(GROUND_PROBE < 0.2);
     }
 
     #[test]
