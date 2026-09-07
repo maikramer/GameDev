@@ -398,8 +398,12 @@ pub fn drive_ui_tooltip(
                 },
                 super::runtime::UiTag("uitooltip".to_string()),
                 UiClasses::parse("tooltip"),
+                // `align-self: start` é obrigatório: num flex row (o UiRoot)
+                // o Taffy ESTICA filhos absolutos sem tamanho no eixo cruzado
+                // — o tooltip descia até ao fundo do ecrã (top definido,
+                // bottom auto ⇒ altura = ecrã − top).
                 super::runtime::UiInlineStyle(super::style::parse_declarations(
-                    "background: #0b0d12e6; radius: 6; padding: 5 8; z: 9000; pointer-events: none",
+                    "background: #0b0d12e6; radius: 6; padding: 5 8; z: 9000; align-self: start; pointer-events: none",
                     "ui tooltip defaults",
                 )),
                 super::runtime::UiStyleDirty,
