@@ -12,6 +12,7 @@
 
 local CADENCE = 0.2
 local ACC = 1.0 -- >CADENCE: preenche no primeiro frame com o modal aberto
+local LAST_STATUS = nil -- só reescreve o rodapé quando muda
 
 -- ── formatação ────────────────────────────────────────────────
 local function fmt_ms(v)
@@ -219,30 +220,12 @@ local function fill_active(snap)
 end
 
 -- ── loop ──────────────────────────────────────────────────────
+-- IMPORTANTe: `clicked(id)` vale SÓ no frame do press — cliques e o sync de
+-- abas correm TODOS os frames; só o preenchimento pesado obedece ao CADENCE.
+-- (O bug original: cliques consultados a cada 0,2 s morriam no drain por
+-- frame e a aba voltava a SISTEMAS no tick seguinte.)
 function on_update(dt)
-  local snap = viber.profiler()
-  if snap == nil then
-    ACC = 1.0 -- modal fechado: primeiro frame após abrir já preenche
-    return
-  end
-  ACC = ACC + dt
-  if ACC < CADENCE then return end
-  ACC = 0.0
-
-  local state = snap.state or {}
-
-  -- P/ESC não passam aqui: o modal é declarativo. Congelação acende o quadro.
-  viber.ui.toggle_class("profiler-win", "frozen", state.frozen == true)
-  viber.ui.set_text("prof-status", (state.status or "") ~= "" and state.status or "—")
-
-  -- Teclas engine-side (F5) mudam state.tab; cliques nas abas chegam como
-  -- clicked() e vão à engine — a ENGINE é a autoridade, o sync converge.
-  local ui_tab = viber.ui.tab("prof")
-  if state.tab_name and ui_tab ~= "" and ui_tab ~= state.tab_name then
-    viber.ui.select_tab("prof", state.tab_name)
-  end
-
-  -- Cliques → comandos.
+  -- Cliques → comandos (todos os frames).
   if viber.ui.clicked("prof-tab-systems") then viber.profiler_cmd("tab:systems") end
   if viber.ui.clicked("prof-tab-world") then viber.profiler_cmd("tab:world") end
   if viber.ui.clicked("prof-tab-physics") then viber.profiler_cmd("tab:physics") end
@@ -256,17 +239,38 @@ function on_update(dt)
     if viber.ui.clicked("prof-copy-" .. t) then viber.profiler_cmd("copy") end
     if viber.ui.clicked("prof-export-" .. t) then viber.profiler_cmd("export") end
   end
-  if viber.ui.clicked("prof-radius-up") then viber.profiler_cmd("radius:+10") end
-  if viber.ui.clicked("prof-radius-down") then viber.profiler_cmd("radius:-10") end
   for i, id in ipairs(EXTRAS) do
     if id ~= "" and viber.ui.clicked("prof-extra-" .. i) then
       viber.profiler_cmd("extra:" .. id)
     end
   end
 
-  -- Botão CONGELAR reflete o estado (classe + rótulo).
+  local snap = viber.profiler()
+  if snap == nil then
+    ACC = 1.0 -- modal fechado: primeiro frame após abrir já preenche
+    return
+  end
+  local state = snap.state or {}
+
+  -- Estado → UI, todos os frames (barato): F5 muda state.tab e o
+  -- select_tab aqui converge; congelação acende o quadro no próprio frame;
+  -- o status só reescreve quando muda (sem custo por frame).
+  local ui_tab = viber.ui.tab("prof")
+  if state.tab_name and ui_tab ~= "" and ui_tab ~= state.tab_name then
+    viber.ui.select_tab("prof", state.tab_name)
+  end
+  viber.ui.toggle_class("profiler-win", "frozen", state.frozen == true)
   viber.ui.toggle_class("prof-freeze", "armed", state.frozen == true)
   viber.ui.set_text("prof-freeze-label", state.frozen and "LIBERTAR" or "CONGELAR")
+  local status = state.status or ""
+  if status ~= LAST_STATUS then
+    LAST_STATUS = status
+    viber.ui.set_text("prof-status", status ~= "" and status or "—")
+  end
 
+  -- Preenchimento pesado (listas/textos): ao ritmo do CADENCE.
+  ACC = ACC + dt
+  if ACC < CADENCE then return end
+  ACC = 0.0
   fill_active(snap)
 end

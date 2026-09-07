@@ -39,7 +39,7 @@ Exemplos completos no `examples/simple-rpg`:
 | `UiSlider` | **gama arrastável** | `min`/`max`/`step`, filhos `.fill` + `.handle` criados pela engine; ver §1.2 |
 | `UiInput` | **campo de texto** | clique foca, Enter/Escape desfoca; ver §1.3 |
 | `UiSpacer` | espaço flexível | `grow: 1` por omissão |
-| `UiModal` | overlay com tecla de abrir | `key="q"`, `escape-closes` |
+| `UiModal` | overlay com tecla de abrir | `key="q"` — letras, dígitos, `f1`–`f12`, pontuação (`` ` `` `,` `[`…) e navegação (`pageup`, `home`, `arrowleft`…); `escape-closes` |
 | `UiList` | repetidor | ver §4 |
 
 Atributos universais: `id`, `class`, `style` (declarações inline), `bind`,
@@ -151,6 +151,10 @@ UiText            { color: stone-200; font-size: 14 }
   no ficheiro; `style=""` inline ganha sempre.
 * **Valores**: número nu é **píxeis** (`width: 12`), `%` e `auto` também;
   `padding`/`margin`/`border-width`/`radius` seguem o atalho CSS de 1–4 valores.
+  Longhands disponíveis: `margin-top/right/bottom/left`, `padding-*`,
+  `border-width-*` (ou `border-top-width`…) — misturam com o shorthand.
+  Texto: `line-height` (px ou múltiplo do font-size; herda) e
+  `align-content` (linhas de um flex com `wrap`/grelha).
 * Propriedades desconhecidas e regras malformadas são **avisadas e saltadas** —
   um erro de escrita numa cor não leva o HUD inteiro abaixo.
 
@@ -290,6 +294,7 @@ Cursores aceites: `default`, `pointer`/`hand`, `text`, `crosshair`, `move`,
 
 `display position direction wrap grow shrink align align-self justify width
 height min-* max-* top right bottom left padding margin border border-width
+margin-* padding-* border-width-* align-content line-height
 border-color gap row-gap column-gap aspect overflow` ·
 `grid-template-columns grid-template-rows grid-auto-flow grid-column grid-row` ·
 `background border-color border radius outline box-shadow opacity z rotate

@@ -1739,11 +1739,7 @@ fn apply_one(world: &mut World, op: DebugOp, warnings: &mut Vec<String>) -> bool
                 // Piso SOB a entidade (Y conhecido): o perfil de encosta do QA
                 // segue o chão onde se anda, não o topo do mundo.
                 target.y = terrain
-                    .surface_below(
-                        target.x,
-                        target.z,
-                        current.y + crate::player::GROUND_PROBE,
-                    )
+                    .surface_below(target.x, target.z, current.y + crate::player::GROUND_PROBE)
                     .unwrap_or_else(|| terrain.sample(target.x, target.z));
             }
             set_translation(world, entity, target, warnings)

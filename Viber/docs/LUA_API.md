@@ -230,6 +230,24 @@ Widgets declarativos (`UiGrid`, `UiCheck`, `UiSlider`, `UiInput`), atributos
 universais (`anim="…"`, `tooltip="…"`), paleta de cores Tailwind e a lista
 completa de propriedades de estilo: **`docs/UI.md`**.
 
+## `viber.profiler`
+
+Superfície do profiler nativo (`src/profiler/`, painel declarativo em **P** —
+`examples/simple-rpg/world/profiler.xml` + `ui/profiler.css` +
+`scripts/ui/profiler.lua`). Mesmo padrão do `viber.ui`: leitura de um
+snapshot publicado pela engine, ações por fila aplicada pós-frame.
+
+| Função | Devolve | Notas |
+|--------|---------|-------|
+| `viber.profiler()` | table ou nil | Snapshot completo (`tabs.systems/world/physics/audio` + `extras` + `state`); **nil com o modal fechado** — o driver nem acorda. Publicado a ~4 Hz pela engine. |
+| `viber.profiler_cmd(cmd)` | — | Enfileira ação: `"freeze"`, `"reset"`, `"export"` (ficheiro), `"copy"` (JSON completo → clipboard), `"tab:systems\|world\|physics\|audio\|extras"`, `"radius:±N"` (raio das próximas), `"extra:<id>"` (toggle: `colliders`, `grass`, `physics-pause`). |
+
+Teclas engine-side: **P** abre/fecha o modal (declarativo, `key="p"`), **F5**
+muda de aba, **F12**/**Pause** congela a aquisição, **`** exporta, **PgUp/PgDn**
+raio. A bridge lê o MESMO JSON: `viber debug prof --tab tudo` (ou o método
+`viber.profiler.tab {"tab": "all"}`) devolve exactamente o payload do
+COPIAR/ficheiro.
+
 ## `viber.debug.*` (bridge/REPL)
 
 Disponível quando o mundo corre com `--bridge` (`src/bridge/lua.rs`): é a

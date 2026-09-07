@@ -17,7 +17,7 @@ não Unity/three.js.
 | Terreno (specs, sampler, mesh, LOD) | `src/terrain/` | `spec.rs` (contrato), `sampler.rs`/`heightmap.rs` (altura), `mesh.rs` (chunks), `plugin.rs` (LOD runtime), `runtime.rs` (bootstrap + carve), `cliffs.rs` (cliffs procedurais + sharpen + CliffMask) |
 | Scripts Luau + API `viber.*` | `src/luau.rs` | referência completa em **`docs/LUA_API.md`**; hooks `on_update(dt)`/`on_player_attack`; "LOD de IA" via `ScriptActivation` |
 | UI declarativa (`UiRoot`/`UiStyle`) + `viber.ui.*` | `src/ui/` | `tree.rs` (XML→bevy_ui), `style.rs` (stylesheet), `palette.rs` (cores Tailwind), `anim.rs` (movimento), `widgets.rs` (check/slider/input/tooltip/cursor), `script.rs` (API Luau), `bind.rs` (bindings), `modal.rs` (modais autorais) |
-| HUD de jogo | `src/hud/` | widgets que desenham dados do mundo: minimapa, compasso, `profiler_window.rs`. Painéis, barras e menus do `simple-rpg` vivem agora na UI declarativa (`src/ui/`) |
+| HUD de jogo | `src/hud/` | widgets que desenham dados do mundo: minimapa, compasso. O profiler e os painéis/menus vivem na UI declarativa (`src/ui/`, `world/profiler.xml`) |
 | Player + câmara | `src/player.rs`, `src/camera.rs` | WASD/setas + Shift sprint + Space salto; third-person com drag/scroll |
 | Combate | `src/combat.rs`, `src/skills.rs`, `src/feedback.rs`, `src/vitals.rs` | melee [J], alvo [V], skills [C]/[R]/[B]/[L], dano flutuante/i-frames/respawn, HP/XP |
 | Colheita (destructibles) | `src/harvest.rs` | minerar/cortar nativos: `destructible="…"` no XML + `<ResourceNode>` no template; [J]/clique perto do prop toca clip `mine`/`chop` com picareta/machado na mão; `fall` = árvore cai e fica toco, `shatter` = pedra despedaça; loot → vault/XP/quests |
@@ -102,6 +102,8 @@ viber debug tree [--json]                  # entidades (como take_snapshot)
 viber debug logs [--limit N] [--json]      # console
 viber debug prof [--json]                  # snapshot do profiler (fps/frame/
                                            #   entidades/scripts ativos/chunks)
+viber debug prof --tab mundo|fisica|audio|extras|tudo   # tabs ricas do painel
+viber debug prof --export [ficheiro.json]  # JSON completo para ficheiro
 viber debug prof --samples 10              # média/pior/melhor de N amostras — o
                                            #   `fps` de UMA amostra é instantâneo
                                            #   e oscila (12 vs 60 no mesmo mundo)
@@ -245,17 +247,38 @@ viber session release --owner qa-sky
 ```
 
 
-### Profiler (F3 ou P)
+### Profiler (P) — painel declarativo
 
-`src/profiler.rs` + `src/hud/profiler_window.rs` (ligados por omissão no
-`run`): **janela** bevy_ui com FPS + pior fps da janela (~3 s), frame-time
-médio/pico, entidades, scripts Luau totais/ativos (dentro do raio de
-`ScriptActivation` — o "LOD de IA"), emissores de partícula e chunks de
-terreno. **F3 ou P** alterna. O mesmo snapshot é o método bridge
-`viber.profiler` (cliente `viber debug prof`) para QA headless sem screenshot.
-`VIBER_PROF_LOG=1` adiciona o `LogDiagnosticsPlugin` (fps/frame_time/
-entity_count a cada 1 s no log). (P só aprende talento com o menu [Q] aberto
-na tab Talentos — fora dele alterna o profiler.)
+**P** abre o painel do profiler — agora na stack declarativa (`src/ui`), com
+as mesmas 5 abas do `?profiler=1` do VibeGame: **Sistemas** (timings por
+sistema + grupos + scripts Luau por ficheiro), **Mundo** (player/câmara/
+entidades próximas com tags), **Física** (Rapier: corpos/colisores/sono/step),
+**Áudio** (buses/layers/sinks) e **Extras** (toggles: wireframe de colisores,
+relva, pausar física). Cada aba tem **COPIAR** (JSON completo → clipboard) e
+**EXPORTAR** (ficheiro em `$TMPDIR/viber-profiles/`).
+
+Anatomia:
+* Engine: `src/profiler/` (`mod.rs` plugin+contadores+overlay F3, `timed.rs`
+  wrapper `timed(Group, system)` que mede sistemas — o Bevy 0.19 não expõe
+  tempos por sistema — mais âncoras do `PhysicsSet::StepSimulation`,
+  `world_tab.rs`/`physics_tab.rs`/`audio_tab.rs` snapshots,
+  `script.rs` = `viber.profiler()`/`viber.profiler_cmd()` para Luau);
+* UI: `examples/simple-rpg/world/profiler.xml` + `ui/profiler.css` +
+  `scripts/ui/profiler.lua` (modal `key="p"`, abas `tab-group`, listas
+  `<UiList bind="prof-*">` alimentadas pelo driver);
+* Bridge: `viber.profiler` (leve/compat), `viber.profiler.tab
+  {"tab":"systems|world|physics|audio|extras|all"}` e
+  `viber.profiler.export`/`extra_toggle`. O JSON de `"all"` é O MESMO do
+  botão COPIAR e do ficheiro — um só construtor (`full_snapshot`).
+
+Teclas: **P** (modal), **F5** (aba, Shift volta), **F12/Pause** (congelar),
+**`** (exportar), **PgUp/PgDn** (raio das próximas). Overlay mínimo **F3**
+mantém-se. `VIBER_PROF_LOG=1` liga o `LogDiagnosticsPlugin`.
+
+QA típico: `viber debug prof --tab física`, `viber debug prof --tab tudo
+--json`, `viber debug lua 'return viber.profiler().state'`. (O P do profiler
+é toggle do modal; o P que aprende talento só existe com o menu [Q] aberto na
+tab Talentos.)
 
 ### Teclas (jogo)
 

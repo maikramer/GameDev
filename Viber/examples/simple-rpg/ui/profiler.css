@@ -140,6 +140,7 @@
 #profiler-win .sect {
   font-size: 1.15vmin;
   color: #baa987;
+  margin-top: 0.5vmin;
 }
 #profiler-win .rows {
   width: 100%;
@@ -149,7 +150,9 @@
   background: stone-90066;
   radius: 0.7vmin;
   border: 1 stone-70044;
+  line-height: 1.25;
 }
+#profiler-win .lrow:hover { background: stone-80055 }
 /* As duas listas altas dominam a altura do painel; as curtas
    ajustam-se ao conteúdo. */
 #profiler-win .rows.tall { height: 21vmin }
@@ -184,5 +187,6 @@
 #profiler-win .status {
   font-size: 1.15vmin;
   color: amber-300cc;
+  margin-top: 0.4vmin;
   min-height: 1.5vmin;
 }
