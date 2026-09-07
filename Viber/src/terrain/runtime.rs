@@ -368,6 +368,59 @@ impl bevy::app::Plugin for TerrainFeaturesPlugin {
     }
 }
 
+/// Discos que um túnel (`<Cave>` autoral ou semeado) reivindica: a linha do
+/// tubo e as suas salas e chaminés. O scatter e os campos irmãos mantêm-se
+/// fora deles.
+fn claim_cave_discs(cave: &super::voxel::CaveSpec, out: &mut Vec<super::voxel::TakenDisc>) {
+    let r = cave
+        .radius
+        .iter()
+        .copied()
+        .fold(0.0_f32, f32::max)
+        .max(2.0);
+    for p in super::paths::resample(&cave.path, 8.0) {
+        out.push(super::voxel::TakenDisc { at: p, radius: r });
+    }
+    for chamber in &cave.chambers {
+        out.push(super::voxel::TakenDisc {
+            at: chamber.at,
+            radius: chamber.radius,
+        });
+    }
+    for shaft in &cave.shafts {
+        out.push(super::voxel::TakenDisc {
+            at: shaft.at,
+            radius: shaft.radius,
+        });
+    }
+}
+
+/// Discos de um portal (`<Arch>`): a banda inteira, do pé ao pé.
+fn claim_arch_discs(arch: &super::voxel::ArchSpec, out: &mut Vec<super::voxel::TakenDisc>) {
+    let span = arch
+        .span
+        .unwrap_or(super::voxel::arch::DEFAULT_ARCH_SPAN);
+    let r = arch.thickness + span * 0.5;
+    let pts: Vec<Vec2> = if arch.path.is_empty() {
+        vec![arch.at]
+    } else {
+        arch.path.clone()
+    };
+    for p in super::paths::resample(&pts, 8.0) {
+        out.push(super::voxel::TakenDisc { at: p, radius: r });
+    }
+}
+
+/// Discos de uma travessia (`<Bridge>`): o tabuleiro, meia-largura incluída.
+fn claim_bridge_discs(bridge: &super::voxel::BridgeSpec, out: &mut Vec<super::voxel::TakenDisc>) {
+    for p in super::paths::resample(&bridge.path, 8.0) {
+        out.push(super::voxel::TakenDisc {
+            at: p,
+            radius: bridge.width * 0.5,
+        });
+    }
+}
+
 /// Exclusive startup: PendingTerrain → grid → carve → entities → registries.
 pub fn bootstrap(world: &mut World) {
     let Some(pending) = world.remove_resource::<PendingTerrain>() else {
@@ -667,21 +720,69 @@ pub fn bootstrap(world: &mut World) {
     let seeded = if pending.features.rock_fields.is_empty() {
         super::voxel::ScatterResult::default()
     } else {
-        let guards = super::voxel::ScatterGuards {
-            water: &result.water,
-            roads: &result.roads,
-        };
+        // O que já está no mundo é tabu para o scatter: discos das features
+        // autorais (túneis, salas, portais, tabuleiros) para que nada semeado
+        // rasgue ou encoste no que foi escrito à mão. Cada campo acrescenta
+        // os próprios discos à medida que semeia — dois `<RockFeatures>`
+        // também nunca colidem entre si.
+        let mut taken: Vec<super::voxel::TakenDisc> = Vec::new();
+        for cave in &pending.features.caves {
+            claim_cave_discs(cave, &mut taken);
+        }
+        for arch in &pending.features.arches {
+            claim_arch_discs(arch, &mut taken);
+        }
+        for bridge in &pending.features.bridges {
+            claim_bridge_discs(bridge, &mut taken);
+        }
         let mut acc = super::voxel::ScatterResult::default();
         for field in &pending.features.rock_fields {
-            let got = field.resolve(&grid, &guards);
+            let (got, stats) = {
+                let guards = super::voxel::ScatterGuards {
+                    water: &result.water,
+                    roads: &result.roads,
+                    cliffs: Some(&cliff_mask),
+                    pads: &result.pads,
+                    taken: &taken,
+                };
+                field.resolve_with_stats(&grid, &guards)
+            };
+            info!(
+                "terrain: rock field `{}` seeded {} arch(es) + {} cave(s) + {} span(s) of {} \
+                 site(s) — rejected: water {}, roads {}, cliffs {}, pads {}, features {}, \
+                 relief {}, slope {}, rise {}, path {}",
+                field.name.as_deref().unwrap_or("rocks"),
+                got.arches.len(),
+                got.caves.len(),
+                got.bridges.len(),
+                stats.cells,
+                stats.water,
+                stats.roads,
+                stats.cliffs,
+                stats.pads,
+                stats.taken,
+                stats.drop,
+                stats.slope,
+                stats.rise,
+                stats.path,
+            );
             if got.len() < field.requested() as usize {
                 warn!(
                     "terrain: rock field `{}` seeded {} of {} features — the region has few \
-                     sites that pass min-slope/min-drop",
+                     sites that pass the guards (see the seed line above)",
                     field.name.as_deref().unwrap_or("rocks"),
                     got.len(),
                     field.requested()
                 );
+            }
+            for cave in &got.caves {
+                claim_cave_discs(cave, &mut taken);
+            }
+            for arch in &got.arches {
+                claim_arch_discs(arch, &mut taken);
+            }
+            for bridge in &got.bridges {
+                claim_bridge_discs(bridge, &mut taken);
             }
             acc.arches.extend(got.arches);
             acc.caves.extend(got.caves);

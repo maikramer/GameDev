@@ -80,6 +80,11 @@ const PATH_DESCENT_SLACK: f32 = 1.0;
 /// the mouth flare can widen the carve by half again.
 const PATH_MARGIN: f32 = 1.5;
 
+/// Directions probed when looking for a gap a bridge could cross.
+const CROSSING_DIRECTIONS: usize = 8;
+/// Epsilon for the slope probe (meters).
+const SLOPE_EPS: f32 = 1.5;
+
 /// Why a world point is not a legal spot for seeded rock.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Reject {

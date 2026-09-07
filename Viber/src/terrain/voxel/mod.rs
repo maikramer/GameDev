@@ -41,7 +41,7 @@ pub use mods::{
     ArchMod, Bounds3, BoxMod, CapsuleMod, EllipsoidMod, ModOp, OrientedBoxMod, RoundConeMod,
     VoxelMod,
 };
-pub use scatter::{RockFeaturesSpec, ScatterGuards, ScatterResult};
+pub use scatter::{RockFeaturesSpec, ScatterGuards, ScatterResult, ScatterStats, TakenDisc};
 pub use spawn::{
     VoxelBoxSpec, VoxelChunk, VoxelLodShape, VoxelSpawnStats, build_box_mesh, column_boxes,
     lod_shape, spawn_voxel_columns,

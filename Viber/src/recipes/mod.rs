@@ -3147,6 +3147,7 @@ fn finish_rock_features(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec
             "min-slope" => spec.min_slope = values::parse_f32(&value, &kctx)?,
             "max-slope" => spec.max_slope = values::parse_f32(&value, &kctx)?,
             "min-drop" => spec.min_drop = values::parse_f32(&value, &kctx)?,
+            "min-rise" => spec.min_rise = values::parse_f32(&value, &kctx)?,
             "spacing" => spec.spacing = values::parse_f32(&value, &kctx)?,
             "clear-of-roads" => spec.clear_of_roads = values::parse_f32(&value, &kctx)?,
             other => ctx
@@ -3173,6 +3174,13 @@ fn finish_rock_features(node: &XmlNode, ctx: &mut ParseCtx) -> Result<EntitySpec
             lo = spec.min_slope,
             hi = spec.max_slope
         );
+    }
+    if spec.min_rise < 0.0 || !spec.min_rise.is_finite() {
+        ctx.warnings.push(format!(
+            "{ctx_tag}: min-rise {} makes no sense — clamped to 0",
+            spec.min_rise
+        ));
+        spec.min_rise = 0.0;
     }
     if spec.requested() == 0 {
         ctx.warnings.push(format!(
