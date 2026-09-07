@@ -2,15 +2,24 @@
 //! `viber analyze`: ficheiros ausentes, GLBs com compressão não suportada
 //! (Draco/Basis; meshopt é expandido pelo reader da engine), texturas com
 //! formato desconhecido ou magia inválida, colliders ausentes em modelos
-//! glTF, e refs a scripts/estilos/BGM que não existem em disco.
+//! glTF, refs a scripts/estilos/BGM que não existem em disco, e conflitos
+//! geométricos entre features de terreno (estradas que entram na lâmina de
+//! lagos/rios ou atravessam a banda sólida de cliffs).
 //!
 //! Não abre a engine: lê bytes de cabeçalho (GLB magic + chunk JSON, PNG/JPEG
 //! magic) — barato e suficiente para apanhar os casos reais (GLB truncado,
 //! HTML guardado como .png, export Draco do DCC, typo no caminho).
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use bevy::math::Vec2;
+
 use crate::recipes::{EntityKind, EntitySpec, ParsedWorld};
+use crate::terrain::cliffs::CliffSpec;
+use crate::terrain::paths::{nearest_on_path, resample};
+use crate::terrain::roads::{RoadProfile, RoadSpec};
+use crate::terrain::water::{LakeShape, LakeSpec, RiverSpec, CONTOUR_PEAK, river_cliff_crossings};
 
 /// Severidade de um achado: `Missing` vira ERRO com `analyze --strict`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,6 +102,11 @@ pub fn audit(world: &ParsedWorld, world_dir: &Path, asset_root: &Path) -> AuditR
         &mut refs,
         &mut report,
     );
+
+    // Conflitos entre features de terreno — ver [`FeatureIndex`].
+    let mut features = FeatureIndex::default();
+    collect_features(&world.entities, [0.0, 0.0], &mut features);
+    report.issues.extend(audit_feature_conflicts(&features));
 
     // SFX carregados por path HARDCODED na engine — ver
     // [`engine_audio_files`].
@@ -301,6 +315,322 @@ fn collect_entities(
             refs,
             report,
         );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Conflitos entre features de terreno — estradas × lagos/rios/cliffs.
+//
+// Estradas e corpos de água escavam o mesmo campo; o guard do carve já evita
+// a escavação dentro de zona de água, mas o RIBBON visual é desenhado na
+// mesma — e um trilho decal (`flatten="0"`) não carve nada. Uma estrada cujo
+// traçado entra na lâmina fica submersa e rasgada (o caso real: a ponte da
+// Lagoa Grande do simple-rpg, afogada pelo contorno orgânico ±28% — pontas
+// autoradas à distância nominal do raio, a água chega a `CONTOUR_PEAK` dele).
+// Tudo aqui é geométrico e estático — exatamente o que o `analyze` vê sem
+// abrir a engine.
+//
+// Translações XZ dos ancestrais são acumuladas (as features leem
+// WorldTransform); escala/rotação de ancestrais é ignorada — nenhum mundo do
+// repo põe features sob um grupo assim.
+
+/// Passo de amostragem do traçado das estradas (m).
+const ROAD_SAMPLE_STEP: f32 = 2.0;
+/// Folga (m) extra no teste da banda de um cliff.
+const CLIFF_TIP_MARGIN: f32 = 1.0;
+
+/// Features recolhidas da árvore de entidades, prontas para os testes
+/// cruzados. As specs são clonadas — o audit corre uma vez, headless.
+#[derive(Default)]
+struct FeatureIndex {
+    /// `<Road>`: (rótulo, spec).
+    roads: Vec<(String, RoadSpec)>,
+    /// `<RoadNetwork>` expandido por segmento: (rótulo, polyline, largura,
+    /// perfil).
+    segments: Vec<(String, Vec<Vec2>, f32, RoadProfile)>,
+    lakes: Vec<(String, LakeSpec)>,
+    rivers: Vec<(String, RiverSpec)>,
+    cliffs: Vec<(String, CliffSpec)>,
+}
+
+fn collect_features(entities: &[EntitySpec], offset: [f32; 2], out: &mut FeatureIndex) {
+    for entity in entities {
+        let named = entity.name.is_some() || entity.tag.is_some();
+        let label = entity
+            .name
+            .clone()
+            .or_else(|| entity.tag.clone())
+            .unwrap_or_else(|| "sem nome".into());
+        let off = [
+            offset[0] + entity.transform.translation[0],
+            offset[1] + entity.transform.translation[2],
+        ];
+        let shift = |points: &[Vec2]| -> Vec<Vec2> {
+            points
+                .iter()
+                .map(|p| p + Vec2::new(off[0], off[1]))
+                .collect()
+        };
+        // Fallback de rótulo com coordenadas — "sem nome" não diz NADA ao
+        // autor a procurar o sítio no XML.
+        let where_at = |p: Vec2| format!("({:.0}, {:.0})", p.x, p.y);
+        match &entity.kind {
+            EntityKind::Road { spec } => {
+                let mut spec = spec.clone();
+                spec.path = shift(&spec.path);
+                let label = spec.name.clone().unwrap_or_else(|| {
+                    if named {
+                        label
+                    } else {
+                        format!("estrada {}", where_at(spec.path[0]))
+                    }
+                });
+                out.roads.push((label, spec));
+            }
+            EntityKind::RoadNetwork { spec } => {
+                let ways: HashMap<&str, (Vec2, Option<f32>)> = spec
+                    .ways
+                    .iter()
+                    .map(|w| (w.id.as_str(), (w.at + Vec2::new(off[0], off[1]), w.width)))
+                    .collect();
+                let net_label = spec.name.clone().unwrap_or(if named {
+                    label
+                } else {
+                    String::new()
+                });
+                for seg in &spec.segments {
+                    let (Some(&(a_at, a_w)), Some(&(b_at, _))) =
+                        (ways.get(seg.a.as_str()), ways.get(seg.b.as_str()))
+                    else {
+                        continue; // ways em falta são erro do parse, não daqui
+                    };
+                    let mut pts = vec![a_at];
+                    pts.extend(shift(&seg.via));
+                    pts.push(b_at);
+                    let width = seg.width.or(a_w).unwrap_or(spec.default_width);
+                    let profile = seg.profile.unwrap_or(spec.default_profile);
+                    let seg_label = if net_label.is_empty() {
+                        format!("{}→{}", seg.a, seg.b)
+                    } else {
+                        format!("{net_label}: {}→{}", seg.a, seg.b)
+                    };
+                    out.segments.push((seg_label, pts, width, profile));
+                }
+            }
+            EntityKind::Lake { spec } => {
+                let mut spec = spec.clone();
+                spec.at += Vec2::new(off[0], off[1]);
+                let label = if named {
+                    label
+                } else {
+                    format!("lago {}", where_at(spec.at))
+                };
+                out.lakes.push((label, spec));
+            }
+            EntityKind::River { spec } => {
+                let mut spec = spec.clone();
+                spec.path = shift(&spec.path);
+                let label = if named {
+                    label
+                } else if let Some(p) = spec.path.first() {
+                    format!("rio {}", where_at(*p))
+                } else {
+                    label
+                };
+                out.rivers.push((label, spec));
+            }
+            EntityKind::Cliff { spec } => {
+                let mut spec = spec.clone();
+                spec.path = shift(&spec.path);
+                let label = if named {
+                    label
+                } else if let Some(p) = spec.path.first() {
+                    format!("cliff {}", where_at(*p))
+                } else {
+                    label
+                };
+                out.cliffs.push((label, spec));
+            }
+            _ => {}
+        }
+        collect_features(&entity.children, off, out);
+    }
+}
+
+fn audit_feature_conflicts(idx: &FeatureIndex) -> Vec<AuditIssue> {
+    let mut issues = Vec::new();
+    for (label, spec) in &idx.roads {
+        audit_road_line(label, &spec.path, spec.width, spec.profile, idx, &mut issues);
+    }
+    for (label, pts, width, profile) in &idx.segments {
+        audit_road_line(label, pts, *width, *profile, idx, &mut issues);
+    }
+    // Rio × cliff — já não é um conflito: é uma CACHOEIRA automática. O
+    // runtime conduz o perfil do rio pelo cruzamento (hold a montante +
+    // queda garantida) e a parede voxel corta a face. Informa o autor com
+    // a queda prometida — cruzar sem querer é exatamente o erro que esta
+    // linha torna visível.
+    for (rlabel, river) in &idx.rivers {
+        for (clabel, cliff) in &idx.cliffs {
+            for fall in river_cliff_crossings(river, std::slice::from_ref(cliff)) {
+                issues.push(AuditIssue {
+                    severity: Severity::Info,
+                    message: format!(
+                        "rio `{rlabel}` cruza o cliff `{clabel}` perto de ({:.0}, {:.0}) — \
+                         cachoeira automática (queda ≥ {:.1} m)",
+                        fall.at.x, fall.at.y, fall.min_drop
+                    ),
+                });
+            }
+        }
+    }
+    issues.sort_by(|a, b| a.message.cmp(&b.message));
+    issues
+}
+
+/// Testa UMA estrada (de `<Road>` ou expandida de rede) contra lagos, rios e
+/// cliffs. `is_bridge` abre a exceção do deck: cruzar água é o propósito de
+/// uma ponte — o que se exige é que as PONTAS fiquem fora da lâmina.
+fn audit_road_line(
+    label: &str,
+    path: &[Vec2],
+    width: f32,
+    profile: RoadProfile,
+    idx: &FeatureIndex,
+    issues: &mut Vec<AuditIssue>,
+) {
+    if path.len() < 2 {
+        return;
+    }
+    let samples = resample(path, ROAD_SAMPLE_STEP);
+    let is_bridge = profile == RoadProfile::Bridge;
+
+    for (name, lake) in &idx.lakes {
+        let shape = LakeShape::new(lake.at);
+        // Quanto o traçado penetra o contorno orgânico REAL (não o disco
+        // nominal): `r(θ) − |p − at|`, máximo das amostras.
+        let mut depth_in = 0.0_f32;
+        for p in &samples {
+            let d = p.distance(lake.at);
+            let delta = *p - lake.at;
+            let theta = delta.y.atan2(delta.x);
+            depth_in = depth_in.max(shape.contour(lake.radius, theta) - d);
+        }
+        if depth_in <= 0.0 {
+            continue;
+        }
+        if is_bridge {
+            let worst = lake.radius * CONTOUR_PEAK;
+            let tips_inside = path.iter().any(|tip| tip.distance(lake.at) < worst);
+            if tips_inside {
+                issues.push(AuditIssue {
+                    severity: Severity::Warning,
+                    message: format!(
+                        "ponte \"{label}\": pontas dentro do alcance do contorno orgânico do lago \
+                         \"{name}\" (lâmina até r={worst:.0} m, ±{}%) — a água pode cobrir \
+                         pontas/deck; afaste as pontas",
+                        (CONTOUR_PEAK - 1.0) * 100.0,
+                    ),
+                });
+            } else {
+                issues.push(AuditIssue {
+                    severity: Severity::Info,
+                    message: format!(
+                        "ponte \"{label}\" cruza o lago \"{name}\" — o deck é ribbon plana; \
+                         garanta pontas fora da lâmina (worst-case r={worst:.0} m)",
+                    ),
+                });
+            }
+        } else {
+            issues.push(AuditIssue {
+                severity: Severity::Warning,
+                message: format!(
+                    "estrada \"{label}\" entra na lâmina do lago \"{name}\" (até \
+                     {depth_in:.1} m para dentro; contorno orgânico ±{}%) — o piso fica \
+                     submerso",
+                    (CONTOUR_PEAK - 1.0) * 100.0,
+                ),
+            });
+        }
+    }
+
+    for (name, river) in &idx.rivers {
+        if river.path.len() < 2 {
+            continue;
+        }
+        let half = river.width * 0.5;
+        let mut dmin = f32::INFINITY;
+        for p in &samples {
+            if let Some(hit) = nearest_on_path(&river.path, *p) {
+                dmin = dmin.min(p.distance(hit.point));
+            }
+        }
+        if dmin >= half {
+            continue;
+        }
+        if is_bridge {
+            // Largura máx. da lâmina: com pool-spacing os poços abrem até
+            // ×1.2 (`water.rs`, `halfs`). A folga é a banca de margem — não
+            // se soma margem genérica por cima (pontas 0.5 m fora da banca
+            // são prática normal, o abutment assenta aí).
+            let water_half = if river.pool_spacing > 0.0 {
+                half * 1.2
+            } else {
+                half
+            };
+            let clear = water_half + river.bank_width;
+            let tips_clear = path.iter().all(|tip| {
+                nearest_on_path(&river.path, *tip)
+                    .is_some_and(|h| tip.distance(h.point) >= clear)
+            });
+            if tips_clear {
+                issues.push(AuditIssue {
+                    severity: Severity::Info,
+                    message: format!(
+                        "ponte \"{label}\" cruza o rio \"{name}\" (lâmina ±{half:.0} m) — o \
+                         deck é ribbon plana; confirme a altura no runtime",
+                    ),
+                });
+            } else {
+                issues.push(AuditIssue {
+                    severity: Severity::Warning,
+                    message: format!(
+                        "ponte \"{label}\": pontas a <{clear:.0} m do eixo do rio \"{name}\" — \
+                         a lâmina/banco de margem pode cobrir as pontas",
+                    ),
+                });
+            }
+        } else {
+            issues.push(AuditIssue {
+                severity: Severity::Warning,
+                message: format!(
+                    "estrada \"{label}\" cruza a lâmina do rio \"{name}\" (±{half:.0} m) — o \
+                     piso fica submerso",
+                ),
+            });
+        }
+    }
+
+    for (name, cliff) in &idx.cliffs {
+        if cliff.path.len() < 2 {
+            continue;
+        }
+        let band = cliff.width * 0.5 + width * 0.5 + CLIFF_TIP_MARGIN;
+        let mut dmin = f32::INFINITY;
+        for p in &samples {
+            if let Some(hit) = nearest_on_path(&cliff.path, *p) {
+                dmin = dmin.min(p.distance(hit.point));
+            }
+        }
+        if dmin < band {
+            issues.push(AuditIssue {
+                severity: Severity::Warning,
+                message: format!(
+                    "estrada \"{label}\" cruza a banda do cliff \"{name}\" (folga \
+                     {CLIFF_TIP_MARGIN:.0} m) — o ribbon atravessa a rocha sólida do campo voxel",
+                ),
+            });
+        }
     }
 }
 
@@ -895,5 +1225,162 @@ mod tests {
             &mut issues,
         );
         assert!(issues.is_empty(), "hdr válido passa: {issues:?}");
+    }
+
+    // ── Conflitos estrada × água/cliff ─────────────────────────────────
+
+    /// Parse de um mundo XML pequeno (sem assets) para os testes de features.
+    fn feature_index(src: &str) -> FeatureIndex {
+        let dir = tempfile::tempdir().expect("tmpdir");
+        let path = dir.path().join("world.xml");
+        std::fs::write(&path, src).unwrap();
+        let loaded = crate::xml::include::load_world(&path).expect("parse xml");
+        let world = crate::recipes::parse_world(&loaded.root_attrs, &loaded.nodes)
+            .expect("parse ir");
+        let mut idx = FeatureIndex::default();
+        collect_features(&world.entities, [0.0, 0.0], &mut idx);
+        idx
+    }
+
+    #[test]
+    fn test_road_entering_lake_water_warns() {
+        let idx = feature_index(
+            r#"<world>
+              <Lake at="0 0" radius="10" depth="2" />
+              <Road name="trilha" path="-30 0 30 0" width="4" flatten="0" />
+            </world>"#,
+        );
+        let issues = audit_feature_conflicts(&idx);
+        let hits: Vec<_> = issues
+            .iter()
+            .filter(|i| i.message.contains("lâmina do lago"))
+            .collect();
+        assert_eq!(hits.len(), 1, "{issues:?}");
+        assert_eq!(hits[0].severity, Severity::Warning);
+        assert!(hits[0].message.contains("\"trilha\""), "{issues:?}");
+    }
+
+    #[test]
+    fn test_road_far_from_water_is_silent() {
+        let idx = feature_index(
+            r#"<world>
+              <Lake at="0 0" radius="10" depth="2" />
+              <River path="-50 200 50 200" width="10" />
+              <Cliff path="-40 -200 40 -200" width="6" />
+              <Road name="zona" path="-30 100 30 100" width="4" flatten="0" />
+            </world>"#,
+        );
+        let issues = audit_feature_conflicts(&idx);
+        assert!(issues.is_empty(), "{issues:?}");
+    }
+
+    #[test]
+    fn test_bridge_tiers_over_lake() {
+        // Pontas a 11 m do centro (11 < 10×1.45 worst-case) → Warning mesmo
+        // com o contorno real da fase a poder estar mais pequeno.
+        let idx = feature_index(
+            r#"<world>
+              <Lake at="0 0" radius="10" depth="2" />
+              <RoadNetwork default-profile="artery" default-width="4">
+                <Way id="e" xz="-11 0" />
+                <Way id="w" xz="11 0" />
+                <Segment a="e" b="w" profile="bridge" />
+              </RoadNetwork>
+            </world>"#,
+        );
+        let issues = audit_feature_conflicts(&idx);
+        let warns: Vec<_> = issues
+            .iter()
+            .filter(|i| i.severity == Severity::Warning)
+            .collect();
+        assert_eq!(warns.len(), 1, "{issues:?}");
+        assert!(warns[0].message.contains("afaste as pontas"), "{issues:?}");
+
+        // Pontas a 15 m (> worst-case 14.5) mas o vão cruza a lâmina → só Info.
+        let idx = feature_index(
+            r#"<world>
+              <Lake at="0 0" radius="10" depth="2" />
+              <RoadNetwork default-profile="artery" default-width="4">
+                <Way id="e" xz="-15 0" />
+                <Way id="w" xz="15 0" />
+                <Segment a="e" b="w" profile="bridge" />
+              </RoadNetwork>
+            </world>"#,
+        );
+        let issues = audit_feature_conflicts(&idx);
+        assert!(
+            issues.iter().all(|i| i.severity == Severity::Info),
+            "{issues:?}"
+        );
+        assert!(issues.iter().any(|i| i.message.contains("cruza o lago")));
+    }
+
+    #[test]
+    fn test_road_crossing_river_warns_bridge_tiers() {
+        let idx = feature_index(
+            r#"<world>
+              <River path="-50 0 50 0" width="10" bank-width="2" />
+              <Road name="vau" path="0 -40 0 40" width="4" flatten="0" />
+            </world>"#,
+        );
+        let issues = audit_feature_conflicts(&idx);
+        let hits: Vec<_> = issues
+            .iter()
+            .filter(|i| i.message.contains("lâmina do rio"))
+            .collect();
+        assert_eq!(hits.len(), 1, "{issues:?}");
+        assert_eq!(hits[0].severity, Severity::Warning);
+
+        // Ponte com pontas claras (20 ≥ 5+2+2) → Info; pontas curtas → Warning.
+        let idx = feature_index(
+            r#"<world>
+              <River path="-50 0 50 0" width="10" bank-width="2" />
+              <RoadNetwork default-profile="artery" default-width="4">
+                <Way id="n" xz="0 -20" />
+                <Way id="s" xz="0 20" />
+                <Segment a="n" b="s" profile="bridge" />
+              </RoadNetwork>
+            </world>"#,
+        );
+        let issues = audit_feature_conflicts(&idx);
+        assert!(
+            issues.iter().all(|i| i.severity == Severity::Info),
+            "{issues:?}"
+        );
+
+        let idx = feature_index(
+            r#"<world>
+              <River path="-50 0 50 0" width="10" bank-width="2" />
+              <RoadNetwork default-profile="artery" default-width="4">
+                <Way id="n" xz="0 -6" />
+                <Way id="s" xz="0 6" />
+                <Segment a="n" b="s" profile="bridge" />
+              </RoadNetwork>
+            </world>"#,
+        );
+        let issues = audit_feature_conflicts(&idx);
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.severity == Severity::Warning && i.message.contains("eixo do rio")),
+            "{issues:?}"
+        );
+    }
+
+    #[test]
+    fn test_road_crossing_cliff_band_warns() {
+        let idx = feature_index(
+            r#"<world>
+              <Cliff path="-40 0 40 0" width="6" />
+              <Road name="atalho" path="-20 -20 -20 20" width="4" flatten="0" />
+            </world>"#,
+        );
+        let issues = audit_feature_conflicts(&idx);
+        let hits: Vec<_> = issues
+            .iter()
+            .filter(|i| i.message.contains("banda do cliff"))
+            .collect();
+        assert_eq!(hits.len(), 1, "{issues:?}");
+        assert_eq!(hits[0].severity, Severity::Warning);
     }
 }
